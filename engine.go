@@ -53,6 +53,8 @@ func RunGame(game Game) error {
 
 // SetWindowSize sets the window size in logical pixels.
 func SetWindowSize(width, height int) {
+	pendingWindowWidth = width
+	pendingWindowHeight = height
 	if globalEngine != nil {
 		globalEngine.setWindowSize(width, height)
 	}
@@ -60,6 +62,7 @@ func SetWindowSize(width, height int) {
 
 // SetWindowTitle sets the window title.
 func SetWindowTitle(title string) {
+	pendingWindowTitle = title
 	if globalEngine != nil {
 		globalEngine.setWindowTitle(title)
 	}
@@ -155,48 +158,23 @@ func DeviceScaleFactor() float64 {
 var (
 	globalEngine *engine
 	maxTPS       atomic.Int64
+
+	// Pre-run configuration stored as package-level state so that
+	// SetWindowSize/SetWindowTitle can be called before RunGame.
+	pendingWindowTitle  = "Future Render"
+	pendingWindowWidth  = 800
+	pendingWindowHeight = 600
 )
 
 func init() {
 	maxTPS.Store(60)
 }
 
-type engine struct {
-	game     Game
-	fpsValue float64
-	tpsValue float64
-}
+// engine is defined per-platform in engine_stub.go / engine_glfw.go.
+// Common fields and methods are here, platform-specific in the build-tagged files.
 
 func newEngine(game Game) *engine {
-	e := &engine{
-		game: game,
-	}
+	e := newPlatformEngine(game)
 	globalEngine = e
 	return e
 }
-
-func (e *engine) run() error {
-	// The actual run implementation will integrate with the platform window
-	// and backend. For now, this provides the timing/loop structure.
-	//
-	// The real implementation will:
-	// 1. Create a platform window
-	// 2. Initialize the graphics backend
-	// 3. Set up the render pipeline
-	// 4. Run the main loop with fixed-timestep update + variable draw
-	//
-	// This placeholder ensures the public API compiles and the package
-	// structure is valid.
-	return errors.New("engine: no platform backend available (build with platform tags)")
-}
-
-func (e *engine) setWindowSize(width, height int) {}
-func (e *engine) setWindowTitle(title string)     {}
-func (e *engine) setFullscreen(fullscreen bool)   {}
-func (e *engine) isFullscreen() bool              { return false }
-func (e *engine) setVSync(enabled bool)           {}
-func (e *engine) isVSync() bool                   { return true }
-func (e *engine) currentFPS() float64             { return e.fpsValue }
-func (e *engine) currentTPS() float64             { return e.tpsValue }
-func (e *engine) setCursorMode(mode CursorMode)   {}
-func (e *engine) deviceScaleFactor() float64      { return 1.0 }

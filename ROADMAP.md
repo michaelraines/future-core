@@ -36,20 +36,23 @@ backend abstraction, batch system, pipeline model, and math library.
 
 ---
 
-## Milestone 1 — OpenGL Backend + Window (Planned)
+## Milestone 1 — OpenGL Backend + Window (Done)
 
 Goal: open a window, clear it to a color, and close on Escape. The minimal
 proof that the full stack (platform → backend → pipeline → engine) connects.
 
 | Task | Status | Notes |
 |---|---|---|
-| GLFW window implementation (`internal/platform/glfw/`) | Planned | go-gl/glfw v3.3, build-tagged |
-| OpenGL 3.3 device implementation (`internal/backend/opengl/`) | Planned | Core profile, DSA where available |
-| Wire engine.run() → platform window → backend device | Planned | Fixed-timestep + variable draw |
-| Clear pass implementation | Planned | First real pipeline pass |
-| Present pass (logical screen → window blit) | Planned | Respects `Layout()` scaling |
-| Smoke test: window opens, clears blue, Escape exits | Planned | Manual test + CI headless |
-| `go build` with `-tags glfw` compiles and links | Planned | |
+| GLFW window implementation (`internal/platform/glfw/`) | Done | go-gl/glfw v3.3, build-tagged |
+| OpenGL 3.3 device implementation (`internal/backend/opengl/`) | Done | Core profile, full Device + CommandEncoder |
+| Wire engine.run() → platform window → backend device | Done | Fixed-timestep update + variable draw |
+| Clear pass implementation | Done | Engine clears via CommandEncoder.BeginRenderPass |
+| Present pass (logical screen → window blit) | Done | SwapBuffers via GLFW |
+| Smoke test: window opens, clears blue, Escape exits | Done | `cmd/clear/main.go` |
+| `go build` with `-tags glfw` compiles and links | Done | Also compiles without tags (stub engine) |
+| CI lint pipeline (golangci-lint v2) | Done | 0 issues on both tagged and untagged builds |
+| Makefile with `ci`, `lint`, `test`, `build` targets | Done | |
+| GitHub Actions CI workflow | Done | `.github/workflows/ci.yml` |
 
 **Exit criteria**: `cmd/clear/main.go` opens a window, shows a solid color,
 responds to Escape key.
