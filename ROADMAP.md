@@ -43,8 +43,9 @@ proof that the full stack (platform → backend → pipeline → engine) connect
 
 | Task | Status | Notes |
 |---|---|---|
-| GLFW window implementation (`internal/platform/glfw/`) | Done | go-gl/glfw v3.3, build-tagged |
-| OpenGL 3.3 device implementation (`internal/backend/opengl/`) | Done | Core profile, full Device + CommandEncoder |
+| GLFW window implementation (`internal/platform/glfw/`) | Done | purego (no CGo), build-tagged |
+| OpenGL 3.3 device implementation (`internal/backend/opengl/`) | Done | purego (no CGo), full Device + CommandEncoder |
+| Remove CGo dependencies (go-gl/gl, go-gl/glfw) | Done | Replaced with purego dynamic loading via `internal/gl/` |
 | Wire engine.run() → platform window → backend device | Done | Fixed-timestep update + variable draw |
 | Clear pass implementation | Done | Engine clears via CommandEncoder.BeginRenderPass |
 | Present pass (logical screen → window blit) | Done | SwapBuffers via GLFW |
@@ -248,8 +249,8 @@ These guide every milestone:
    existing working code.
 2. **Tests before merge** — every milestone must pass `go test ./...` and
    `go vet ./...`.
-3. **No CGo in core** — math, batch, pipeline, input remain pure Go. CGo is
-   confined to `internal/backend/` and `internal/platform/` implementations.
+3. **No CGo anywhere** — the entire engine is pure Go. OpenGL and GLFW are
+   loaded at runtime via purego (`internal/gl/`, `internal/platform/glfw/`).
 4. **Ebitengine API compatibility** — public API names and signatures match
    Ebitengine where possible, enabling straightforward migration.
 5. **3D-ready from day one** — no 2D-only assumptions in internal layers. See

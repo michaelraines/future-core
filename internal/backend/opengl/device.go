@@ -8,9 +8,8 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/go-gl/gl/v3.3-core/gl"
-
 	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-render/internal/gl"
 )
 
 // Device implements backend.Device for OpenGL 3.3 core profile.
@@ -30,7 +29,7 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("opengl init: %w", err)
 	}
 
-	version := gl.GoStr(gl.GetString(gl.VERSION))
+	version := gl.GetGoString(gl.VERSION)
 	if version == "" {
 		return fmt.Errorf("opengl: could not query GL version")
 	}
@@ -143,10 +142,10 @@ func (d *Device) NewShader(desc backend.ShaderDescriptor) (backend.Shader, error
 	if status == gl.FALSE {
 		var logLen int32
 		gl.GetProgramiv(program, gl.INFO_LOG_LENGTH, &logLen)
-		log := strings.Repeat("\x00", int(logLen+1))
-		gl.GetProgramInfoLog(program, logLen, nil, gl.Str(log))
+		logBuf := make([]byte, logLen+1)
+		gl.GetProgramInfoLog(program, logLen, nil, &logBuf[0])
 		gl.DeleteProgram(program)
-		return nil, fmt.Errorf("link: %s", log)
+		return nil, fmt.Errorf("link: %s", strings.TrimRight(string(logBuf), "\x00"))
 	}
 
 	return &shader{program: program}, nil
@@ -362,9 +361,8 @@ func (p *pipelineState) Dispose() {}
 
 func compileShader(source string, shaderType uint32) (uint32, error) {
 	s := gl.CreateShader(shaderType)
-	csource, free := gl.Strs(source + "\x00")
-	gl.ShaderSource(s, 1, csource, nil)
-	free()
+	csource := gl.Str(source + "\x00")
+	gl.ShaderSource(s, 1, &csource, nil)
 	gl.CompileShader(s)
 
 	var status int32
@@ -372,10 +370,10 @@ func compileShader(source string, shaderType uint32) (uint32, error) {
 	if status == gl.FALSE {
 		var logLen int32
 		gl.GetShaderiv(s, gl.INFO_LOG_LENGTH, &logLen)
-		log := strings.Repeat("\x00", int(logLen+1))
-		gl.GetShaderInfoLog(s, logLen, nil, gl.Str(log))
+		logBuf := make([]byte, logLen+1)
+		gl.GetShaderInfoLog(s, logLen, nil, &logBuf[0])
 		gl.DeleteShader(s)
-		return 0, fmt.Errorf("%s", log)
+		return 0, fmt.Errorf("%s", strings.TrimRight(string(logBuf), "\x00"))
 	}
 	return s, nil
 }

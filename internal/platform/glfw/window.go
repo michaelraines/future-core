@@ -1,13 +1,14 @@
 //go:build glfw
 
-// Package glfw implements the platform.Window interface using GLFW.
+// Package glfw implements the platform.Window interface using GLFW,
+// loaded at runtime via purego (no CGo required).
 package glfw
 
 import (
 	"fmt"
 	"runtime"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
+	"github.com/ebitengine/purego"
 
 	"github.com/michaelraines/future-render/internal/platform"
 )
@@ -17,13 +18,20 @@ func init() {
 	runtime.LockOSThread()
 }
 
-// Window implements platform.Window using GLFW.
+// Window implements platform.Window using GLFW via purego.
 type Window struct {
-	win            *glfw.Window
+	win            uintptr // GLFWwindow*
 	handler        platform.InputHandler
 	fullscreen     bool
 	savedX, savedY int
 	savedW, savedH int
+
+	// Prevent callback pointers from being GC'd.
+	keyCB         uintptr
+	mouseButtonCB uintptr
+	cursorPosCB   uintptr
+	scrollCB      uintptr
+	framebufferCB uintptr
 }
 
 // New creates a new GLFW window (uninitialized — call Create to open it).
@@ -33,48 +41,52 @@ func New() *Window {
 
 // Create creates and shows the GLFW window.
 func (w *Window) Create(cfg platform.WindowConfig) error {
-	if err := glfw.Init(); err != nil {
-		return fmt.Errorf("glfw init: %w", err)
+	if err := initGLFWAPI(); err != nil {
+		return fmt.Errorf("glfw api: %w", err)
+	}
+
+	if fnGlfwInit() == 0 {
+		return fmt.Errorf("glfw init failed")
 	}
 
 	// Request OpenGL 3.3 core profile.
-	glfw.WindowHint(glfw.ContextVersionMajor, 3)
-	glfw.WindowHint(glfw.ContextVersionMinor, 3)
-	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
-	glfw.WindowHint(glfw.OpenGLForwardCompatible, glfw.True)
+	fnGlfwWindowHint(glfwContextVersionMajor, 3)
+	fnGlfwWindowHint(glfwContextVersionMinor, 3)
+	fnGlfwWindowHint(glfwOpenGLProfile, glfwOpenGLCoreProfile)
+	fnGlfwWindowHint(glfwOpenGLForwardCompat, glfwTrue)
 
 	if cfg.Resizable {
-		glfw.WindowHint(glfw.Resizable, glfw.True)
+		fnGlfwWindowHint(glfwResizable, glfwTrue)
 	} else {
-		glfw.WindowHint(glfw.Resizable, glfw.False)
+		fnGlfwWindowHint(glfwResizable, glfwFalse)
 	}
 
 	if !cfg.Decorated {
-		glfw.WindowHint(glfw.Decorated, glfw.False)
+		fnGlfwWindowHint(glfwDecorated, glfwFalse)
 	}
 
-	var monitor *glfw.Monitor
-	width, height := cfg.Width, cfg.Height
+	var monitor uintptr
+	width, height := int32(cfg.Width), int32(cfg.Height)
 	if cfg.Fullscreen {
-		monitor = glfw.GetPrimaryMonitor()
-		mode := monitor.GetVideoMode()
+		monitor = fnGlfwGetPrimaryMonitor()
+		mode := getVideoMode(fnGlfwGetVideoMode(monitor))
 		width = mode.Width
 		height = mode.Height
 		w.fullscreen = true
 	}
 
-	win, err := glfw.CreateWindow(width, height, cfg.Title, monitor, nil)
-	if err != nil {
-		glfw.Terminate()
-		return fmt.Errorf("glfw create window: %w", err)
+	win := fnGlfwCreateWindow(width, height, cStr(cfg.Title), monitor, 0)
+	if win == 0 {
+		fnGlfwTerminate()
+		return fmt.Errorf("glfw create window failed")
 	}
 	w.win = win
-	win.MakeContextCurrent()
+	fnGlfwMakeContextCurrent(win)
 
 	if cfg.VSync {
-		glfw.SwapInterval(1)
+		fnGlfwSwapInterval(1)
 	} else {
-		glfw.SwapInterval(0)
+		fnGlfwSwapInterval(0)
 	}
 
 	w.installCallbacks()
@@ -83,42 +95,47 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 
 // Destroy closes the window and terminates GLFW.
 func (w *Window) Destroy() {
-	if w.win != nil {
-		w.win.Destroy()
-		w.win = nil
+	if w.win != 0 {
+		fnGlfwDestroyWindow(w.win)
+		w.win = 0
 	}
-	glfw.Terminate()
+	fnGlfwTerminate()
 }
 
 // ShouldClose returns whether the window close has been requested.
 func (w *Window) ShouldClose() bool {
-	return w.win.ShouldClose()
+	return fnGlfwWindowShouldClose(w.win) != 0
 }
 
 // PollEvents processes pending window events.
 func (w *Window) PollEvents() {
-	glfw.PollEvents()
+	fnGlfwPollEvents()
 }
 
 // SwapBuffers swaps front and back buffers.
 func (w *Window) SwapBuffers() {
-	w.win.SwapBuffers()
+	fnGlfwSwapBuffers(w.win)
 }
 
 // Size returns the window size in screen coordinates.
 func (w *Window) Size() (width, height int) {
-	return w.win.GetSize()
+	var ww, hh int32
+	fnGlfwGetWindowSize(w.win, &ww, &hh)
+	return int(ww), int(hh)
 }
 
 // FramebufferSize returns the framebuffer size in pixels.
 func (w *Window) FramebufferSize() (width, height int) {
-	return w.win.GetFramebufferSize()
+	var ww, hh int32
+	fnGlfwGetFramebufferSize(w.win, &ww, &hh)
+	return int(ww), int(hh)
 }
 
 // DevicePixelRatio returns the ratio of physical to logical pixels.
 func (w *Window) DevicePixelRatio() float64 {
-	fbW, _ := w.win.GetFramebufferSize()
-	winW, _ := w.win.GetSize()
+	var fbW, winW int32
+	fnGlfwGetFramebufferSize(w.win, &fbW, nil)
+	fnGlfwGetWindowSize(w.win, &winW, nil)
 	if winW == 0 {
 		return 1.0
 	}
@@ -127,12 +144,12 @@ func (w *Window) DevicePixelRatio() float64 {
 
 // SetTitle sets the window title.
 func (w *Window) SetTitle(title string) {
-	w.win.SetTitle(title)
+	fnGlfwSetWindowTitle(w.win, cStr(title))
 }
 
 // SetSize sets the window size in screen coordinates.
 func (w *Window) SetSize(width, height int) {
-	w.win.SetSize(width, height)
+	fnGlfwSetWindowSize(w.win, int32(width), int32(height))
 }
 
 // SetFullscreen toggles fullscreen mode.
@@ -142,13 +159,17 @@ func (w *Window) SetFullscreen(fullscreen bool) {
 	}
 	w.fullscreen = fullscreen
 	if fullscreen {
-		w.savedX, w.savedY = w.win.GetPos()
-		w.savedW, w.savedH = w.win.GetSize()
-		monitor := glfw.GetPrimaryMonitor()
-		mode := monitor.GetVideoMode()
-		w.win.SetMonitor(monitor, 0, 0, mode.Width, mode.Height, mode.RefreshRate)
+		var x, y int32
+		fnGlfwGetWindowPos(w.win, &x, &y)
+		w.savedX, w.savedY = int(x), int(y)
+		var sw, sh int32
+		fnGlfwGetWindowSize(w.win, &sw, &sh)
+		w.savedW, w.savedH = int(sw), int(sh)
+		monitor := fnGlfwGetPrimaryMonitor()
+		mode := getVideoMode(fnGlfwGetVideoMode(monitor))
+		fnGlfwSetWindowMonitor(w.win, monitor, 0, 0, mode.Width, mode.Height, mode.RefreshRate)
 	} else {
-		w.win.SetMonitor(nil, w.savedX, w.savedY, w.savedW, w.savedH, 0)
+		fnGlfwSetWindowMonitor(w.win, 0, int32(w.savedX), int32(w.savedY), int32(w.savedW), int32(w.savedH), 0)
 	}
 }
 
@@ -160,24 +181,24 @@ func (w *Window) IsFullscreen() bool {
 // SetCursorVisible shows or hides the cursor.
 func (w *Window) SetCursorVisible(visible bool) {
 	if visible {
-		w.win.SetInputMode(glfw.CursorMode, glfw.CursorNormal)
+		fnGlfwSetInputMode(w.win, glfwCursorMode, glfwCursorNormal)
 	} else {
-		w.win.SetInputMode(glfw.CursorMode, glfw.CursorHidden)
+		fnGlfwSetInputMode(w.win, glfwCursorMode, glfwCursorHidden)
 	}
 }
 
 // SetCursorLocked locks or unlocks the cursor.
 func (w *Window) SetCursorLocked(locked bool) {
 	if locked {
-		w.win.SetInputMode(glfw.CursorMode, glfw.CursorDisabled)
+		fnGlfwSetInputMode(w.win, glfwCursorMode, glfwCursorDisabled)
 	} else {
-		w.win.SetInputMode(glfw.CursorMode, glfw.CursorNormal)
+		fnGlfwSetInputMode(w.win, glfwCursorMode, glfwCursorNormal)
 	}
 }
 
 // NativeHandle returns the GLFW window pointer as a uintptr.
 func (w *Window) NativeHandle() uintptr {
-	return uintptr(0) // GLFW doesn't expose a raw handle; context is already current
+	return w.win
 }
 
 // SetInputHandler sets the handler for input events.
@@ -185,25 +206,34 @@ func (w *Window) SetInputHandler(handler platform.InputHandler) {
 	w.handler = handler
 }
 
-// installCallbacks registers GLFW event callbacks.
+// activeWindows maps GLFW window handles to Window instances for callbacks.
+var activeWindows = map[uintptr]*Window{}
+
+// installCallbacks registers GLFW event callbacks via purego.NewCallback.
 func (w *Window) installCallbacks() {
-	w.win.SetKeyCallback(func(_ *glfw.Window, key glfw.Key, _ int, action glfw.Action, mods glfw.ModifierKey) {
-		if w.handler == nil {
+	activeWindows[w.win] = w
+
+	w.keyCB = purego.NewCallback(func(window uintptr, key, scancode, action, mods int32) {
+		win := activeWindows[window]
+		if win == nil || win.handler == nil {
 			return
 		}
-		w.handler.OnKeyEvent(platform.KeyEvent{
+		win.handler.OnKeyEvent(platform.KeyEvent{
 			Key:    mapKey(key),
 			Action: mapAction(action),
 			Mods:   mapMods(mods),
 		})
 	})
+	fnGlfwSetKeyCallback(w.win, w.keyCB)
 
-	w.win.SetMouseButtonCallback(func(_ *glfw.Window, button glfw.MouseButton, action glfw.Action, mods glfw.ModifierKey) {
-		if w.handler == nil {
+	w.mouseButtonCB = purego.NewCallback(func(window uintptr, button, action, mods int32) {
+		win := activeWindows[window]
+		if win == nil || win.handler == nil {
 			return
 		}
-		x, y := w.win.GetCursorPos()
-		w.handler.OnMouseButtonEvent(platform.MouseButtonEvent{
+		var x, y float64
+		fnGlfwGetCursorPos(window, &x, &y)
+		win.handler.OnMouseButtonEvent(platform.MouseButtonEvent{
 			Button: platform.MouseButton(button),
 			Action: mapAction(action),
 			X:      x,
@@ -211,165 +241,173 @@ func (w *Window) installCallbacks() {
 			Mods:   mapMods(mods),
 		})
 	})
+	fnGlfwSetMouseButtonCallback(w.win, w.mouseButtonCB)
 
-	w.win.SetCursorPosCallback(func(_ *glfw.Window, x, y float64) {
-		if w.handler == nil {
+	w.cursorPosCB = purego.NewCallback(func(window uintptr, x, y float64) {
+		win := activeWindows[window]
+		if win == nil || win.handler == nil {
 			return
 		}
-		w.handler.OnMouseMoveEvent(platform.MouseMoveEvent{
+		win.handler.OnMouseMoveEvent(platform.MouseMoveEvent{
 			X: x, Y: y,
 		})
 	})
+	fnGlfwSetCursorPosCallback(w.win, w.cursorPosCB)
 
-	w.win.SetScrollCallback(func(_ *glfw.Window, xoff, yoff float64) {
-		if w.handler == nil {
+	w.scrollCB = purego.NewCallback(func(window uintptr, xoff, yoff float64) {
+		win := activeWindows[window]
+		if win == nil || win.handler == nil {
 			return
 		}
-		w.handler.OnMouseScrollEvent(platform.MouseScrollEvent{
+		win.handler.OnMouseScrollEvent(platform.MouseScrollEvent{
 			DX: xoff, DY: yoff,
 		})
 	})
+	fnGlfwSetScrollCallback(w.win, w.scrollCB)
 
-	w.win.SetFramebufferSizeCallback(func(_ *glfw.Window, width, height int) {
-		if w.handler == nil {
+	w.framebufferCB = purego.NewCallback(func(window uintptr, width, height int32) {
+		win := activeWindows[window]
+		if win == nil || win.handler == nil {
 			return
 		}
-		w.handler.OnResizeEvent(width, height)
+		win.handler.OnResizeEvent(int(width), int(height))
 	})
+	fnGlfwSetFramebufferSizeCallback(w.win, w.framebufferCB)
 }
 
-// mapKey converts a GLFW key to a platform.Key.
-func mapKey(k glfw.Key) platform.Key {
+// --- Key mapping ---
+
+func mapKey(k int32) platform.Key {
 	switch k {
-	case glfw.KeySpace:
+	case glfwKeySpace:
 		return platform.KeySpace
-	case glfw.KeyApostrophe:
+	case glfwKeyApostrophe:
 		return platform.KeyApostrophe
-	case glfw.KeyComma:
+	case glfwKeyComma:
 		return platform.KeyComma
-	case glfw.KeyMinus:
+	case glfwKeyMinus:
 		return platform.KeyMinus
-	case glfw.KeyPeriod:
+	case glfwKeyPeriod:
 		return platform.KeyPeriod
-	case glfw.KeySlash:
+	case glfwKeySlash:
 		return platform.KeySlash
-	case glfw.Key0:
+	case glfwKey0:
 		return platform.Key0
-	case glfw.Key1:
+	case glfwKey1:
 		return platform.Key1
-	case glfw.Key2:
+	case glfwKey2:
 		return platform.Key2
-	case glfw.Key3:
+	case glfwKey3:
 		return platform.Key3
-	case glfw.Key4:
+	case glfwKey4:
 		return platform.Key4
-	case glfw.Key5:
+	case glfwKey5:
 		return platform.Key5
-	case glfw.Key6:
+	case glfwKey6:
 		return platform.Key6
-	case glfw.Key7:
+	case glfwKey7:
 		return platform.Key7
-	case glfw.Key8:
+	case glfwKey8:
 		return platform.Key8
-	case glfw.Key9:
+	case glfwKey9:
 		return platform.Key9
-	case glfw.KeyA:
+	case glfwKeyA:
 		return platform.KeyA
-	case glfw.KeyB:
+	case glfwKeyB:
 		return platform.KeyB
-	case glfw.KeyC:
+	case glfwKeyC:
 		return platform.KeyC
-	case glfw.KeyD:
+	case glfwKeyD:
 		return platform.KeyD
-	case glfw.KeyE:
+	case glfwKeyE:
 		return platform.KeyE
-	case glfw.KeyF:
+	case glfwKeyF:
 		return platform.KeyF
-	case glfw.KeyG:
+	case glfwKeyG:
 		return platform.KeyG
-	case glfw.KeyH:
+	case glfwKeyH:
 		return platform.KeyH
-	case glfw.KeyI:
+	case glfwKeyI:
 		return platform.KeyI
-	case glfw.KeyJ:
+	case glfwKeyJ:
 		return platform.KeyJ
-	case glfw.KeyK:
+	case glfwKeyK:
 		return platform.KeyK
-	case glfw.KeyL:
+	case glfwKeyL:
 		return platform.KeyL
-	case glfw.KeyM:
+	case glfwKeyM:
 		return platform.KeyM
-	case glfw.KeyN:
+	case glfwKeyN:
 		return platform.KeyN
-	case glfw.KeyO:
+	case glfwKeyO:
 		return platform.KeyO
-	case glfw.KeyP:
+	case glfwKeyP:
 		return platform.KeyP
-	case glfw.KeyQ:
+	case glfwKeyQ:
 		return platform.KeyQ
-	case glfw.KeyR:
+	case glfwKeyR:
 		return platform.KeyR
-	case glfw.KeyS:
+	case glfwKeyS:
 		return platform.KeyS
-	case glfw.KeyT:
+	case glfwKeyT:
 		return platform.KeyT
-	case glfw.KeyU:
+	case glfwKeyU:
 		return platform.KeyU
-	case glfw.KeyV:
+	case glfwKeyV:
 		return platform.KeyV
-	case glfw.KeyW:
+	case glfwKeyW:
 		return platform.KeyW
-	case glfw.KeyX:
+	case glfwKeyX:
 		return platform.KeyX
-	case glfw.KeyY:
+	case glfwKeyY:
 		return platform.KeyY
-	case glfw.KeyZ:
+	case glfwKeyZ:
 		return platform.KeyZ
-	case glfw.KeyEscape:
+	case glfwKeyEscape:
 		return platform.KeyEscape
-	case glfw.KeyEnter:
+	case glfwKeyEnter:
 		return platform.KeyEnter
-	case glfw.KeyTab:
+	case glfwKeyTab:
 		return platform.KeyTab
-	case glfw.KeyBackspace:
+	case glfwKeyBackspace:
 		return platform.KeyBackspace
-	case glfw.KeyRight:
+	case glfwKeyRight:
 		return platform.KeyRight
-	case glfw.KeyLeft:
+	case glfwKeyLeft:
 		return platform.KeyLeft
-	case glfw.KeyDown:
+	case glfwKeyDown:
 		return platform.KeyDown
-	case glfw.KeyUp:
+	case glfwKeyUp:
 		return platform.KeyUp
-	case glfw.KeyLeftShift, glfw.KeyRightShift:
+	case glfwKeyLeftShift, glfwKeyRightShift:
 		return platform.KeyLeftShift
-	case glfw.KeyLeftControl, glfw.KeyRightControl:
+	case glfwKeyLeftCtrl, glfwKeyRightCtrl:
 		return platform.KeyLeftControl
-	case glfw.KeyLeftAlt, glfw.KeyRightAlt:
+	case glfwKeyLeftAlt, glfwKeyRightAlt:
 		return platform.KeyLeftAlt
-	case glfw.KeyF1:
+	case glfwKeyF1:
 		return platform.KeyF1
-	case glfw.KeyF2:
+	case glfwKeyF2:
 		return platform.KeyF2
-	case glfw.KeyF3:
+	case glfwKeyF3:
 		return platform.KeyF3
-	case glfw.KeyF4:
+	case glfwKeyF4:
 		return platform.KeyF4
-	case glfw.KeyF5:
+	case glfwKeyF5:
 		return platform.KeyF5
-	case glfw.KeyF6:
+	case glfwKeyF6:
 		return platform.KeyF6
-	case glfw.KeyF7:
+	case glfwKeyF7:
 		return platform.KeyF7
-	case glfw.KeyF8:
+	case glfwKeyF8:
 		return platform.KeyF8
-	case glfw.KeyF9:
+	case glfwKeyF9:
 		return platform.KeyF9
-	case glfw.KeyF10:
+	case glfwKeyF10:
 		return platform.KeyF10
-	case glfw.KeyF11:
+	case glfwKeyF11:
 		return platform.KeyF11
-	case glfw.KeyF12:
+	case glfwKeyF12:
 		return platform.KeyF12
 	default:
 		return platform.KeyUnknown
@@ -377,13 +415,13 @@ func mapKey(k glfw.Key) platform.Key {
 }
 
 // mapAction converts a GLFW action to a platform.Action.
-func mapAction(a glfw.Action) platform.Action {
+func mapAction(a int32) platform.Action {
 	switch a {
-	case glfw.Press:
+	case glfwPress:
 		return platform.ActionPress
-	case glfw.Release:
+	case glfwRelease:
 		return platform.ActionRelease
-	case glfw.Repeat:
+	case glfwRepeat:
 		return platform.ActionRepeat
 	default:
 		return platform.ActionRelease
@@ -391,18 +429,18 @@ func mapAction(a glfw.Action) platform.Action {
 }
 
 // mapMods converts GLFW modifier keys to platform.Modifier.
-func mapMods(m glfw.ModifierKey) platform.Modifier {
+func mapMods(m int32) platform.Modifier {
 	var mods platform.Modifier
-	if m&glfw.ModShift != 0 {
+	if m&glfwModShift != 0 {
 		mods |= platform.ModShift
 	}
-	if m&glfw.ModControl != 0 {
+	if m&glfwModControl != 0 {
 		mods |= platform.ModControl
 	}
-	if m&glfw.ModAlt != 0 {
+	if m&glfwModAlt != 0 {
 		mods |= platform.ModAlt
 	}
-	if m&glfw.ModSuper != 0 {
+	if m&glfwModSuper != 0 {
 		mods |= platform.ModSuper
 	}
 	return mods

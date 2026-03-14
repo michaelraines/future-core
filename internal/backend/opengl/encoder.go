@@ -5,9 +5,8 @@ package opengl
 import (
 	"unsafe"
 
-	"github.com/go-gl/gl/v3.3-core/gl"
-
 	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-render/internal/gl"
 )
 
 // commandEncoder implements backend.CommandEncoder for OpenGL.
