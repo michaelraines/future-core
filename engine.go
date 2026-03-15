@@ -149,7 +149,8 @@ const (
 // Backend returns the current rendering backend name.
 // This is determined by the FUTURE_RENDER_BACKEND environment variable
 // or defaults to "auto" (selects the best available backend).
-// Supported values: "auto", "opengl".
+// Supported values: "auto", "opengl", "vulkan", "metal", "webgl",
+// "webgpu", "dx12", "soft".
 func Backend() string {
 	return backendName()
 }

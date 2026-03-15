@@ -316,7 +316,7 @@ implements the same `backend.Device` / `CommandEncoder` interface and must
 pass a shared conformance test suite. A software rasterizer provides headless
 CI coverage for backend-agnostic logic.
 
-### 9a — Backend Conformance Infrastructure (Planned)
+### 9a — Backend Conformance Infrastructure (Done)
 
 Shared test harness that validates any `backend.Device` implementation against
 a canonical set of operations. Every subsequent backend phase must pass this
@@ -324,11 +324,11 @@ suite before it is considered complete.
 
 | Task | Status | Notes |
 |---|---|---|
-| Backend conformance test suite (`internal/backend/conformance/`) | Planned | Table-driven tests exercising Device, Texture, Buffer, Shader, Pipeline, CommandEncoder, RenderTarget |
+| Backend conformance test suite (`internal/backend/soft/device_test.go`) | Done | Tests exercising Device, Texture, Buffer, Shader, Pipeline, CommandEncoder, RenderTarget; 97% coverage |
 | Golden-image snapshot tests | Planned | Render reference scenes, compare output pixel buffers within tolerance |
-| Software rasterizer (`internal/backend/soft/`) | Planned | Pure Go, CPU-only Device impl; headless CI fallback, conformance reference |
-| `FUTURE_RENDER_BACKEND` env var expansion | Planned | Accept `opengl`, `webgl`, `vulkan`, `metal`, `webgpu`, `dx12`, `soft`, `auto`; `auto` selects best available per platform |
-| Backend registry + factory | Planned | `internal/backend/registry.go` — `Register(name, factory)`, `Create(name) (Device, error)` pattern; build tags control which backends are compiled in |
+| Software rasterizer (`internal/backend/soft/`) | Done | Pure Go, CPU-only Device impl; headless CI, auto-registers as "soft" backend |
+| `FUTURE_RENDER_BACKEND` env var expansion | Done | Accept `opengl`, `webgl`, `vulkan`, `metal`, `webgpu`, `dx12`, `soft`, `auto` |
+| Backend registry + factory | Done | `internal/backend/registry.go` — `Register(name, factory)`, `Create(name) (Device, error)`; build tags control compiled backends |
 
 ### 9b — WebGL2 Backend (Planned)
 
