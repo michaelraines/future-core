@@ -2,5 +2,6 @@
 cover.out
 coverage.html
 
-# Claude Code local settings
-.claude/
+# Claude Code local settings (allow skills)
+.claude/*
+!.claude/skills/
