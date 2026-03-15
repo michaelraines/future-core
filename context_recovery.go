@@ -3,6 +3,7 @@ package futurerender
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/michaelraines/future-render/internal/backend"
 	"github.com/michaelraines/future-render/internal/batch"
@@ -184,8 +185,8 @@ func (rt *ResourceTracker) recoverImage(device backend.Device, img *Image, rec *
 	img.disposed = false
 
 	// Re-register texture with renderer.
-	if globalRenderer != nil && globalRenderer.registerTexture != nil {
-		globalRenderer.registerTexture(img.textureID, tex)
+	if rend := getRenderer(); rend != nil && rend.registerTexture != nil {
+		rend.registerTexture(img.textureID, tex)
 	}
 
 	// Recreate render target if needed.
@@ -201,8 +202,8 @@ func (rt *ResourceTracker) recoverImage(device backend.Device, img *Image, rec *
 		}
 		img.renderTarget = renderTarget
 
-		if globalRenderer != nil && globalRenderer.registerRenderTarget != nil {
-			globalRenderer.registerRenderTarget(img.textureID, renderTarget)
+		if rend := getRenderer(); rend != nil && rend.registerRenderTarget != nil {
+			rend.registerRenderTarget(img.textureID, renderTarget)
 		}
 	}
 
@@ -240,13 +241,19 @@ func (rt *ResourceTracker) recoverShader(device backend.Device, s *Shader, rec *
 	s.disposed = false
 
 	// Re-register shader with renderer.
-	if globalRenderer != nil && globalRenderer.registerShader != nil {
-		globalRenderer.registerShader(s.id, s)
+	if rend := getRenderer(); rend != nil && rend.registerShader != nil {
+		rend.registerShader(s.id, s)
 	}
 
 	return nil
 }
 
-// globalTracker is the active resource tracker, set during engine init.
+// globalTrackerPtr is the active resource tracker, set atomically.
 // It is nil until explicitly enabled.
-var globalTracker *ResourceTracker
+var globalTrackerPtr atomic.Pointer[ResourceTracker]
+
+// getTracker returns the current resource tracker, or nil.
+func getTracker() *ResourceTracker { return globalTrackerPtr.Load() }
+
+// setTracker stores the resource tracker atomically.
+func setTracker(t *ResourceTracker) { globalTrackerPtr.Store(t) }

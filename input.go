@@ -9,67 +9,75 @@ import (
 
 // IsKeyPressed returns whether the given key is currently pressed.
 func IsKeyPressed(key Key) bool {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return false
 	}
-	return globalEngine.inputState.IsKeyPressed(keyToInternal(key))
+	return e.inputState.IsKeyPressed(keyToInternal(key))
 }
 
 // IsKeyJustPressed returns whether the key was pressed this frame (edge detection).
 func IsKeyJustPressed(key Key) bool {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return false
 	}
-	return globalEngine.inputState.IsKeyJustPressed(keyToInternal(key))
+	return e.inputState.IsKeyJustPressed(keyToInternal(key))
 }
 
 // IsKeyJustReleased returns whether the key was released this frame (edge detection).
 func IsKeyJustReleased(key Key) bool {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return false
 	}
-	return globalEngine.inputState.IsKeyJustReleased(keyToInternal(key))
+	return e.inputState.IsKeyJustReleased(keyToInternal(key))
 }
 
 // InputChars returns the Unicode characters input since the last frame.
 func InputChars() []rune {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return nil
 	}
-	return globalEngine.inputState.InputChars()
+	return e.inputState.InputChars()
 }
 
 // IsMouseButtonPressed returns whether the given mouse button is pressed.
 func IsMouseButtonPressed(button MouseButton) bool {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return false
 	}
-	return globalEngine.inputState.IsMouseButtonPressed(platform.MouseButton(button))
+	return e.inputState.IsMouseButtonPressed(platform.MouseButton(button))
 }
 
 // CursorPosition returns the current cursor position in logical pixels.
 func CursorPosition() (x, y int) {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return 0, 0
 	}
-	fx, fy := globalEngine.inputState.MousePosition()
+	fx, fy := e.inputState.MousePosition()
 	return int(fx), int(fy)
 }
 
 // Wheel returns the mouse wheel delta since the last frame.
 func Wheel() (xoff, yoff float64) {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return 0, 0
 	}
-	return globalEngine.inputState.ScrollDelta()
+	return e.inputState.ScrollDelta()
 }
 
 // TouchIDs returns the IDs of all active touch points.
 func TouchIDs() []TouchID {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return nil
 	}
-	ids := globalEngine.inputState.TouchIDs()
+	ids := e.inputState.TouchIDs()
 	if len(ids) == 0 {
 		return nil
 	}
@@ -82,10 +90,11 @@ func TouchIDs() []TouchID {
 
 // TouchPosition returns the position of a touch point.
 func TouchPosition(id TouchID) (x, y int) {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return 0, 0
 	}
-	fx, fy, ok := globalEngine.inputState.TouchPosition(int(id))
+	fx, fy, ok := e.inputState.TouchPosition(int(id))
 	if !ok {
 		return 0, 0
 	}
@@ -94,10 +103,11 @@ func TouchPosition(id TouchID) (x, y int) {
 
 // GamepadIDs returns the IDs of connected gamepads.
 func GamepadIDs() []GamepadID {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return nil
 	}
-	ids := globalEngine.inputState.GamepadIDs()
+	ids := e.inputState.GamepadIDs()
 	if len(ids) == 0 {
 		return nil
 	}
@@ -110,18 +120,20 @@ func GamepadIDs() []GamepadID {
 
 // GamepadAxisValue returns the value of a gamepad axis.
 func GamepadAxisValue(id GamepadID, axis int) float64 {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return 0
 	}
-	return globalEngine.inputState.GamepadAxis(int(id), axis)
+	return e.inputState.GamepadAxis(int(id), axis)
 }
 
 // IsGamepadButtonPressed returns whether a gamepad button is pressed.
 func IsGamepadButtonPressed(id GamepadID, button GamepadButton) bool {
-	if globalEngine == nil || globalEngine.inputState == nil {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
 		return false
 	}
-	return globalEngine.inputState.GamepadButton(int(id), int(button))
+	return e.inputState.GamepadButton(int(id), int(button))
 }
 
 // Key represents a keyboard key.

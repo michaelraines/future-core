@@ -15,9 +15,9 @@ func (g *stubGame) Layout(_, _ int) (screenWidth, screenHeight int) { return 320
 
 func withNilEngine(t *testing.T) {
 	t.Helper()
-	old := globalEngine
-	globalEngine = nil
-	t.Cleanup(func() { globalEngine = old })
+	old := getEngine()
+	setEngine(nil)
+	t.Cleanup(func() { setEngine(old) })
 }
 
 func TestSetWindowSizeNilEngine(t *testing.T) {
@@ -107,8 +107,8 @@ func TestDeviceScaleFactorNilEngine(t *testing.T) {
 }
 
 func TestNewPlatformEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
 	e := newPlatformEngine(game)
@@ -117,8 +117,8 @@ func TestNewPlatformEngine(t *testing.T) {
 }
 
 func TestEngineRunReturnsError(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
 	e := newPlatformEngine(game)
@@ -127,12 +127,12 @@ func TestEngineRunReturnsError(t *testing.T) {
 }
 
 func TestNewEngineSetGlobalEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
 	e := newEngine(game)
-	require.Equal(t, e, globalEngine)
+	require.Equal(t, e, getEngine())
 }
 
 func TestErrTermination(t *testing.T) {
@@ -141,11 +141,11 @@ func TestErrTermination(t *testing.T) {
 }
 
 func TestSetWindowSizeWithEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
-	globalEngine = newPlatformEngine(game)
+	setEngine(newPlatformEngine(game))
 
 	SetWindowSize(640, 480)
 	require.Equal(t, 640, pendingWindowWidth)
@@ -157,11 +157,11 @@ func TestSetWindowSizeWithEngine(t *testing.T) {
 }
 
 func TestSetWindowTitleWithEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
-	globalEngine = newPlatformEngine(game)
+	setEngine(newPlatformEngine(game))
 
 	SetWindowTitle("Hello")
 	require.Equal(t, "Hello", pendingWindowTitle)
@@ -171,11 +171,11 @@ func TestSetWindowTitleWithEngine(t *testing.T) {
 }
 
 func TestIsFullscreenWithEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
-	globalEngine = newPlatformEngine(game)
+	setEngine(newPlatformEngine(game))
 
 	require.False(t, IsFullscreen())
 	SetFullscreen(true)
@@ -184,11 +184,11 @@ func TestIsFullscreenWithEngine(t *testing.T) {
 }
 
 func TestIsVsyncEnabledWithEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
-	globalEngine = newPlatformEngine(game)
+	setEngine(newPlatformEngine(game))
 
 	require.True(t, IsVsyncEnabled())
 	SetVsyncEnabled(false)
@@ -197,41 +197,41 @@ func TestIsVsyncEnabledWithEngine(t *testing.T) {
 }
 
 func TestCurrentFPSWithEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
-	globalEngine = newPlatformEngine(game)
+	setEngine(newPlatformEngine(game))
 
 	require.InDelta(t, 0.0, CurrentFPS(), 1e-6)
 }
 
 func TestCurrentTPSWithEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
-	globalEngine = newPlatformEngine(game)
+	setEngine(newPlatformEngine(game))
 
 	require.InDelta(t, 0.0, CurrentTPS(), 1e-6)
 }
 
 func TestDeviceScaleFactorWithEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
-	globalEngine = newPlatformEngine(game)
+	setEngine(newPlatformEngine(game))
 
 	require.InDelta(t, 1.0, DeviceScaleFactor(), 1e-6)
 }
 
 func TestSetCursorModeWithEngine(t *testing.T) {
-	old := globalEngine
-	defer func() { globalEngine = old }()
+	old := getEngine()
+	defer func() { setEngine(old) }()
 
 	game := &stubGame{}
-	globalEngine = newPlatformEngine(game)
+	setEngine(newPlatformEngine(game))
 
 	// Should not panic.
 	SetCursorMode(CursorModeCaptured)

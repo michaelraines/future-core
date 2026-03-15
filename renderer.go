@@ -33,8 +33,14 @@ type renderer struct {
 	registerRenderTarget func(id uint32, rt backend.RenderTarget)
 }
 
-// globalRenderer is the active renderer, set by the engine during init.
-var globalRenderer *renderer
+// globalRendererPtr is the active renderer, set atomically by the engine during init.
+var globalRendererPtr atomic.Pointer[renderer]
+
+// getRenderer returns the current renderer, or nil if not initialized.
+func getRenderer() *renderer { return globalRendererPtr.Load() }
+
+// setRenderer stores the renderer atomically.
+func setRenderer(r *renderer) { globalRendererPtr.Store(r) }
 
 func (r *renderer) allocTextureID() uint32 {
 	return r.nextTextureID.Add(1)

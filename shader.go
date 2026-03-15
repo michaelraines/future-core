@@ -54,11 +54,12 @@ func NewShaderFromGLSL(vertSrc, fragSrc []byte) (*Shader, error) {
 }
 
 func newShaderFromGLSLInternal(vertSrc, fragSrc []byte, uniforms []shaderir.Uniform) (*Shader, error) {
-	if globalRenderer == nil || globalRenderer.device == nil {
+	rend := getRenderer()
+	if rend == nil || rend.device == nil {
 		return nil, fmt.Errorf("shader: no rendering device available")
 	}
 
-	sh, err := globalRenderer.device.NewShader(backend.ShaderDescriptor{
+	sh, err := rend.device.NewShader(backend.ShaderDescriptor{
 		VertexSource:   string(vertSrc),
 		FragmentSource: string(fragSrc),
 		Attributes:     batch.Vertex2DFormat().Attributes,
@@ -67,7 +68,7 @@ func newShaderFromGLSLInternal(vertSrc, fragSrc []byte, uniforms []shaderir.Unif
 		return nil, fmt.Errorf("shader: compile: %w", err)
 	}
 
-	pip, err := globalRenderer.device.NewPipeline(backend.PipelineDescriptor{
+	pip, err := rend.device.NewPipeline(backend.PipelineDescriptor{
 		Shader:       sh,
 		VertexFormat: batch.Vertex2DFormat(),
 		BlendMode:    backend.BlendSourceOver,
@@ -90,13 +91,13 @@ func newShaderFromGLSLInternal(vertSrc, fragSrc []byte, uniforms []shaderir.Unif
 	}
 
 	// Register in renderer for SpritePass lookup.
-	if globalRenderer.registerShader != nil {
-		globalRenderer.registerShader(id, s)
+	if rend.registerShader != nil {
+		rend.registerShader(id, s)
 	}
 
 	// Track for context loss recovery.
-	if globalTracker != nil {
-		globalTracker.TrackShader(s, string(vertSrc), string(fragSrc), uniforms)
+	if tracker := getTracker(); tracker != nil {
+		tracker.TrackShader(s, string(vertSrc), string(fragSrc), uniforms)
 	}
 
 	return s, nil
@@ -110,8 +111,8 @@ func (s *Shader) Deallocate() {
 	s.disposed = true
 
 	// Untrack from context loss recovery.
-	if globalTracker != nil {
-		globalTracker.UntrackShader(s)
+	if tracker := getTracker(); tracker != nil {
+		tracker.UntrackShader(s)
 	}
 
 	if s.pipeline != nil {

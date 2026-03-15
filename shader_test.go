@@ -78,9 +78,9 @@ func withShaderRenderer(t *testing.T) *shaderMockDevice {
 			registeredShaders[id] = shader
 		},
 	}
-	old := globalRenderer
-	globalRenderer = rend
-	t.Cleanup(func() { globalRenderer = old })
+	old := getRenderer()
+	setRenderer(rend)
+	t.Cleanup(func() { setRenderer(old) })
 	return dev
 }
 
@@ -130,9 +130,9 @@ func TestNewShaderKageInvalid(t *testing.T) {
 }
 
 func TestNewShaderFromGLSLNoRenderer(t *testing.T) {
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	_, err := NewShaderFromGLSL([]byte("v"), []byte("f"))
 	require.Error(t, err)
@@ -258,7 +258,7 @@ func TestDrawRectShaderBasic(t *testing.T) {
 	img.DrawRectShader(50, 50, shader, nil)
 
 	// Verify a draw command was batched with the shader's ID.
-	batches := globalRenderer.batcher.Flush()
+	batches := getRenderer().batcher.Flush()
 	require.Len(t, batches, 1)
 	require.Equal(t, shader.id, batches[0].ShaderID)
 	require.Len(t, batches[0].Vertices, 4)
@@ -276,7 +276,7 @@ func TestDrawRectShaderWithGeoM(t *testing.T) {
 	opts.GeoM.Translate(10, 20)
 	img.DrawRectShader(50, 50, shader, opts)
 
-	batches := globalRenderer.batcher.Flush()
+	batches := getRenderer().batcher.Flush()
 	require.Len(t, batches, 1)
 	// First vertex should be translated.
 	require.InDelta(t, 10.0, batches[0].Vertices[0].PosX, 1e-3)
@@ -292,14 +292,14 @@ func TestDrawRectShaderDisposed(t *testing.T) {
 	// Disposed image.
 	img := &Image{width: 100, height: 100, disposed: true}
 	img.DrawRectShader(50, 50, shader, nil)
-	batches := globalRenderer.batcher.Flush()
+	batches := getRenderer().batcher.Flush()
 	require.Empty(t, batches)
 
 	// Disposed shader.
 	img2 := &Image{width: 100, height: 100}
 	shader.Deallocate()
 	img2.DrawRectShader(50, 50, shader, nil)
-	batches = globalRenderer.batcher.Flush()
+	batches = getRenderer().batcher.Flush()
 	require.Empty(t, batches)
 }
 
@@ -307,7 +307,7 @@ func TestDrawRectShaderNilShader(t *testing.T) {
 	_ = withShaderRenderer(t)
 	img := &Image{width: 100, height: 100}
 	img.DrawRectShader(50, 50, nil, nil)
-	batches := globalRenderer.batcher.Flush()
+	batches := getRenderer().batcher.Flush()
 	require.Empty(t, batches)
 }
 
@@ -329,7 +329,7 @@ func TestDrawTrianglesShaderBasic(t *testing.T) {
 
 	img.DrawTrianglesShader(verts, indices, shader, nil)
 
-	batches := globalRenderer.batcher.Flush()
+	batches := getRenderer().batcher.Flush()
 	require.Len(t, batches, 1)
 	require.Equal(t, shader.id, batches[0].ShaderID)
 	require.Len(t, batches[0].Vertices, 3)
@@ -341,7 +341,7 @@ func TestDrawTrianglesShaderDisposed(t *testing.T) {
 	img := &Image{width: 100, height: 100, disposed: true}
 	shader, _ := NewShaderFromGLSL([]byte("v"), []byte("f"))
 	img.DrawTrianglesShader(nil, nil, shader, nil)
-	batches := globalRenderer.batcher.Flush()
+	batches := getRenderer().batcher.Flush()
 	require.Empty(t, batches)
 }
 

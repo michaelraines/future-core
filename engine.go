@@ -56,30 +56,30 @@ func RunGame(game Game) error {
 func SetWindowSize(width, height int) {
 	pendingWindowWidth = width
 	pendingWindowHeight = height
-	if globalEngine != nil {
-		globalEngine.setWindowSize(width, height)
+	if e := getEngine(); e != nil {
+		e.setWindowSize(width, height)
 	}
 }
 
 // SetWindowTitle sets the window title.
 func SetWindowTitle(title string) {
 	pendingWindowTitle = title
-	if globalEngine != nil {
-		globalEngine.setWindowTitle(title)
+	if e := getEngine(); e != nil {
+		e.setWindowTitle(title)
 	}
 }
 
 // SetFullscreen sets fullscreen mode.
 func SetFullscreen(fullscreen bool) {
-	if globalEngine != nil {
-		globalEngine.setFullscreen(fullscreen)
+	if e := getEngine(); e != nil {
+		e.setFullscreen(fullscreen)
 	}
 }
 
 // IsFullscreen returns whether the window is in fullscreen mode.
 func IsFullscreen() bool {
-	if globalEngine != nil {
-		return globalEngine.isFullscreen()
+	if e := getEngine(); e != nil {
+		return e.isFullscreen()
 	}
 	return false
 }
@@ -100,39 +100,39 @@ func MaxTPS() int {
 
 // SetVsyncEnabled enables or disables vertical synchronization.
 func SetVsyncEnabled(enabled bool) {
-	if globalEngine != nil {
-		globalEngine.setVSync(enabled)
+	if e := getEngine(); e != nil {
+		e.setVSync(enabled)
 	}
 }
 
 // IsVsyncEnabled returns whether VSync is enabled.
 func IsVsyncEnabled() bool {
-	if globalEngine != nil {
-		return globalEngine.isVSync()
+	if e := getEngine(); e != nil {
+		return e.isVSync()
 	}
 	return true
 }
 
 // CurrentFPS returns the current frames per second.
 func CurrentFPS() float64 {
-	if globalEngine != nil {
-		return globalEngine.currentFPS()
+	if e := getEngine(); e != nil {
+		return e.currentFPS()
 	}
 	return 0
 }
 
 // CurrentTPS returns the current ticks per second.
 func CurrentTPS() float64 {
-	if globalEngine != nil {
-		return globalEngine.currentTPS()
+	if e := getEngine(); e != nil {
+		return e.currentTPS()
 	}
 	return 0
 }
 
 // SetCursorMode sets the cursor visibility and lock mode.
 func SetCursorMode(mode CursorMode) {
-	if globalEngine != nil {
-		globalEngine.setCursorMode(mode)
+	if e := getEngine(); e != nil {
+		e.setCursorMode(mode)
 	}
 }
 
@@ -165,8 +165,8 @@ func backendName() string {
 
 // DeviceScaleFactor returns the device pixel ratio.
 func DeviceScaleFactor() float64 {
-	if globalEngine != nil {
-		return globalEngine.deviceScaleFactor()
+	if e := getEngine(); e != nil {
+		return e.deviceScaleFactor()
 	}
 	return 1.0
 }
@@ -186,8 +186,8 @@ func IsScreenClearedEveryFrame() bool {
 // --- Engine internals ---
 
 var (
-	globalEngine *engine
-	maxTPS       atomic.Int64
+	globalEnginePtr atomic.Pointer[engine]
+	maxTPS          atomic.Int64
 
 	// screenClearedEveryFrame controls whether the screen is cleared each frame.
 	screenClearedEveryFrame atomic.Bool
@@ -199,6 +199,12 @@ var (
 	pendingWindowHeight = 600
 )
 
+// getEngine returns the current engine, or nil if not initialized.
+func getEngine() *engine { return globalEnginePtr.Load() }
+
+// setEngine stores the engine atomically.
+func setEngine(e *engine) { globalEnginePtr.Store(e) }
+
 func init() {
 	maxTPS.Store(60)
 	screenClearedEveryFrame.Store(true)
@@ -209,6 +215,6 @@ func init() {
 
 func newEngine(game Game) *engine {
 	e := newPlatformEngine(game)
-	globalEngine = e
+	setEngine(e)
 	return e
 }

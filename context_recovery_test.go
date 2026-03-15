@@ -18,9 +18,9 @@ import (
 func withTracker(t *testing.T) *ResourceTracker {
 	t.Helper()
 	tracker := NewResourceTracker()
-	old := globalTracker
-	globalTracker = tracker
-	t.Cleanup(func() { globalTracker = old })
+	old := getTracker()
+	setTracker(tracker)
+	t.Cleanup(func() { setTracker(old) })
 	return tracker
 }
 
@@ -361,9 +361,9 @@ func TestRecoverResourcesReregistersWithRenderer(t *testing.T) {
 			registeredTargets[id] = rt
 		},
 	}
-	old := globalRenderer
-	globalRenderer = rend
-	t.Cleanup(func() { globalRenderer = old })
+	old := getRenderer()
+	setRenderer(rend)
+	t.Cleanup(func() { setRenderer(old) })
 
 	// Manually track an image and shader.
 	img := &Image{width: 16, height: 16, textureID: 42}
@@ -487,9 +487,9 @@ func TestRecoverImagePreservesTextureID(t *testing.T) {
 
 	dev := &shaderMockDevice{}
 	// Set globalRenderer to nil to test recovery without re-registration.
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	err := tracker.RecoverResources(dev)
 	require.NoError(t, err)
@@ -508,9 +508,9 @@ func TestRecoverShaderPreservesUniforms(t *testing.T) {
 	tracker.TrackShader(s, "v", "f", uniforms)
 
 	dev := &shaderMockDevice{}
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	err := tracker.RecoverResources(dev)
 	require.NoError(t, err)
@@ -529,9 +529,9 @@ func TestRecoverNoRendererDoesNotPanic(t *testing.T) {
 	s := &Shader{id: 1}
 	tracker.TrackShader(s, "v", "f", nil)
 
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	dev := &shaderMockDevice{}
 	err := tracker.RecoverResources(dev)
@@ -544,9 +544,9 @@ func TestRecoverImageRenderTargetCreated(t *testing.T) {
 	img := &Image{width: 64, height: 64, textureID: 10}
 	tracker.TrackImage(img, nil, true)
 
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	dev := &shaderMockDevice{}
 	err := tracker.RecoverResources(dev)
@@ -564,9 +564,9 @@ func TestRecoverImageNoRenderTarget(t *testing.T) {
 	img := &Image{width: 32, height: 32, textureID: 5}
 	tracker.TrackImage(img, nil, false)
 
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	dev := &shaderMockDevice{}
 	err := tracker.RecoverResources(dev)
@@ -600,9 +600,9 @@ func TestRecoverShaderPreservesID(t *testing.T) {
 	tracker.TrackShader(s, "v", "f", nil)
 
 	dev := &shaderMockDevice{}
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	err := tracker.RecoverResources(dev)
 	require.NoError(t, err)

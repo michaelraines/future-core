@@ -92,9 +92,9 @@ func withMockRenderer(t *testing.T) (dev *mockDevice, registered map[uint32]back
 		},
 		registerRenderTarget: func(_ uint32, _ backend.RenderTarget) {},
 	}
-	old := globalRenderer
-	globalRenderer = rend
-	t.Cleanup(func() { globalRenderer = old })
+	old := getRenderer()
+	setRenderer(rend)
+	t.Cleanup(func() { setRenderer(old) })
 	return dev, registered
 }
 
@@ -107,16 +107,16 @@ func withBatchRenderer(t *testing.T, whiteTexID uint32) *batch.Batcher {
 		batcher:        b,
 		whiteTextureID: whiteTexID,
 	}
-	old := globalRenderer
-	globalRenderer = rend
-	t.Cleanup(func() { globalRenderer = old })
+	old := getRenderer()
+	setRenderer(rend)
+	t.Cleanup(func() { setRenderer(old) })
 	return b
 }
 
 func TestNewImageNoRenderer(t *testing.T) {
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	img := NewImage(100, 200)
 	require.NotNil(t, img, "NewImage returned nil")
@@ -213,9 +213,9 @@ func TestWritePixels(t *testing.T) {
 }
 
 func TestWritePixelsNoTexture(t *testing.T) {
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	img := NewImage(32, 32)
 	// Should not panic with nil texture.
@@ -234,9 +234,9 @@ func TestWritePixelsDisposed(t *testing.T) {
 func TestAllocTextureIDMonotonic(t *testing.T) {
 	withMockRenderer(t)
 
-	id1 := globalRenderer.allocTextureID()
-	id2 := globalRenderer.allocTextureID()
-	id3 := globalRenderer.allocTextureID()
+	id1 := getRenderer().allocTextureID()
+	id2 := getRenderer().allocTextureID()
+	id3 := getRenderer().allocTextureID()
 	require.True(t, id1 < id2, "texture IDs should be monotonically increasing")
 	require.True(t, id2 < id3, "texture IDs should be monotonically increasing")
 }
@@ -580,9 +580,9 @@ func TestDrawImageDisposedSrc(t *testing.T) {
 }
 
 func TestDrawImageNoRenderer(t *testing.T) {
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	dst := &Image{width: 100, height: 100, u0: 0, v0: 0, u1: 1, v1: 1}
 	src := &Image{width: 32, height: 32, u0: 0, v0: 0, u1: 1, v1: 1}
@@ -591,9 +591,9 @@ func TestDrawImageNoRenderer(t *testing.T) {
 }
 
 func TestFillNoRenderer(t *testing.T) {
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	img := &Image{width: 100, height: 100, u0: 0, v0: 0, u1: 1, v1: 1}
 	// Should not panic.
@@ -601,9 +601,9 @@ func TestFillNoRenderer(t *testing.T) {
 }
 
 func TestDrawTrianglesNoRenderer(t *testing.T) {
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	dst := &Image{width: 100, height: 100, u0: 0, v0: 0, u1: 1, v1: 1}
 	verts := []Vertex{{DstX: 0, DstY: 0}}
@@ -785,9 +785,9 @@ func TestDrawTrianglesDefaultFillRule(t *testing.T) {
 }
 
 func TestNewImageFromImageNoRenderer(t *testing.T) {
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	src := goimage.NewRGBA(goimage.Rect(0, 0, 8, 8))
 	img := NewImageFromImage(src)
@@ -862,9 +862,9 @@ func TestImageReadPixelsDisposed(t *testing.T) {
 }
 
 func TestImageReadPixelsNoTexture(t *testing.T) {
-	old := globalRenderer
-	globalRenderer = nil
-	defer func() { globalRenderer = old }()
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
 
 	img := NewImage(4, 4)
 	dst := make([]byte, 4*4*4)

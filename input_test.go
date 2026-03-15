@@ -14,10 +14,10 @@ import (
 // withInputEngine sets up a globalEngine with a real input.State for testing.
 func withInputEngine(t *testing.T) *input.State {
 	t.Helper()
-	old := globalEngine
+	old := getEngine()
 	s := input.New()
-	globalEngine = &engine{inputState: s}
-	t.Cleanup(func() { globalEngine = old })
+	setEngine(&engine{inputState: s})
+	t.Cleanup(func() { setEngine(old) })
 	return s
 }
 

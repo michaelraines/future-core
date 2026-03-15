@@ -43,8 +43,8 @@ func NewImage(width, height int) *Image {
 	}
 
 	// Allocate GPU texture and render target if a device is available.
-	if globalRenderer != nil && globalRenderer.device != nil {
-		tex, err := globalRenderer.device.NewTexture(backend.TextureDescriptor{
+	if rend := getRenderer(); rend != nil && rend.device != nil {
+		tex, err := rend.device.NewTexture(backend.TextureDescriptor{
 			Width:        width,
 			Height:       height,
 			Format:       backend.TextureFormatRGBA8,
@@ -55,29 +55,29 @@ func NewImage(width, height int) *Image {
 		})
 		if err == nil {
 			img.texture = tex
-			img.textureID = globalRenderer.allocTextureID()
-			if globalRenderer.registerTexture != nil {
-				globalRenderer.registerTexture(img.textureID, tex)
+			img.textureID = rend.allocTextureID()
+			if rend.registerTexture != nil {
+				rend.registerTexture(img.textureID, tex)
 			}
 		}
 
 		// Create render target so this image can be drawn to.
-		rt, rtErr := globalRenderer.device.NewRenderTarget(backend.RenderTargetDescriptor{
+		rt, rtErr := rend.device.NewRenderTarget(backend.RenderTargetDescriptor{
 			Width:       width,
 			Height:      height,
 			ColorFormat: backend.TextureFormatRGBA8,
 		})
 		if rtErr == nil {
 			img.renderTarget = rt
-			if globalRenderer.registerRenderTarget != nil {
-				globalRenderer.registerRenderTarget(img.textureID, rt)
+			if rend.registerRenderTarget != nil {
+				rend.registerRenderTarget(img.textureID, rt)
 			}
 		}
 	}
 
 	// Track for context loss recovery.
-	if globalTracker != nil {
-		globalTracker.TrackImage(img, nil, true)
+	if tracker := getTracker(); tracker != nil {
+		tracker.TrackImage(img, nil, true)
 	}
 
 	return img
@@ -103,8 +103,8 @@ func NewImageFromImage(src goimage.Image) *Image {
 		u1: 1, v1: 1,
 	}
 
-	if globalRenderer != nil && globalRenderer.device != nil {
-		tex, err := globalRenderer.device.NewTexture(backend.TextureDescriptor{
+	if rend := getRenderer(); rend != nil && rend.device != nil {
+		tex, err := rend.device.NewTexture(backend.TextureDescriptor{
 			Width:  w,
 			Height: h,
 			Format: backend.TextureFormatRGBA8,
@@ -115,16 +115,16 @@ func NewImageFromImage(src goimage.Image) *Image {
 		})
 		if err == nil {
 			img.texture = tex
-			img.textureID = globalRenderer.allocTextureID()
-			if globalRenderer.registerTexture != nil {
-				globalRenderer.registerTexture(img.textureID, tex)
+			img.textureID = rend.allocTextureID()
+			if rend.registerTexture != nil {
+				rend.registerTexture(img.textureID, tex)
 			}
 		}
 	}
 
 	// Track for context loss recovery, preserving pixel data.
-	if globalTracker != nil {
-		globalTracker.TrackImage(img, rgba.Pix, false)
+	if tracker := getTracker(); tracker != nil {
+		tracker.TrackImage(img, rgba.Pix, false)
 	}
 
 	return img
@@ -145,7 +145,8 @@ func (img *Image) DrawImage(src *Image, opts *DrawImageOptions) {
 	if img.disposed || src == nil || src.disposed {
 		return
 	}
-	if globalRenderer == nil || globalRenderer.batcher == nil {
+	rend := getRenderer()
+	if rend == nil || rend.batcher == nil {
 		return
 	}
 
@@ -172,7 +173,7 @@ func (img *Image) DrawImage(src *Image, opts *DrawImageOptions) {
 	// Determine texture ID: use source texture, or white texture for nil.
 	texID := src.textureID
 	if src.texture == nil {
-		texID = globalRenderer.whiteTextureID
+		texID = rend.whiteTextureID
 	}
 
 	// Map public blend mode and filter to backend types.
@@ -180,7 +181,7 @@ func (img *Image) DrawImage(src *Image, opts *DrawImageOptions) {
 	filter := filterToBackend(o.Filter)
 	colorBody, colorTrans := colorMatrixToUniforms(o.ColorM)
 
-	globalRenderer.batcher.Add(batch.DrawCommand{
+	rend.batcher.Add(batch.DrawCommand{
 		Vertices: []batch.Vertex2D{
 			{PosX: float32(x0), PosY: float32(y0), TexU: u0, TexV: v0, R: cr, G: cg, B: cb, A: ca},
 			{PosX: float32(x1), PosY: float32(y1), TexU: u1, TexV: v0, R: cr, G: cg, B: cb, A: ca},
@@ -204,7 +205,8 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 	if img.disposed {
 		return
 	}
-	if globalRenderer == nil || globalRenderer.batcher == nil {
+	rend := getRenderer()
+	if rend == nil || rend.batcher == nil {
 		return
 	}
 
@@ -236,7 +238,7 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 		fillRule = fillRuleToBackend(opts.FillRule)
 	}
 
-	globalRenderer.batcher.Add(batch.DrawCommand{
+	rend.batcher.Add(batch.DrawCommand{
 		Vertices:  batchVerts,
 		Indices:   indices,
 		TextureID: texID,
@@ -254,7 +256,8 @@ func (img *Image) Fill(c fmath.Color) {
 	if img.disposed {
 		return
 	}
-	if globalRenderer == nil || globalRenderer.batcher == nil {
+	rend := getRenderer()
+	if rend == nil || rend.batcher == nil {
 		return
 	}
 
@@ -266,9 +269,9 @@ func (img *Image) Fill(c fmath.Color) {
 	a := float32(c.A)
 
 	// Use the white texture and multiply by vertex color.
-	texID := globalRenderer.whiteTextureID
+	texID := rend.whiteTextureID
 
-	globalRenderer.batcher.Add(batch.DrawCommand{
+	rend.batcher.Add(batch.DrawCommand{
 		Vertices: []batch.Vertex2D{
 			{PosX: 0, PosY: 0, TexU: 0, TexV: 0, R: r, G: g, B: b, A: a},
 			{PosX: w, PosY: 0, TexU: 1, TexV: 0, R: r, G: g, B: b, A: a},
@@ -348,8 +351,8 @@ func (img *Image) Dispose() {
 	img.disposed = true
 
 	// Untrack from context loss recovery.
-	if globalTracker != nil {
-		globalTracker.UntrackImage(img)
+	if tracker := getTracker(); tracker != nil {
+		tracker.UntrackImage(img)
 	}
 
 	if img.parent == nil {
@@ -444,7 +447,8 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 	if img.disposed || shader == nil || shader.disposed {
 		return
 	}
-	if globalRenderer == nil || globalRenderer.batcher == nil {
+	rend := getRenderer()
+	if rend == nil || rend.batcher == nil {
 		return
 	}
 
@@ -469,7 +473,7 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 	blend := blendToBackend(o.Blend)
 
 	// Determine texture ID from first source image, or white texture.
-	texID := globalRenderer.whiteTextureID
+	texID := rend.whiteTextureID
 	if o.Images[0] != nil && o.Images[0].texture != nil {
 		texID = o.Images[0].textureID
 	}
@@ -481,7 +485,7 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 		}
 	}
 
-	globalRenderer.batcher.Add(batch.DrawCommand{
+	rend.batcher.Add(batch.DrawCommand{
 		Vertices: []batch.Vertex2D{
 			{PosX: float32(x0), PosY: float32(y0), TexU: 0, TexV: 0, R: cr, G: cg, B: cb, A: ca},
 			{PosX: float32(x1), PosY: float32(y1), TexU: 1, TexV: 0, R: cr, G: cg, B: cb, A: ca},
@@ -503,7 +507,8 @@ func (img *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shade
 	if img.disposed || shader == nil || shader.disposed {
 		return
 	}
-	if globalRenderer == nil || globalRenderer.batcher == nil {
+	rend := getRenderer()
+	if rend == nil || rend.batcher == nil {
 		return
 	}
 
@@ -529,7 +534,7 @@ func (img *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shade
 		}
 	}
 
-	texID := globalRenderer.whiteTextureID
+	texID := rend.whiteTextureID
 	blend := blendToBackend(o.Blend)
 	fillRule := fillRuleToBackend(o.FillRule)
 
@@ -537,7 +542,7 @@ func (img *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shade
 		texID = o.Images[0].textureID
 	}
 
-	globalRenderer.batcher.Add(batch.DrawCommand{
+	rend.batcher.Add(batch.DrawCommand{
 		Vertices:  batchVerts,
 		Indices:   indices,
 		TextureID: texID,

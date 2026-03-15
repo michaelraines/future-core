@@ -235,7 +235,7 @@ func (e *engine) run() error {
 		},
 	}
 	e.rend = rend
-	globalRenderer = rend
+	setRenderer(rend)
 
 	// Create rendering resources (shaders, pipeline, sprite pass).
 	if err := e.initRenderResources(); err != nil {
