@@ -381,7 +381,10 @@ func GetGoString(name uint32) string {
 }
 
 // Str converts a Go string to a null-terminated C string pointer.
-// The caller must keep a reference to the returned value to prevent GC.
+// The returned *byte keeps the backing []byte alive for the GC.
+// When passed directly as a purego function argument, the pointer is
+// pinned during the call. If stored in a local variable and passed
+// indirectly (e.g. &csource), use runtime.KeepAlive after the call.
 func Str(s string) *byte {
 	b := make([]byte, len(s)+1)
 	copy(b, s)

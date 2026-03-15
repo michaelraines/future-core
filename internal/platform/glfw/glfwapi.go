@@ -260,6 +260,7 @@ func openGLFWLib() (uintptr, error) {
 }
 
 // cStr converts a Go string to a null-terminated byte pointer.
+// Safe when passed directly as a purego function argument (pinned during call).
 func cStr(s string) *byte {
 	b := make([]byte, len(s)+1)
 	copy(b, s)

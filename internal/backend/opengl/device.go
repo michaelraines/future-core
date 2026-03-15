@@ -5,6 +5,7 @@ package opengl
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"unsafe"
 
@@ -370,6 +371,7 @@ func compileShader(source string, shaderType uint32) (uint32, error) {
 	s := gl.CreateShader(shaderType)
 	csource := gl.Str(source + "\x00")
 	gl.ShaderSource(s, 1, &csource, nil)
+	runtime.KeepAlive(csource) // prevent GC of backing []byte before ShaderSource completes
 	gl.CompileShader(s)
 
 	var status int32

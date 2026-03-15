@@ -15,6 +15,10 @@ type commandEncoder struct {
 	samplerNearest uint32
 	samplerLinear  uint32
 	samplersReady  bool
+
+	// indexFormat is the format set by the most recent SetIndexBuffer call.
+	// Used by DrawIndexed to select between gl.UNSIGNED_SHORT and gl.UNSIGNED_INT.
+	indexFormat backend.IndexFormat
 }
 
 // BeginRenderPass begins a render pass.
@@ -88,10 +92,12 @@ func (e *commandEncoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 	gl.BindBuffer(gl.ARRAY_BUFFER, b.id)
 }
 
-// SetIndexBuffer binds an index buffer.
+// SetIndexBuffer binds an index buffer and records the index format
+// for use in subsequent DrawIndexed calls.
 func (e *commandEncoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat) {
 	b := buf.(*buffer)
 	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.id)
+	e.indexFormat = format
 }
 
 // SetTexture binds a texture to a slot.
@@ -172,14 +178,25 @@ func (e *commandEncoder) Draw(vertexCount, instanceCount, firstVertex int) {
 	}
 }
 
-// DrawIndexed issues an indexed draw call.
+// DrawIndexed issues an indexed draw call, using the index format
+// set by the most recent SetIndexBuffer call.
 func (e *commandEncoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
-	offset := glOffset(firstIndex * 2)
+	glType, stride := e.indexTypeAndStride()
+	offset := glOffset(firstIndex * stride)
 	if instanceCount <= 1 {
-		gl.DrawElements(gl.TRIANGLES, int32(indexCount), gl.UNSIGNED_SHORT, offset)
+		gl.DrawElements(gl.TRIANGLES, int32(indexCount), glType, offset)
 	} else {
-		gl.DrawElementsInstanced(gl.TRIANGLES, int32(indexCount), gl.UNSIGNED_SHORT, offset, int32(instanceCount))
+		gl.DrawElementsInstanced(gl.TRIANGLES, int32(indexCount), glType, offset, int32(instanceCount))
 	}
+}
+
+// indexTypeAndStride returns the GL index type enum and byte stride
+// for the current index format.
+func (e *commandEncoder) indexTypeAndStride() (uint32, int) {
+	if e.indexFormat == backend.IndexUint32 {
+		return gl.UNSIGNED_INT, 4
+	}
+	return gl.UNSIGNED_SHORT, 2
 }
 
 // glOffset converts a byte offset to an unsafe.Pointer for OpenGL
