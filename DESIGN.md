@@ -230,8 +230,12 @@ No dependency on Ebitengine or any of its sub-packages.
 
 ## Testing Strategy
 
-- **Unit tests**: All `math/` operations (30+ tests already passing).
-- **Batch tests**: Draw command sorting and merging (`internal/batch/` — 5 tests passing).
+**Coverage policy**: All changes require tests. Target 100%, CI enforces 80%
+minimum per package via `make cover-check`. See `CLAUDE.md` for details.
+
+- **Unit tests**: `math/`, `internal/batch/`, public API (Image, GeoM, DrawImage).
+- **Mock-based tests**: GPU code paths tested with mock `backend.Device` and
+  `backend.Texture` implementations (see `image_test.go`).
 - **Benchmarks**: Vec2 ops, Mat4 multiply/inverse, quaternion slerp, batch flush.
 - **Integration tests** (future): Render known scenes, compare against golden images.
   Will use a headless OpenGL context or software rasterizer.

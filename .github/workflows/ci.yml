@@ -42,6 +42,9 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Coverage check (80% minimum)
+        run: make cover-check
+
       - name: Test (race detector)
         run: make test-race
 

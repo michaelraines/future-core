@@ -18,7 +18,7 @@ All build, test, and lint operations are run via `make`. The default target
 runs the full CI pipeline.
 
 ```bash
-# Full CI pipeline: fmt → vet → lint → test → build
+# Full CI pipeline: fmt → vet → lint → test → cover-check → build
 make
 
 # Individual targets
@@ -27,6 +27,9 @@ make vet          # Run go vet
 make lint         # Run golangci-lint
 make test         # Run all tests
 make test-race    # Run tests with race detector
+make cover        # Run tests with coverage summary
+make cover-check  # Enforce minimum 80% coverage per package (fails CI)
+make cover-html   # Generate HTML coverage report (coverage.html)
 make bench        # Run benchmarks (math, batch)
 make build        # Build all packages
 make fix          # Auto-fix formatting and lint issues
@@ -42,7 +45,7 @@ make clean        # Remove build artifacts
 
 GitHub Actions runs `make ci` on every push and PR to `main`. The workflow
 lives at `.github/workflows/ci.yml` and runs: format check → vet → lint →
-test → test-race → build.
+test → coverage check → test-race → build.
 
 Linter configuration is in `.golangci.yml`. Key enabled linters beyond
 defaults: `gocritic`, `revive`, `errname`, `errorlint`, `exhaustive`,
@@ -92,10 +95,12 @@ Follow this cycle for every change:
 - No empty files, placeholder packages, or premature abstractions
 
 ### 3. Test & Lint
-- Run `make` after every change (runs fmt, vet, lint, test, build)
+- Run `make` after every change (runs fmt, vet, lint, test, cover-check, build)
 - If iterating quickly, use `make test` alone, then `make` before committing
-- Add tests for new logic — particularly in `math/`, `internal/batch/`,
-  and `internal/pipeline/`
+- **All changes require test coverage.** Aim for 100% on new code; the CI
+  enforces a minimum of 80% per package. Use `make cover` to check.
+- Use mock devices/interfaces to test GPU code paths without OpenGL
+  (see `mockDevice` in `image_test.go` for the pattern)
 - All checks must pass before committing
 
 ### 4. Verify Build
@@ -149,14 +154,38 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   for 3D
 - **Don't add Ebitengine as a dependency** — this is a clean-room implementation
 
-## Test Coverage Expectations
+## Test Coverage Requirements
 
-| Package | Coverage Goal | Notes |
-|---|---|---|
-| `math/` | High | Pure functions, easy to test exhaustively |
-| `internal/batch/` | High | Core optimization logic, must be correct |
-| `internal/pipeline/` | Medium | Test pass ordering and context propagation |
-| `internal/input/` | Medium | Test state transitions, edge detection |
-| `internal/backend/` | Low (interfaces) | Implementations tested via integration |
-| `internal/platform/` | Low (interfaces) | Implementations tested via integration |
-| Public API | Medium | Test option defaults, GeoM transforms |
+**All changes require test coverage.** This is enforced by CI.
+
+- **Target: 100%** — Aim for full coverage on every new function and branch.
+- **Minimum: 80%** — CI fails if any package with test files drops below 80%.
+  This is enforced by `make cover-check`, which runs as part of `make` / `make ci`.
+- **No untested code ships.** If you add a function, add tests for it. If you
+  modify a function, verify its existing tests still cover the changed paths.
+
+### Per-Package Guidelines
+
+| Package | Minimum | Target | Notes |
+|---|---|---|---|
+| `math/` | 80% | 100% | Pure functions, easy to test exhaustively |
+| `internal/batch/` | 80% | 100% | Core optimization logic, must be correct |
+| `internal/pipeline/` | 80% | 100% | Test pass ordering, context, sprite pass |
+| `internal/input/` | 80% | 100% | Test state transitions, edge detection |
+| `internal/backend/` | Excluded | — | Interface definitions only; implementations tested via integration |
+| `internal/platform/` | Excluded | — | Interface definitions only; implementations tested via integration |
+| Public API (root) | 80% | 100% | Image, GeoM, DrawImage, options, type mapping |
+
+### Testing GPU Code Without OpenGL
+
+Use mock implementations of `backend.Device` and `backend.Texture` to test
+GPU code paths in unit tests. See `image_test.go` for the established pattern:
+`mockDevice`, `mockTexture`, and the `withMockRenderer` helper.
+
+### Coverage Commands
+
+```bash
+make cover        # Print per-package coverage summary
+make cover-check  # Enforce 80% minimum (part of CI)
+make cover-html   # Generate HTML report at coverage.html
+```
