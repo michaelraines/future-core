@@ -112,6 +112,11 @@ func (c *compiler) validateFragmentSig(fn *ast.FuncDecl) error {
 	}
 
 	// Extract parameter names for use in transpilation.
+	for i, p := range params.List[:3] {
+		if len(p.Names) == 0 {
+			return fmt.Errorf("shaderir: Fragment parameter %d must have a name", i+1)
+		}
+	}
 	c.fragDstPos = params.List[0].Names[0].Name
 	c.fragSrcPos = params.List[1].Names[0].Name
 	c.fragColor = params.List[2].Names[0].Name

@@ -125,7 +125,12 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 
 // NewPipeline creates a DX12 pipeline state object (ID3D12PipelineState).
 func (d *Device) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline, error) {
-	inner, err := d.inner.NewPipeline(desc)
+	// Unwrap shader so the inner soft device receives the raw soft.Shader.
+	innerDesc := desc
+	if s, ok := desc.Shader.(*Shader); ok {
+		innerDesc.Shader = s.Shader
+	}
+	inner, err := d.inner.NewPipeline(innerDesc)
 	if err != nil {
 		return nil, fmt.Errorf("dx12: %w", err)
 	}

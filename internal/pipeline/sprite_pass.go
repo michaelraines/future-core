@@ -132,11 +132,15 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		}
 
 		if b.ShaderID != currentShaderID {
-			if b.ShaderID == 0 {
+			switch {
+			case b.ShaderID == 0:
 				sp.bindDefaultShader(enc)
-			} else if resolvedInfo != nil {
+			case resolvedInfo != nil:
 				enc.SetPipeline(resolvedInfo.Pipeline)
 				resolvedInfo.Shader.SetUniformMat4("uProjection", sp.Projection)
+			default:
+				// Unregistered shader ID: fall back to default.
+				sp.bindDefaultShader(enc)
 			}
 			currentShaderID = b.ShaderID
 		}

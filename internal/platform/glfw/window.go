@@ -105,6 +105,7 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 // Destroy closes the window and terminates GLFW.
 func (w *Window) Destroy() {
 	if w.win != 0 {
+		delete(activeWindows, w.win)
 		fnGlfwDestroyWindow(w.win)
 		w.win = 0
 	}
