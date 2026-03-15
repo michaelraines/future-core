@@ -176,6 +176,39 @@ func TestDisposeIdempotent(t *testing.T) {
 	require.True(t, img.disposed, "image should remain disposed")
 }
 
+func TestWritePixels(t *testing.T) {
+	dev, _ := withMockRenderer(t)
+
+	img := NewImage(64, 64)
+	require.NotNil(t, img.texture)
+
+	pix := make([]byte, 10*10*4)
+	img.WritePixels(pix, 5, 5, 10, 10)
+
+	mt := dev.textures[len(dev.textures)-1]
+	// mockTexture.UploadRegion is a no-op, but we verify no panic.
+	_ = mt
+}
+
+func TestWritePixelsNoTexture(t *testing.T) {
+	old := globalRenderer
+	globalRenderer = nil
+	defer func() { globalRenderer = old }()
+
+	img := NewImage(32, 32)
+	// Should not panic with nil texture.
+	img.WritePixels(make([]byte, 4), 0, 0, 1, 1)
+}
+
+func TestWritePixelsDisposed(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(32, 32)
+	img.Dispose()
+	// Should not panic on disposed image.
+	img.WritePixels(make([]byte, 4), 0, 0, 1, 1)
+}
+
 func TestAllocTextureIDMonotonic(t *testing.T) {
 	withMockRenderer(t)
 

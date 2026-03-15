@@ -175,20 +175,35 @@ to public API. 100% test coverage on `internal/input`, 99.4% on root package.
 
 ---
 
-## Milestone 5 — Text Rendering (Planned)
+## Milestone 5 — Text Rendering (Done)
 
-Goal: render TTF/OTF text to Images, matching Ebitengine's `text/v2` package.
+Goal: render TTF/OTF text to Images with a clean public API.
 
 | Task | Status | Notes |
 |---|---|---|
-| TTF parsing and glyph rasterization | Planned | Pure Go or freetype dep |
-| Font atlas generation and caching | Planned | `text/` package |
-| `text.Draw()` API | Planned | Position, size, color, alignment |
-| Unicode + line wrapping support | Planned | |
-| Font face management (size, style) | Planned | |
-| Example: FPS counter overlay | Planned | |
+| TTF/OTF parsing via `golang.org/x/image/font/opentype` | Done | Pure Go, no CGo |
+| `Face` type with `Metrics()` and `Measure()` | Done | Wraps `opentype.Face` at specified size |
+| Glyph rasterization and per-face cache | Done | White-on-transparent RGBA, cached per rune |
+| Font atlas with row-based bin packing | Done | RGBA8 atlas, auto-growth 512→4096, 1px padding |
+| `text.Draw()` public API | Done | Per-glyph `DrawImage`, auto-batched by batcher |
+| `Image.WritePixels()` for incremental atlas updates | Done | Wraps `Texture.UploadRegion` |
+| Kerning support | Done | Applied via `Face.Kern()` between glyph pairs |
+| `DrawOptions` with `GeoM` and `ColorScale` | Done | Transform and tint text |
+| Unicode support (basic) | Done | Full rune iteration, any glyph the font contains |
+| Test coverage | Done | 94.7% on `text/` package |
+| Multi-line layout / word wrapping | Deferred | Caller splits lines manually |
+| Text alignment (center, right) | Deferred | Future enhancement |
+| Complex scripts (BiDi, ligatures) | Deferred | Needs `go-text/typesetting` |
+| `cmd/text/main.go` example | Deferred | Needs GLFW build environment |
+| `cmd/input/main.go` example | Deferred | Needs GLFW build environment |
 
 **Exit criteria**: render arbitrary Unicode text from TTF fonts at any size.
+
+**Completed**: Full `text/` package with `Face`, glyph cache, row-packed
+RGBA8 atlas, and `Draw()` function. Glyphs flow through existing
+`DrawImage` → `Batcher` → `SpritePass` pipeline with zero internal changes.
+All glyphs from the same face auto-merge into 1-2 GPU draw calls via shared
+atlas texture. Added `Image.WritePixels()` for incremental atlas uploads.
 
 ---
 

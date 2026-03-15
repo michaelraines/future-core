@@ -294,6 +294,15 @@ func (img *Image) Dispose() {
 	}
 }
 
+// WritePixels uploads RGBA pixel data to a rectangular region of the image.
+// The data must be len(pix) == 4*width*height bytes in RGBA order.
+func (img *Image) WritePixels(pix []byte, x, y, width, height int) {
+	if img.disposed || img.texture == nil {
+		return
+	}
+	img.texture.UploadRegion(pix, x, y, width, height, 0)
+}
+
 // DrawImageOptions holds options for DrawImage.
 type DrawImageOptions struct {
 	// GeoM is the geometry transformation matrix (2D affine transform).
