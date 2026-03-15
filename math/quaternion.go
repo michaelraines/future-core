@@ -128,7 +128,7 @@ func (q Quat) Slerp(other Quat, t float64) Quat {
 		}.Normalize()
 	}
 
-	theta := gomath.Acos(dot)
+	theta := gomath.Acos(clamp(dot, -1, 1))
 	sinTheta := gomath.Sin(theta)
 	s0 := gomath.Sin((1-t)*theta) / sinTheta
 	s1 := gomath.Sin(t*theta) / sinTheta

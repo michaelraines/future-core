@@ -465,12 +465,18 @@ func mapKey(k int32) platform.Key {
 		return platform.KeyDown
 	case glfwKeyUp:
 		return platform.KeyUp
-	case glfwKeyLeftShift, glfwKeyRightShift:
+	case glfwKeyLeftShift:
 		return platform.KeyLeftShift
-	case glfwKeyLeftCtrl, glfwKeyRightCtrl:
+	case glfwKeyRightShift:
+		return platform.KeyRightShift
+	case glfwKeyLeftCtrl:
 		return platform.KeyLeftControl
-	case glfwKeyLeftAlt, glfwKeyRightAlt:
+	case glfwKeyRightCtrl:
+		return platform.KeyRightControl
+	case glfwKeyLeftAlt:
 		return platform.KeyLeftAlt
+	case glfwKeyRightAlt:
+		return platform.KeyRightAlt
 	case glfwKeyF1:
 		return platform.KeyF1
 	case glfwKeyF2:

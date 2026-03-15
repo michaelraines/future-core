@@ -173,8 +173,8 @@ func convertToStereo16(data []byte, channels, bitsPerSample uint16) []byte {
 	case 16:
 		return convert16ToStereo(data, channels)
 	default:
-		// Unsupported bit depth — return empty.
-		return nil
+		// Unsupported bit depth — return empty slice.
+		return []byte{}
 	}
 }
 
@@ -223,8 +223,8 @@ func convert16ToStereo(data []byte, channels uint16) []byte {
 // Input and output are stereo 16-bit signed LE PCM.
 func resample(data []byte, srcRate, dstRate int) []byte {
 	srcFrames := len(data) / 4 // 4 bytes per stereo frame
-	if srcFrames == 0 {
-		return nil
+	if srcFrames < 2 {
+		return data
 	}
 
 	ratio := float64(srcRate) / float64(dstRate)

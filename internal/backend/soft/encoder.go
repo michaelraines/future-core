@@ -350,5 +350,5 @@ func clampByte(f float32) byte {
 	if f >= 1 {
 		return 255
 	}
-	return byte(f * 255)
+	return byte(f*255 + 0.5)
 }

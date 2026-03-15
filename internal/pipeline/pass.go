@@ -54,7 +54,11 @@ func (p *Pipeline) AddPass(pass Pass) {
 }
 
 // InsertPass inserts a pass at the given index.
+// The index must be in the range [0, len(passes)].
 func (p *Pipeline) InsertPass(index int, pass Pass) {
+	if index < 0 || index > len(p.passes) {
+		return
+	}
 	p.passes = append(p.passes, nil)
 	copy(p.passes[index+1:], p.passes[index:])
 	p.passes[index] = pass

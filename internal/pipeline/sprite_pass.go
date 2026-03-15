@@ -138,9 +138,15 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			currentShaderID = b.ShaderID
 		}
 
-		// Set color matrix uniforms for this batch.
-		sp.shader.SetUniformMat4("uColorBody", b.ColorBody)
-		sp.shader.SetUniformVec4("uColorTranslation", b.ColorTranslation)
+		// Set color matrix uniforms on the active shader for this batch.
+		activeShader := sp.shader
+		if b.ShaderID != 0 && sp.ResolveShader != nil {
+			if info := sp.ResolveShader(b.ShaderID); info != nil {
+				activeShader = info.Shader
+			}
+		}
+		activeShader.SetUniformMat4("uColorBody", b.ColorBody)
+		activeShader.SetUniformVec4("uColorTranslation", b.ColorTranslation)
 
 		// Upload vertex data.
 		vertexData := vertexSliceToBytes(b.Vertices)

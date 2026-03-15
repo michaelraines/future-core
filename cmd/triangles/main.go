@@ -31,7 +31,7 @@ type triangleGame struct {
 
 func (g *triangleGame) Update() error {
 	if futurerender.IsKeyPressed(futurerender.KeyEscape) {
-		return futurerender.Termination
+		return futurerender.ErrTermination
 	}
 	g.angle += 0.01
 	return nil

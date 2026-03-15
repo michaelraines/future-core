@@ -51,10 +51,10 @@ var (
 
 // RGBA returns the color as 8-bit RGBA values.
 func (c Color) RGBA() (r, g, b, a uint8) {
-	return uint8(clamp(c.R, 0, 1) * 255),
-		uint8(clamp(c.G, 0, 1) * 255),
-		uint8(clamp(c.B, 0, 1) * 255),
-		uint8(clamp(c.A, 0, 1) * 255)
+	return uint8(gomath.Round(clamp(c.R, 0, 1) * 255)),
+		uint8(gomath.Round(clamp(c.G, 0, 1) * 255)),
+		uint8(gomath.Round(clamp(c.B, 0, 1) * 255)),
+		uint8(gomath.Round(clamp(c.A, 0, 1) * 255))
 }
 
 // Vec4 returns the color as a Vec4 (R, G, B, A).

@@ -122,6 +122,8 @@ func ParseType(name string) (Type, error) {
 		return TypeMat3, nil
 	case "mat4":
 		return TypeMat4, nil
+	case "texture", "sampler2D":
+		return TypeTexture, nil
 	default:
 		return TypeNone, fmt.Errorf("shaderir: unknown type %q", name)
 	}

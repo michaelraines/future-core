@@ -79,7 +79,7 @@ func (f *ShaperFace) Shape(text string) []ShapedGlyph {
 		RunStart:  0,
 		RunEnd:    len(runes),
 		Face:      f.face,
-		Size:      fixed.I(int(f.size)),
+		Size:      fixed.Int26_6(f.size * 64),
 		Script:    language.Latin,
 		Direction: di.DirectionLTR,
 	}
@@ -101,7 +101,7 @@ func (f *ShaperFace) ShapeBidi(text string) []ShapedGlyph {
 			RunStart:  0,
 			RunEnd:    len(runes),
 			Face:      f.face,
-			Size:      fixed.I(int(f.size)),
+			Size:      fixed.Int26_6(f.size * 64),
 			Script:    run.script,
 			Direction: run.direction,
 		}

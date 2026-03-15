@@ -133,6 +133,10 @@ func (c *Context) NewPlayer(src io.Reader) *Player {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.closed {
+		return nil
+	}
+
 	p := c.factory.newPlayer(src)
 	return &Player{
 		player:     p,

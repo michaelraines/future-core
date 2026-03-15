@@ -51,8 +51,11 @@ func ApproxEqual(a, b, epsilon float64) bool {
 }
 
 // SmoothStep returns a smooth Hermite interpolation between 0 and 1 when
-// edge0 < v < edge1.
+// edge0 < v < edge1. If edge0 == edge1, returns 0.
 func SmoothStep(edge0, edge1, v float64) float64 {
+	if edge0 == edge1 {
+		return 0
+	}
 	t := clamp((v-edge0)/(edge1-edge0), 0, 1)
 	return t * t * (3 - 2*t)
 }

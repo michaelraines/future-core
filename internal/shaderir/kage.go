@@ -487,6 +487,14 @@ func (c *compiler) inferType(expr ast.Expr) string {
 		if IsConstructor(funcName) {
 			return funcName
 		}
+		// Image builtins that sample textures return vec4.
+		if IsImageBuiltin(funcName) && (len(funcName) >= 5 && funcName[len(funcName)-2:] == "At") {
+			return "vec4"
+		}
+		// Image origin/size builtins return vec2.
+		if IsImageBuiltin(funcName) {
+			return "vec2"
+		}
 		// For built-in functions, default to float.
 		return "float"
 	case *ast.BinaryExpr:

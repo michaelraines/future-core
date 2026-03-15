@@ -234,7 +234,11 @@ func drawLine(target *futurerender.Image, s string, face *Face, x, y, refWidth f
 		}
 
 		g := face.cache.get(r, atlas)
-		if g == nil || g.empty {
+		if g == nil {
+			prev = r
+			continue
+		}
+		if g.empty {
 			curX += g.advance
 			prev = r
 			continue

@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"errors"
 	"io"
 	"time"
 )
@@ -43,7 +44,7 @@ func (p *Player) Volume() float64 {
 func (p *Player) SetPosition(offset time.Duration) error {
 	seeker, ok := p.src.(io.Seeker)
 	if !ok {
-		return io.ErrNoProgress
+		return errors.New("audio: source does not support seeking")
 	}
 	byteOffset := durationToBytes(offset, p.sampleRate)
 	if _, err := seeker.Seek(byteOffset, io.SeekStart); err != nil {

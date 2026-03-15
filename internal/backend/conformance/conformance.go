@@ -17,8 +17,8 @@
 package conformance
 
 import (
+	"bytes"
 	"encoding/binary"
-	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -132,7 +132,7 @@ func RunScene(t *testing.T, dev backend.Device, enc backend.CommandEncoder, scen
 	if !result.Match {
 		// Save actual and diff images for debugging.
 		saveDiffArtifacts(t, scene.Name, actual, golden)
-		t.Errorf("scene %q: pixel mismatch — max diff %d, %d/%d pixels differ (tolerance %d)",
+		require.Failf(t, "pixel mismatch", "scene %q: max diff %d, %d/%d pixels differ (tolerance %d)",
 			scene.Name, result.MaxDiff, result.MismatchCount, result.TotalPixels, Tolerance)
 	}
 }
@@ -849,23 +849,6 @@ func clampByte255(v int) uint8 {
 	return uint8(v)
 }
 
-type bytesReaderImpl struct {
-	data []byte
-	pos  int
-}
-
-func bytesReader(data []byte) *bytesReaderImpl {
-	return &bytesReaderImpl{data: data}
-}
-
-func (r *bytesReaderImpl) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, fmt.Errorf("EOF")
-	}
-	n := copy(p, r.data[r.pos:])
-	r.pos += n
-	if r.pos >= len(r.data) {
-		return n, fmt.Errorf("EOF")
-	}
-	return n, nil
+func bytesReader(data []byte) *bytes.Reader {
+	return bytes.NewReader(data)
 }

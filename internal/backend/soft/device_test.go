@@ -537,7 +537,7 @@ func TestBytesPerPixel(t *testing.T) {
 func TestClampByte(t *testing.T) {
 	require.Equal(t, byte(0), clampByte(-0.5))
 	require.Equal(t, byte(0), clampByte(0))
-	require.Equal(t, byte(127), clampByte(0.5))
+	require.Equal(t, byte(128), clampByte(0.5))
 	require.Equal(t, byte(255), clampByte(1.0))
 	require.Equal(t, byte(255), clampByte(2.0))
 }
