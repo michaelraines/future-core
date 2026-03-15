@@ -237,8 +237,12 @@ minimum per package via `make cover-check`. See `CLAUDE.md` for details.
 - **Mock-based tests**: GPU code paths tested with mock `backend.Device` and
   `backend.Texture` implementations (see `image_test.go`).
 - **Benchmarks**: Vec2 ops, Mat4 multiply/inverse, quaternion slerp, batch flush.
-- **Integration tests** (future): Render known scenes, compare against golden images.
-  Will use a headless OpenGL context or software rasterizer.
+- **Conformance tests** (`internal/backend/conformance/`): Golden-image integration
+  tests that render 10 canonical scenes through any `backend.Device` and compare
+  pixel output against reference PNGs (±3 tolerance per channel). The software
+  rasterizer (`internal/backend/soft/`) serves as the reference implementation.
+  New backends call `conformance.RunAll(t, dev, enc)` to verify correctness.
+  On failure, `_actual.png` and `_diff.png` artifacts are saved for debugging.
 - **Fuzz tests** (future): Asset parsers (image, font, audio).
 
 ---

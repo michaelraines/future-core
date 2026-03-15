@@ -268,6 +268,8 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
 | `internal/pipeline/` | 80% | 100% | Test pass ordering, context, sprite pass |
 | `internal/input/` | 80% | 100% | Test state transitions, edge detection |
 | `internal/backend/` | Excluded | — | Interface definitions only; implementations tested via integration |
+| `internal/backend/soft/` | 80% | 100% | CPU rasterizer + Device impl; reference backend for conformance |
+| `internal/backend/conformance/` | 80% | 100% | Golden-image test framework; exercises full pipeline |
 | `internal/platform/` | Excluded | — | Interface definitions only; implementations tested via integration |
 | Public API (root) | 80% | 100% | Image, GeoM, DrawImage, options, type mapping |
 
@@ -276,6 +278,44 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
 Use mock implementations of `backend.Device` and `backend.Texture` to test
 GPU code paths in unit tests. See `image_test.go` for the established pattern:
 `mockDevice`, `mockTexture`, and the `withMockRenderer` helper.
+
+### Conformance Testing (Golden Images)
+
+The golden-image conformance framework in `internal/backend/conformance/`
+verifies that any `backend.Device` implementation produces correct pixel
+output. It renders 10 canonical scenes and compares against reference PNG
+images with a per-channel tolerance of ±3.
+
+**Running conformance tests:**
+```bash
+go test ./internal/backend/conformance/ -v   # Run against soft backend
+```
+
+**Adding a new backend to conformance:**
+```go
+// In your_backend_test.go:
+func TestConformance(t *testing.T) {
+    dev := yourbackend.New()
+    require.NoError(t, dev.Init(backend.DeviceConfig{
+        Width: conformance.SceneSize, Height: conformance.SceneSize,
+    }))
+    defer dev.Dispose()
+    conformance.RunAll(t, dev, dev.Encoder())
+}
+```
+
+**Updating golden images** (after intentional rasterizer changes):
+```bash
+rm internal/backend/conformance/testdata/golden/*.png
+go test ./internal/backend/conformance/ -v   # Regenerates all goldens
+```
+
+**On failure**, the framework saves `_actual.png` and `_diff.png` artifacts
+in `testdata/golden/diff/` for visual debugging.
+
+**Test scenes** cover: clear, solid triangles, vertex-color interpolation,
+textured quads, blend modes (source-over, additive), scissor clipping, and
+orthographic projection.
 
 ### Coverage Commands
 
