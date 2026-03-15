@@ -557,8 +557,8 @@ func TestSplitBidiRunsEmpty(t *testing.T) {
 func TestRuneDirection(t *testing.T) {
 	require.False(t, isRTLRune('A'))
 	require.False(t, isRTLRune('z'))
-	require.True(t, isRTLRune('\u05E9'))  // Hebrew Shin
-	require.True(t, isRTLRune('\u0627'))  // Arabic Alef
+	require.True(t, isRTLRune('\u05E9')) // Hebrew Shin
+	require.True(t, isRTLRune('\u0627')) // Arabic Alef
 }
 
 func TestRuneScript(t *testing.T) {

@@ -215,6 +215,8 @@ func drawLine(target *futurerender.Image, s string, face *Face, x, y, refWidth f
 	if align != AlignLeft && refWidth > 0 {
 		lineWidth := face.Measure(s)
 		switch align {
+		case AlignLeft:
+			// No offset needed.
 		case AlignCenter:
 			offsetX = (refWidth - lineWidth) / 2
 		case AlignRight:

@@ -75,6 +75,11 @@ func NewImage(width, height int) *Image {
 		}
 	}
 
+	// Track for context loss recovery.
+	if globalTracker != nil {
+		globalTracker.TrackImage(img, nil, true)
+	}
+
 	return img
 }
 
@@ -115,6 +120,11 @@ func NewImageFromImage(src goimage.Image) *Image {
 				globalRenderer.registerTexture(img.textureID, tex)
 			}
 		}
+	}
+
+	// Track for context loss recovery, preserving pixel data.
+	if globalTracker != nil {
+		globalTracker.TrackImage(img, rgba.Pix, false)
 	}
 
 	return img
@@ -336,6 +346,12 @@ func (img *Image) Dispose() {
 		return
 	}
 	img.disposed = true
+
+	// Untrack from context loss recovery.
+	if globalTracker != nil {
+		globalTracker.UntrackImage(img)
+	}
+
 	if img.parent == nil {
 		if img.renderTarget != nil {
 			img.renderTarget.Dispose()

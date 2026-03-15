@@ -126,11 +126,11 @@ func convertShapedGlyphs(out shaping.Output) []ShapedGlyph {
 	for i, g := range out.Glyphs {
 		result[i] = ShapedGlyph{
 			GlyphID:  uint32(g.GlyphID),
-			XAdvance: fixedToFloat(g.XAdvance),
-			YAdvance: fixedToFloat(g.YAdvance),
+			XAdvance: fixedToFloat(g.Advance),
+			YAdvance: 0,
 			XOffset:  fixedToFloat(g.XOffset),
 			YOffset:  fixedToFloat(g.YOffset),
-			Cluster:  g.ClusterIndex,
+			Cluster:  g.TextIndex(),
 		}
 	}
 	return result
