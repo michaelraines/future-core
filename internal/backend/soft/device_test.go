@@ -292,6 +292,35 @@ func TestShaderDispose(t *testing.T) {
 	require.Nil(t, ss.uniforms)
 }
 
+func TestShaderDisposeUniformsNoPanic(t *testing.T) {
+	d := initDevice(t)
+	s, err := d.NewShader(backend.ShaderDescriptor{})
+	require.NoError(t, err)
+
+	// Dispose sets uniforms to nil.
+	s.Dispose()
+
+	// All uniform setters should return early without panicking.
+	require.NotPanics(t, func() {
+		s.SetUniformFloat("f", 1.0)
+	})
+	require.NotPanics(t, func() {
+		s.SetUniformVec4("v", [4]float32{1, 2, 3, 4})
+	})
+	require.NotPanics(t, func() {
+		s.SetUniformMat4("m", [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})
+	})
+	require.NotPanics(t, func() {
+		s.SetUniformVec2("v2", [2]float32{1, 2})
+	})
+	require.NotPanics(t, func() {
+		s.SetUniformInt("i", 42)
+	})
+	require.NotPanics(t, func() {
+		s.SetUniformBlock("blk", []byte{1, 2, 3})
+	})
+}
+
 // --- Pipeline tests ---
 
 func TestNewPipeline(t *testing.T) {

@@ -241,6 +241,10 @@ func (c *compiler) emitImageHelpers(b *strings.Builder) {
 	b.WriteString("vec2 imageDstSize() {\n")
 	b.WriteString("    return uImageDstSize;\n")
 	b.WriteString("}\n\n")
+
+	b.WriteString("vec2 imageDstTextureSize() {\n")
+	b.WriteString("    return uImageDstSize;\n")
+	b.WriteString("}\n\n")
 }
 
 func (c *compiler) emitBlock(b *strings.Builder, block *ast.BlockStmt, indent int) {

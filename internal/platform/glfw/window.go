@@ -450,6 +450,18 @@ func mapKey(k int32) platform.Key {
 		return platform.KeyY
 	case glfwKeyZ:
 		return platform.KeyZ
+	case glfwKeySemicolon:
+		return platform.KeySemicolon
+	case glfwKeyEqual:
+		return platform.KeyEqual
+	case glfwKeyLeftBracket:
+		return platform.KeyLeftBracket
+	case glfwKeyBackslash:
+		return platform.KeyBackslash
+	case glfwKeyRightBracket:
+		return platform.KeyRightBracket
+	case glfwKeyGraveAccent:
+		return platform.KeyGraveAccent
 	case glfwKeyEscape:
 		return platform.KeyEscape
 	case glfwKeyEnter:
@@ -458,6 +470,10 @@ func mapKey(k int32) platform.Key {
 		return platform.KeyTab
 	case glfwKeyBackspace:
 		return platform.KeyBackspace
+	case glfwKeyInsert:
+		return platform.KeyInsert
+	case glfwKeyDelete:
+		return platform.KeyDelete
 	case glfwKeyRight:
 		return platform.KeyRight
 	case glfwKeyLeft:
@@ -466,6 +482,24 @@ func mapKey(k int32) platform.Key {
 		return platform.KeyDown
 	case glfwKeyUp:
 		return platform.KeyUp
+	case glfwKeyPageUp:
+		return platform.KeyPageUp
+	case glfwKeyPageDown:
+		return platform.KeyPageDown
+	case glfwKeyHome:
+		return platform.KeyHome
+	case glfwKeyEnd:
+		return platform.KeyEnd
+	case glfwKeyCapsLock:
+		return platform.KeyCapsLock
+	case glfwKeyScrollLock:
+		return platform.KeyScrollLock
+	case glfwKeyNumLock:
+		return platform.KeyNumLock
+	case glfwKeyPrintScreen:
+		return platform.KeyPrintScreen
+	case glfwKeyPause:
+		return platform.KeyPause
 	case glfwKeyLeftShift:
 		return platform.KeyLeftShift
 	case glfwKeyRightShift:
@@ -478,6 +512,46 @@ func mapKey(k int32) platform.Key {
 		return platform.KeyLeftAlt
 	case glfwKeyRightAlt:
 		return platform.KeyRightAlt
+	case glfwKeyLeftSuper:
+		return platform.KeyLeftSuper
+	case glfwKeyRightSuper:
+		return platform.KeyRightSuper
+	case glfwKeyMenu:
+		return platform.KeyMenu
+	case glfwKeyKP0:
+		return platform.KeyKP0
+	case glfwKeyKP1:
+		return platform.KeyKP1
+	case glfwKeyKP2:
+		return platform.KeyKP2
+	case glfwKeyKP3:
+		return platform.KeyKP3
+	case glfwKeyKP4:
+		return platform.KeyKP4
+	case glfwKeyKP5:
+		return platform.KeyKP5
+	case glfwKeyKP6:
+		return platform.KeyKP6
+	case glfwKeyKP7:
+		return platform.KeyKP7
+	case glfwKeyKP8:
+		return platform.KeyKP8
+	case glfwKeyKP9:
+		return platform.KeyKP9
+	case glfwKeyKPDecimal:
+		return platform.KeyKPDecimal
+	case glfwKeyKPDivide:
+		return platform.KeyKPDivide
+	case glfwKeyKPMultiply:
+		return platform.KeyKPMultiply
+	case glfwKeyKPSubtract:
+		return platform.KeyKPSubtract
+	case glfwKeyKPAdd:
+		return platform.KeyKPAdd
+	case glfwKeyKPEnter:
+		return platform.KeyKPEnter
+	case glfwKeyKPEqual:
+		return platform.KeyKPEqual
 	case glfwKeyF1:
 		return platform.KeyF1
 	case glfwKeyF2:

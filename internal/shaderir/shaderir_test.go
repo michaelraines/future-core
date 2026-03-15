@@ -336,6 +336,24 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
 	require.Contains(t, result.FragmentShader, "imageDstSize")
 }
 
+func TestCompileImageDstTextureSize(t *testing.T) {
+	src := []byte(`
+//go:build ignore
+
+package main
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	size := imageDstTextureSize()
+	return vec4(size, 0.0, 1.0)
+}
+`)
+	result, err := Compile(src)
+	require.NoError(t, err)
+	require.Contains(t, result.FragmentShader, "imageDstTextureSize")
+	// The helper should be defined as a function returning vec2.
+	require.Contains(t, result.FragmentShader, "vec2 imageDstTextureSize()")
+}
+
 func TestCompileVaryings(t *testing.T) {
 	src := []byte(`
 //go:build ignore

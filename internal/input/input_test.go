@@ -118,6 +118,41 @@ func TestIsMouseButtonJustPressed(t *testing.T) {
 	require.False(t, s.IsMouseButtonJustPressed(platform.MouseButtonRight))
 }
 
+func TestMouseButtonJustReleased(t *testing.T) {
+	s := New()
+
+	// Press the button.
+	s.OnMouseButtonEvent(platform.MouseButtonEvent{
+		Button: platform.MouseButtonLeft,
+		Action: platform.ActionPress,
+	})
+	require.True(t, s.IsMouseButtonPressed(platform.MouseButtonLeft))
+	require.False(t, s.IsMouseButtonJustReleased(platform.MouseButtonLeft))
+
+	// Advance frame so the press is no longer "just pressed".
+	s.Update()
+	require.True(t, s.IsMouseButtonPressed(platform.MouseButtonLeft))
+	require.False(t, s.IsMouseButtonJustReleased(platform.MouseButtonLeft))
+
+	// Release the button.
+	s.OnMouseButtonEvent(platform.MouseButtonEvent{
+		Button: platform.MouseButtonLeft,
+		Action: platform.ActionRelease,
+	})
+	require.False(t, s.IsMouseButtonPressed(platform.MouseButtonLeft))
+	require.True(t, s.IsMouseButtonJustReleased(platform.MouseButtonLeft))
+
+	// Advance frame — no longer "just released".
+	s.Update()
+	require.False(t, s.IsMouseButtonJustReleased(platform.MouseButtonLeft))
+}
+
+func TestMouseButtonJustReleasedOutOfBounds(t *testing.T) {
+	s := New()
+	require.False(t, s.IsMouseButtonJustReleased(-1))
+	require.False(t, s.IsMouseButtonJustReleased(100))
+}
+
 func TestMouseButtonRepeatNoOp(t *testing.T) {
 	s := New()
 	s.OnMouseButtonEvent(platform.MouseButtonEvent{

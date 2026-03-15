@@ -142,6 +142,32 @@ func TestBatcherFillRuleMerge(t *testing.T) {
 	require.Len(t, batches[0].Vertices, 6)
 }
 
+func TestBatcherDepthSplit(t *testing.T) {
+	b := NewBatcher(65535, 65535)
+
+	// Two commands with identical state except different Depth values
+	// should produce separate batches (Depth prevents merging).
+	b.Add(DrawCommand{
+		Vertices:  []Vertex2D{{PosX: 0, PosY: 0}, {PosX: 10, PosY: 0}, {PosX: 10, PosY: 10}, {PosX: 0, PosY: 10}},
+		Indices:   []uint16{0, 1, 2, 0, 2, 3},
+		TextureID: 1,
+		BlendMode: backend.BlendSourceOver,
+		Depth:     0.0,
+	})
+	b.Add(DrawCommand{
+		Vertices:  []Vertex2D{{PosX: 20, PosY: 0}, {PosX: 30, PosY: 0}, {PosX: 30, PosY: 10}, {PosX: 20, PosY: 10}},
+		Indices:   []uint16{0, 1, 2, 0, 2, 3},
+		TextureID: 1,
+		BlendMode: backend.BlendSourceOver,
+		Depth:     1.0,
+	})
+
+	batches := b.Flush()
+	require.Len(t, batches, 2)
+	require.InDelta(t, 0.0, float64(batches[0].Depth), 1e-9)
+	require.InDelta(t, 1.0, float64(batches[1].Depth), 1e-9)
+}
+
 func TestBatcherReset(t *testing.T) {
 	b := NewBatcher(65535, 65535)
 	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)

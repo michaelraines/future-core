@@ -175,6 +175,10 @@ func resample(data []byte, srcRate, dstRate int) []byte {
 			srcIdx = srcFrames - 2
 			frac = 1.0
 		}
+		if srcIdx < 0 {
+			srcIdx = 0
+			frac = 0
+		}
 
 		l0 := int16(binary.LittleEndian.Uint16(data[srcIdx*4:]))
 		l1 := int16(binary.LittleEndian.Uint16(data[(srcIdx+1)*4:]))

@@ -191,6 +191,14 @@ func (s *State) IsMouseButtonJustPressed(button platform.MouseButton) bool {
 	return s.mouseButtons[button] && !s.prevMouseButtons[button]
 }
 
+// IsMouseButtonJustReleased returns whether the mouse button was released this frame.
+func (s *State) IsMouseButtonJustReleased(button platform.MouseButton) bool {
+	if button < 0 || int(button) >= len(s.mouseButtons) {
+		return false
+	}
+	return !s.mouseButtons[button] && s.prevMouseButtons[button]
+}
+
 // MousePosition returns the current mouse position.
 func (s *State) MousePosition() (x, y float64) {
 	return s.mouseX, s.mouseY

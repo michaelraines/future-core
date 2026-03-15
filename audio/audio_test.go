@@ -172,7 +172,8 @@ func TestPlayerSetPositionNoSeeker(t *testing.T) {
 	player := ctx.NewPlayer(src)
 
 	err := player.SetPosition(100 * time.Millisecond)
-	require.ErrorIs(t, err, io.ErrNoProgress)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "does not support seeking")
 }
 
 type nonSeekReader struct {

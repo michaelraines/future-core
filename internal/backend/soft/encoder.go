@@ -202,7 +202,6 @@ func (e *Encoder) rasterizeIndexed(indexCount, firstIndex int) {
 	}
 
 	verts := unpackVertices(e.boundVertexBuf.data)
-	indices := unpackIndicesU16(e.boundIndexBuf.data)
 
 	r := e.buildRasterizer(rt)
 	proj := e.projectionMatrix()
@@ -210,16 +209,33 @@ func (e *Encoder) rasterizeIndexed(indexCount, firstIndex int) {
 	sampler := e.textureSampler()
 
 	// Process triangles (3 indices per triangle).
-	end := firstIndex + indexCount
-	if end > len(indices) {
-		end = len(indices)
-	}
-	for i := firstIndex; i+2 < end; i += 3 {
-		i0, i1, i2 := int(indices[i]), int(indices[i+1]), int(indices[i+2])
-		if i0 >= len(verts) || i1 >= len(verts) || i2 >= len(verts) {
-			continue
+	// Unpack indices according to the bound index format.
+	if e.boundIndexFmt == backend.IndexUint32 {
+		indices := unpackIndicesU32(e.boundIndexBuf.data)
+		end := firstIndex + indexCount
+		if end > len(indices) {
+			end = len(indices)
 		}
-		r.rasterizeTriangle(verts[i0], verts[i1], verts[i2], proj, sampler, colorBody, colorTrans)
+		for i := firstIndex; i+2 < end; i += 3 {
+			i0, i1, i2 := int(indices[i]), int(indices[i+1]), int(indices[i+2])
+			if i0 >= len(verts) || i1 >= len(verts) || i2 >= len(verts) {
+				continue
+			}
+			r.rasterizeTriangle(verts[i0], verts[i1], verts[i2], proj, sampler, colorBody, colorTrans)
+		}
+	} else {
+		indices := unpackIndicesU16(e.boundIndexBuf.data)
+		end := firstIndex + indexCount
+		if end > len(indices) {
+			end = len(indices)
+		}
+		for i := firstIndex; i+2 < end; i += 3 {
+			i0, i1, i2 := int(indices[i]), int(indices[i+1]), int(indices[i+2])
+			if i0 >= len(verts) || i1 >= len(verts) || i2 >= len(verts) {
+				continue
+			}
+			r.rasterizeTriangle(verts[i0], verts[i1], verts[i2], proj, sampler, colorBody, colorTrans)
+		}
 	}
 }
 

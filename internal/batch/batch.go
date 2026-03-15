@@ -59,6 +59,7 @@ type Batch struct {
 	Filter           backend.TextureFilter
 	FillRule         backend.FillRule
 	ShaderID         uint32
+	Depth            float32
 	TargetID         uint32 // render target identifier (0 = screen)
 	ColorBody        [16]float32
 	ColorTranslation [4]float32
@@ -243,6 +244,7 @@ func (b *Batcher) Flush() []Batch {
 			current.Filter == cmd.Filter &&
 			current.FillRule == cmd.FillRule &&
 			current.ShaderID == cmd.ShaderID &&
+			current.Depth == cmd.Depth &&
 			current.ColorBody == cmd.ColorBody &&
 			current.ColorTranslation == cmd.ColorTranslation &&
 			len(current.Vertices)+len(cmd.Vertices) <= b.maxVertices &&
@@ -266,6 +268,7 @@ func (b *Batcher) Flush() []Batch {
 				Filter:           cmd.Filter,
 				FillRule:         cmd.FillRule,
 				ShaderID:         cmd.ShaderID,
+				Depth:            cmd.Depth,
 				TargetID:         cmd.TargetID,
 				ColorBody:        cmd.ColorBody,
 				ColorTranslation: cmd.ColorTranslation,

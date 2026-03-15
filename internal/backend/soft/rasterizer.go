@@ -69,6 +69,16 @@ func unpackIndicesU16(data []byte) []uint16 {
 	return idx
 }
 
+// unpackIndicesU32 reads uint32 indices from raw bytes.
+func unpackIndicesU32(data []byte) []uint32 {
+	count := len(data) / 4
+	idx := make([]uint32, count)
+	for i := range count {
+		idx[i] = binary.LittleEndian.Uint32(data[i*4:])
+	}
+	return idx
+}
+
 // transformVertex applies a 4x4 projection matrix to a vertex position.
 // The matrix is column-major [16]float32.
 // Returns clip-space position (x, y, z, w).

@@ -710,6 +710,89 @@ func TestRasterizeBlendSourceOver(t *testing.T) {
 	require.Greater(t, g, byte(100), "green should be present")
 }
 
+// --- uint32 index support ---
+
+func makeIndexBytesU32(indices ...uint32) []byte {
+	data := make([]byte, len(indices)*4)
+	for i, idx := range indices {
+		binary.LittleEndian.PutUint32(data[i*4:], idx)
+	}
+	return data
+}
+
+func TestUnpackIndicesU32(t *testing.T) {
+	data := makeIndexBytesU32(0, 1, 2, 100, 200, 300)
+	result := unpackIndicesU32(data)
+	require.Equal(t, []uint32{0, 1, 2, 100, 200, 300}, result)
+}
+
+func TestRasterizeTriangleIndexedUint32(t *testing.T) {
+	d := initDevice(t)
+
+	// Create 8x8 render target.
+	rt, err := d.NewRenderTarget(backend.RenderTargetDescriptor{
+		Width: 8, Height: 8, ColorFormat: backend.TextureFormatRGBA8,
+	})
+	require.NoError(t, err)
+
+	// Create a white 1x1 texture.
+	tex, err := d.NewTexture(backend.TextureDescriptor{
+		Width: 1, Height: 1, Format: backend.TextureFormatRGBA8,
+		Data: []byte{255, 255, 255, 255},
+	})
+	require.NoError(t, err)
+
+	// Create shader with identity projection.
+	shader, err := d.NewShader(backend.ShaderDescriptor{})
+	require.NoError(t, err)
+
+	// Create pipeline.
+	pipeline, err := d.NewPipeline(backend.PipelineDescriptor{
+		Shader:    shader,
+		BlendMode: backend.BlendNone,
+	})
+	require.NoError(t, err)
+
+	// Full-screen triangle.
+	verts := makeVertexBytes(
+		vertex2D{px: -1, py: -1, tu: 0, tv: 0, r: 0, g: 0, b: 1, a: 1},
+		vertex2D{px: 3, py: -1, tu: 1, tv: 0, r: 0, g: 0, b: 1, a: 1},
+		vertex2D{px: -1, py: 3, tu: 0, tv: 1, r: 0, g: 0, b: 1, a: 1},
+	)
+	// Use uint32 indices.
+	indices := makeIndexBytesU32(0, 1, 2)
+
+	vbuf, err := d.NewBuffer(backend.BufferDescriptor{Data: verts})
+	require.NoError(t, err)
+	ibuf, err := d.NewBuffer(backend.BufferDescriptor{Data: indices})
+	require.NoError(t, err)
+
+	enc := d.Encoder()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		Target:     rt,
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{0, 0, 0, 0},
+	})
+	enc.SetPipeline(pipeline)
+	enc.SetVertexBuffer(vbuf, 0)
+	enc.SetIndexBuffer(ibuf, backend.IndexUint32)
+	enc.SetTexture(tex, 0)
+	enc.DrawIndexed(3, 1, 0)
+	enc.EndRenderPass()
+
+	// Read pixels and verify blue was written.
+	srt := rt.(*RenderTarget)
+	pixels := srt.color.Pixels()
+	require.NotEmpty(t, pixels)
+
+	// Check center pixel (4,4): should be blue.
+	idx := (4*8 + 4) * 4
+	require.Equal(t, byte(0), pixels[idx], "red channel")
+	require.Equal(t, byte(0), pixels[idx+1], "green channel")
+	require.Equal(t, byte(255), pixels[idx+2], "blue channel")
+	require.Equal(t, byte(255), pixels[idx+3], "alpha channel")
+}
+
 // --- Encoder state tests ---
 
 func TestEncoderResolveBlendFunc(t *testing.T) {
