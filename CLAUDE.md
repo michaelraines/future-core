@@ -110,6 +110,49 @@ These are non-negotiable. Violating them creates technical debt that compounds.
 5. **Interfaces are defined by consumers, not implementors.** Follow Go
    interface design conventions. Keep interfaces small and focused.
 
+## Multi-Backend Architecture
+
+Seven backends implement the `backend.Device` and `backend.CommandEncoder`
+interfaces. Read `internal/backend/CLAUDE.md` for detailed backend
+development guidance.
+
+### Backend Registry
+
+All backends self-register via `init()` in their `register.go` files using
+`backend.Register(name, factory)`. The engine selects a backend via the
+`FUTURE_RENDER_BACKEND` env var (values: `opengl`, `webgl`, `vulkan`,
+`metal`, `webgpu`, `dx12`, `soft`, `auto`).
+
+### Soft-Delegation Pattern
+
+Five backends (webgl, vulkan, metal, webgpu, dx12) delegate rendering to
+the software rasterizer (`internal/backend/soft/`). This lets all backends
+pass the 10-scene conformance suite in CI without GPU hardware. Each backend
+wraps soft types and adds API-specific constants/types for the target GPU API.
+
+**When converting a soft-delegating backend to real GPU bindings**: replace
+the `inner` delegation in each method with actual GPU API calls. The type
+structure, registration, conformance tests, and coverage are already in place.
+
+### Conformance Testing
+
+Every backend must pass `conformance.RunAll(t, dev, enc)` which renders
+10 canonical scenes and compares pixel output against golden PNGs (±3
+tolerance). Golden images are auto-generated on first run. See
+`internal/backend/conformance/conformance.go` for the full scene list.
+
+### Backend Coverage
+
+| Backend | Package | Coverage | Conformance |
+|---|---|---|---|
+| Software | `internal/backend/soft/` | 91% | 10/10 |
+| OpenGL | `internal/backend/opengl/` | (build-tagged) | N/A in CI |
+| WebGL2 | `internal/backend/webgl/` | 92% | 10/10 |
+| Vulkan | `internal/backend/vulkan/` | 92% | 10/10 |
+| Metal | `internal/backend/metal/` | 90% | 10/10 |
+| WebGPU | `internal/backend/webgpu/` | 91% | 10/10 |
+| DirectX 12 | `internal/backend/dx12/` | 90% | 10/10 |
+
 ## Development Workflow
 
 Follow this cycle for every change:
@@ -267,9 +310,14 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
 | `internal/batch/` | 80% | 100% | Core optimization logic, must be correct |
 | `internal/pipeline/` | 80% | 100% | Test pass ordering, context, sprite pass |
 | `internal/input/` | 80% | 100% | Test state transitions, edge detection |
-| `internal/backend/` | Excluded | — | Interface definitions only; implementations tested via integration |
+| `internal/backend/` | 80% | — | Interface definitions + registry; minimal tests |
 | `internal/backend/soft/` | 80% | 100% | CPU rasterizer + Device impl; reference backend for conformance |
 | `internal/backend/conformance/` | 80% | 100% | Golden-image test framework; exercises full pipeline |
+| `internal/backend/webgl/` | 80% | 100% | WebGL2 soft-delegating backend; conformance + unit tests |
+| `internal/backend/vulkan/` | 80% | 100% | Vulkan soft-delegating backend; conformance + unit tests |
+| `internal/backend/metal/` | 80% | 100% | Metal soft-delegating backend; conformance + unit tests |
+| `internal/backend/webgpu/` | 80% | 100% | WebGPU soft-delegating backend; conformance + unit tests |
+| `internal/backend/dx12/` | 80% | 100% | DirectX 12 soft-delegating backend; conformance + unit tests |
 | `internal/platform/` | Excluded | — | Interface definitions only; implementations tested via integration |
 | Public API (root) | 80% | 100% | Image, GeoM, DrawImage, options, type mapping |
 
