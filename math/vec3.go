@@ -119,6 +119,7 @@ func (v Vec3) Negate() Vec3 {
 }
 
 // Reflect returns v reflected across the given normal.
+// The normal must be normalized.
 func (v Vec3) Reflect(normal Vec3) Vec3 {
 	d := 2.0 * v.Dot(normal)
 	return Vec3{X: v.X - d*normal.X, Y: v.Y - d*normal.Y, Z: v.Z - d*normal.Z}

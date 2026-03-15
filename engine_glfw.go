@@ -77,6 +77,12 @@ type engine struct {
 	// Texture registry: maps texture IDs to backend textures.
 	textures map[uint32]backend.Texture
 
+	// Shader registry: maps shader IDs to Shader objects for SpritePass lookup.
+	shaders map[uint32]*Shader
+
+	// Render target registry: maps target IDs to backend render targets.
+	renderTargets map[uint32]backend.RenderTarget
+
 	// Window config state.
 	windowTitle string
 	windowW     int
@@ -85,11 +91,13 @@ type engine struct {
 
 func newPlatformEngine(game Game) *engine {
 	return &engine{
-		game:        game,
-		windowTitle: pendingWindowTitle,
-		windowW:     pendingWindowWidth,
-		windowH:     pendingWindowHeight,
-		textures:    make(map[uint32]backend.Texture),
+		game:          game,
+		windowTitle:   pendingWindowTitle,
+		windowW:       pendingWindowWidth,
+		windowH:       pendingWindowHeight,
+		textures:      make(map[uint32]backend.Texture),
+		shaders:       make(map[uint32]*Shader),
+		renderTargets: make(map[uint32]backend.RenderTarget),
 	}
 }
 
@@ -178,6 +186,23 @@ func (e *engine) initRenderResources() error {
 		return e.textures[texID]
 	}
 
+	// Wire shader resolver.
+	sp.ResolveShader = func(shaderID uint32) *pipeline.ShaderInfo {
+		s, ok := e.shaders[shaderID]
+		if !ok || s == nil {
+			return nil
+		}
+		return &pipeline.ShaderInfo{
+			Shader:   s.backend,
+			Pipeline: s.pipeline,
+		}
+	}
+
+	// Wire render target resolver.
+	sp.ResolveRenderTarget = func(targetID uint32) backend.RenderTarget {
+		return e.renderTargets[targetID]
+	}
+
 	// Build render pipeline.
 	e.renderPipeline = pipeline.New()
 	e.renderPipeline.AddPass(sp)
@@ -232,6 +257,12 @@ func (e *engine) run() error {
 		batcher: batch.NewBatcher(maxBatchVertices, maxBatchIndices),
 		registerTexture: func(id uint32, tex backend.Texture) {
 			e.textures[id] = tex
+		},
+		registerShader: func(id uint32, shader *Shader) {
+			e.shaders[id] = shader
+		},
+		registerRenderTarget: func(id uint32, rt backend.RenderTarget) {
+			e.renderTargets[id] = rt
 		},
 	}
 	e.rend = rend
@@ -318,11 +349,15 @@ func (e *engine) run() error {
 		proj := fmath.Mat4Ortho(0, float64(screenW), float64(screenH), 0, -1, 1)
 		e.spritePass.Projection = proj.Float32()
 
-		// Begin render pass: clear then draw sprites.
+		// Begin render pass: clear or preserve based on user setting.
+		loadAction := backend.LoadActionClear
+		if !IsScreenClearedEveryFrame() {
+			loadAction = backend.LoadActionLoad
+		}
 		e.encoder.BeginRenderPass(backend.RenderPassDescriptor{
 			ClearColor:  [4]float32{0, 0, 0, 1},
 			ClearDepth:  1.0,
-			LoadAction:  backend.LoadActionClear,
+			LoadAction:  loadAction,
 			StoreAction: backend.StoreActionStore,
 		})
 		e.encoder.SetViewport(backend.Viewport{
@@ -394,10 +429,13 @@ func (e *engine) setCursorMode(mode CursorMode) {
 	}
 	switch mode {
 	case CursorModeHidden:
+		e.window.SetCursorLocked(false)
 		e.window.SetCursorVisible(false)
 	case CursorModeCaptured:
+		e.window.SetCursorVisible(false)
 		e.window.SetCursorLocked(true)
-	default:
+	default: // CursorModeVisible
+		e.window.SetCursorLocked(false)
 		e.window.SetCursorVisible(true)
 	}
 }

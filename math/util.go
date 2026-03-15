@@ -61,9 +61,14 @@ func SmoothStep(edge0, edge1, v float64) float64 {
 }
 
 // NextPowerOf2 returns the smallest power of 2 >= n.
+// For n > 2^31, the result wraps to 0 due to uint32 overflow.
+// If n is already a power of 2, it is returned unchanged.
 func NextPowerOf2(n uint32) uint32 {
 	if n == 0 {
 		return 1
+	}
+	if n > (1 << 31) {
+		return 0
 	}
 	n--
 	n |= n >> 1

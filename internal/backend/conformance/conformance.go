@@ -202,15 +202,14 @@ func loadOrGenerateGolden(t *testing.T, sceneName string, actual *Result) *Resul
 
 	// Auto-generate on first run.
 	if os.IsNotExist(err) {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("creating golden dir: %v", err)
-		}
+		err = os.MkdirAll(filepath.Dir(path), 0o755)
+		require.NoError(t, err, "creating golden dir")
 		saveGoldenPNG(t, path, actual)
 		t.Logf("generated golden image: %s (first run)", path)
 		return actual
 	}
 
-	t.Fatalf("reading golden image %s: %v", path, err)
+	require.NoError(t, err, "reading golden image %s", path)
 	return nil
 }
 

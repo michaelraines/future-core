@@ -212,6 +212,20 @@ func TestMat4String(t *testing.T) {
 	require.Contains(t, s, "Mat4[")
 }
 
+func TestMat4MulVec3PointWZero(t *testing.T) {
+	// Create a matrix where the w component will be zero
+	m := Mat4{
+		1, 0, 0, 0,
+		0, 1, 0, 0,
+		0, 0, 1, 0,
+		0, 0, 0, 0, // w row is zero
+	}
+	result := m.MulVec3Point(Vec3{X: 1, Y: 2, Z: 3})
+	require.InDelta(t, 0.0, result.X, 1e-9)
+	require.InDelta(t, 0.0, result.Y, 1e-9)
+	require.InDelta(t, 0.0, result.Z, 1e-9)
+}
+
 func BenchmarkMat4Mul(b *testing.B) {
 	a := Mat4Translate(1, 2, 3)
 	c := Mat4RotateZ(0.5)

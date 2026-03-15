@@ -139,6 +139,34 @@ func TestQuatInverseZero(t *testing.T) {
 	require.Equal(t, QuatIdentity(), inv)
 }
 
+func TestQuatApproxEqualDoubleCover(t *testing.T) {
+	q := QuatFromAxisAngle(Vec3{X: 0, Y: 1, Z: 0}, Pi/4)
+	neg := Quat{X: -q.X, Y: -q.Y, Z: -q.Z, W: -q.W}
+	require.True(t, q.ApproxEqual(neg, 1e-9), "q and -q represent the same rotation")
+}
+
+func TestQuatSlerpNegativeDot(t *testing.T) {
+	q1 := QuatFromAxisAngle(Vec3{X: 0, Y: 1, Z: 0}, 0.1)
+	// Create a quaternion where dot product is negative
+	q2 := QuatFromAxisAngle(Vec3{X: 0, Y: 1, Z: 0}, Pi+0.1)
+	result := q1.Slerp(q2, 0.5)
+	require.InDelta(t, 1.0, result.Len(), 1e-6, "slerp result should be unit quaternion")
+}
+
+func TestQuatSlerpNearIdentity(t *testing.T) {
+	q1 := QuatIdentity()
+	q2 := QuatFromAxisAngle(Vec3{X: 0, Y: 1, Z: 0}, 1e-6)
+	result := q1.Slerp(q2, 0.5)
+	require.InDelta(t, 1.0, result.Len(), 1e-6)
+}
+
+func TestQuatToAxisAngleIdentity(t *testing.T) {
+	axis, angle := QuatIdentity().ToAxisAngle()
+	require.InDelta(t, 0.0, angle, 1e-9)
+	// When angle is near zero, axis defaults to (1,0,0)
+	require.InDelta(t, 1.0, axis.X, 1e-9)
+}
+
 func BenchmarkQuatRotateVec3(b *testing.B) {
 	q := QuatFromAxisAngle(Vec3UnitY(), 0.5)
 	v := NewVec3(1, 2, 3)

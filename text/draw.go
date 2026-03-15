@@ -2,6 +2,7 @@ package text
 
 import (
 	"strings"
+	"sync"
 	"unicode"
 
 	futurerender "github.com/michaelraines/future-render"
@@ -38,8 +39,13 @@ type DrawOptions struct {
 // atlas so glyph sizes don't conflict.
 var globalAtlases = map[*Face]*fontAtlas{}
 
+// globalAtlasesMu protects concurrent access to globalAtlases.
+var globalAtlasesMu sync.Mutex
+
 // atlasFor returns (or creates) the font atlas for the given face.
 func atlasFor(f *Face) *fontAtlas {
+	globalAtlasesMu.Lock()
+	defer globalAtlasesMu.Unlock()
 	a, ok := globalAtlases[f]
 	if !ok {
 		a = newFontAtlas()

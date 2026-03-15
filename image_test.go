@@ -265,6 +265,27 @@ func TestSubImageUVMapping(t *testing.T) {
 	require.InDelta(t, float32(1.0), sub2.v1, 1e-6)
 }
 
+func TestSubImageZeroSize(t *testing.T) {
+	// Zero-width image should not cause division by zero.
+	img := &Image{width: 0, height: 100}
+	sub := img.SubImage(fmath.NewRect(0, 0, 50, 50))
+	require.Equal(t, 50, sub.width)
+	require.Equal(t, 50, sub.height)
+	require.Nil(t, sub.texture)
+
+	// Zero-height image should not cause division by zero.
+	img2 := &Image{width: 100, height: 0}
+	sub2 := img2.SubImage(fmath.NewRect(0, 0, 30, 30))
+	require.Equal(t, 30, sub2.width)
+	require.Equal(t, 30, sub2.height)
+
+	// Both zero should not cause division by zero.
+	img3 := &Image{width: 0, height: 0}
+	sub3 := img3.SubImage(fmath.NewRect(0, 0, 10, 20))
+	require.Equal(t, 10, sub3.width)
+	require.Equal(t, 20, sub3.height)
+}
+
 func TestSubImageOfSubImage(t *testing.T) {
 	root := &Image{
 		width: 256, height: 256,

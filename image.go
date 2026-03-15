@@ -291,6 +291,13 @@ func (img *Image) SubImage(r fmath.Rect) *Image {
 	w := float32(img.width)
 	h := float32(img.height)
 
+	if w == 0 || h == 0 {
+		return &Image{
+			width:  int(r.Width()),
+			height: int(r.Height()),
+		}
+	}
+
 	// Map rect coordinates to UV space within this image's UV region.
 	uRange := img.u1 - img.u0
 	vRange := img.v1 - img.v0
@@ -415,7 +422,7 @@ type DrawRectShaderOptions struct {
 
 	// ColorScale scales the RGBA color of each pixel.
 	// A zero-valued ColorScale is treated as opaque white (1,1,1,1), matching
-	// Ebitengine's behavior so that a default DrawImageOptions{} draws the
+	// Ebitengine's behavior so that a default DrawRectShaderOptions{} draws the
 	// image unmodified. To make an image invisible, use ColorM or set the
 	// alpha channel in vertex colors instead.
 	ColorScale fmath.Color

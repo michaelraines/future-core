@@ -134,6 +134,15 @@ func TestIsPowerOf2(t *testing.T) {
 	}
 }
 
+func TestSmoothStepEqualEdges(t *testing.T) {
+	require.InDelta(t, 0.0, SmoothStep(5, 5, 10), 1e-9)
+	require.InDelta(t, 0.0, SmoothStep(5, 5, 0), 1e-9)
+}
+
+func TestNextPowerOf2Overflow(t *testing.T) {
+	require.Equal(t, uint32(0), NextPowerOf2(1<<31+1))
+}
+
 func TestApproxEqual(t *testing.T) {
 	require.True(t, ApproxEqual(1.0, 1.0000000001, 1e-9))
 	require.False(t, ApproxEqual(1.0, 2.0, 1e-9))

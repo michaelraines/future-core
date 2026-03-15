@@ -136,7 +136,7 @@ func (d *Device) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline,
 	if err != nil {
 		return nil, fmt.Errorf("webgl: %w", err)
 	}
-	return &Pipeline{Pipeline: inner, Desc: desc}, nil
+	return &Pipeline{Pipeline: inner, desc: desc}, nil
 }
 
 // Capabilities returns WebGL2 device capabilities.

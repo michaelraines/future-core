@@ -76,7 +76,16 @@ func (l *InfiniteLoop) Read(p []byte) (int, error) {
 		p = p[n:]
 
 		if errors.Is(err, io.EOF) {
-			// Reached end; loop back on next iteration.
+			// Source ended (possibly shorter than declared length).
+			// Seek back to loop start to continue filling the buffer.
+			loopStart := l.introLen
+			if !l.hasIntro {
+				loopStart = 0
+			}
+			if _, seekErr := l.src.Seek(loopStart, io.SeekStart); seekErr != nil {
+				return totalRead, seekErr
+			}
+			l.pos = loopStart
 			continue
 		}
 		if err != nil {

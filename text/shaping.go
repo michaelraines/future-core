@@ -2,6 +2,7 @@ package text
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/go-text/typesetting/di"
 	"github.com/go-text/typesetting/font"
@@ -27,6 +28,10 @@ func NewShaperFace(src []byte, size float64) (*ShaperFace, error) {
 	faces, err := font.ParseTTC(bytes.NewReader(src))
 	if err != nil {
 		return nil, err
+	}
+
+	if len(faces) == 0 {
+		return nil, fmt.Errorf("text: no faces found in font data")
 	}
 
 	face := faces[0]

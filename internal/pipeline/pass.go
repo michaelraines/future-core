@@ -26,7 +26,7 @@ type PassContext struct {
 	DefaultTarget backend.RenderTarget
 
 	// Resources holds named resources shared between passes.
-	Resources map[string]interface{}
+	Resources map[string]any
 }
 
 // NewPassContext creates a new PassContext.
@@ -34,7 +34,7 @@ func NewPassContext(fbWidth, fbHeight int) *PassContext {
 	return &PassContext{
 		FramebufferWidth:  fbWidth,
 		FramebufferHeight: fbHeight,
-		Resources:         make(map[string]interface{}),
+		Resources:         make(map[string]any),
 	}
 }
 

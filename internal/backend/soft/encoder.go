@@ -1,6 +1,10 @@
 package soft
 
-import "github.com/michaelraines/future-render/internal/backend"
+import (
+	"math"
+
+	"github.com/michaelraines/future-render/internal/backend"
+)
 
 // DrawRecord captures the parameters of a single draw call. For testing and
 // conformance verification.
@@ -25,6 +29,9 @@ type Encoder struct {
 	stencil       bool
 	colorWrite    bool
 
+	// Depth buffer persists across draw calls within a render pass.
+	depthBuf []float32
+
 	// Bound state for rasterization.
 	boundVertexBuf *Buffer
 	boundIndexBuf  *Buffer
@@ -42,19 +49,45 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	e.passDesc = desc
 	e.colorWrite = true
 
-	if desc.LoadAction == backend.LoadActionClear && desc.Target != nil {
+	if desc.Target != nil {
 		rt := desc.Target.(*RenderTarget)
-		pixels := rt.color.pixels
-		c := desc.ClearColor
-		r := clampByte(c[0])
-		g := clampByte(c[1])
-		b := clampByte(c[2])
-		a := clampByte(c[3])
-		for i := 0; i+3 < len(pixels); i += 4 {
-			pixels[i] = r
-			pixels[i+1] = g
-			pixels[i+2] = b
-			pixels[i+3] = a
+
+		if desc.LoadAction == backend.LoadActionClear {
+			pixels := rt.color.pixels
+			c := desc.ClearColor
+			r := clampByte(c[0])
+			g := clampByte(c[1])
+			b := clampByte(c[2])
+			a := clampByte(c[3])
+			for i := 0; i+3 < len(pixels); i += 4 {
+				pixels[i] = r
+				pixels[i+1] = g
+				pixels[i+2] = b
+				pixels[i+3] = a
+			}
+		}
+
+		// Allocate or reset the depth buffer if the render target has depth.
+		if rt.depth != nil {
+			size := rt.rtWidth * rt.rtHeight
+			if cap(e.depthBuf) >= size {
+				e.depthBuf = e.depthBuf[:size]
+			} else {
+				e.depthBuf = make([]float32, size)
+			}
+			if desc.LoadAction == backend.LoadActionClear {
+				clearVal := float32(math.MaxFloat32)
+				if desc.ClearDepth != 0 {
+					clearVal = desc.ClearDepth
+				}
+				for i := range e.depthBuf {
+					e.depthBuf[i] = clearVal
+				}
+			} else {
+				for i := range e.depthBuf {
+					e.depthBuf[i] = float32(math.MaxFloat32)
+				}
+			}
 		}
 	}
 }
@@ -62,6 +95,7 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 // EndRenderPass ends the current render pass.
 func (e *Encoder) EndRenderPass() {
 	e.inPass = false
+	e.depthBuf = nil
 }
 
 // SetPipeline binds a render pipeline and its shader.
@@ -241,12 +275,8 @@ func (e *Encoder) buildRasterizer(rt *RenderTarget) *rasterizer {
 		r.depthTest = e.boundPipeline.desc.DepthTest
 		r.depthWrite = e.boundPipeline.desc.DepthWrite
 	}
-	if r.depthTest && rt.depth != nil {
-		if dt, ok := rt.depth.(*Texture); ok {
-			r.depthBuf = make([]float32, rt.rtWidth*rt.rtHeight)
-			// Initialize from depth texture if available.
-			_ = dt // depth texture exists but we use float32 buffer
-		}
+	if r.depthTest && e.depthBuf != nil {
+		r.depthBuf = e.depthBuf
 	}
 
 	// Blend mode from pipeline.

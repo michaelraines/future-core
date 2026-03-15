@@ -70,7 +70,17 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	}
 	d.debugEnabled = cfg.Debug
 	if d.debugEnabled {
-		d.instanceInfo.Layers = append(d.instanceInfo.Layers, "VK_LAYER_KHRONOS_validation")
+		const validationLayer = "VK_LAYER_KHRONOS_validation"
+		found := false
+		for _, l := range d.instanceInfo.Layers {
+			if l == validationLayer {
+				found = true
+				break
+			}
+		}
+		if !found {
+			d.instanceInfo.Layers = append(d.instanceInfo.Layers, validationLayer)
+		}
 	}
 	return d.inner.Init(cfg)
 }
@@ -143,7 +153,7 @@ func (d *Device) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline,
 	if err != nil {
 		return nil, fmt.Errorf("vulkan: %w", err)
 	}
-	return &Pipeline{Pipeline: inner, Desc: desc}, nil
+	return &Pipeline{Pipeline: inner, desc: desc}, nil
 }
 
 // Capabilities returns Vulkan device capabilities.

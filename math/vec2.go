@@ -48,7 +48,7 @@ func (v Vec2) Mul(s float64) Vec2 {
 	return Vec2{X: v.X * s, Y: v.Y * s}
 }
 
-// Div returns v divided by s. Panics if s is zero.
+// Div returns v divided by s. If s is zero, the result contains +Inf or NaN.
 func (v Vec2) Div(s float64) Vec2 {
 	return Vec2{X: v.X / s, Y: v.Y / s}
 }
@@ -144,6 +144,7 @@ func (v Vec2) Perpendicular() Vec2 {
 }
 
 // Reflect returns v reflected across the given normal.
+// The normal must be normalized.
 func (v Vec2) Reflect(normal Vec2) Vec2 {
 	d := 2.0 * v.Dot(normal)
 	return Vec2{X: v.X - d*normal.X, Y: v.Y - d*normal.Y}

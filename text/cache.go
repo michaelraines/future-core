@@ -121,6 +121,8 @@ func (c *glyphCache) rasterize(r rune, atlas *fontAtlas) *glyphEntry {
 			atlas.upload(dst.Pix, ax, ay, w, h)
 			entry.atlasX = ax
 			entry.atlasY = ay
+		} else {
+			entry.empty = true
 		}
 	}
 

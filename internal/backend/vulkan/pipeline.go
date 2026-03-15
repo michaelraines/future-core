@@ -8,7 +8,7 @@ import "github.com/michaelraines/future-render/internal/backend"
 // is set imperatively.
 type Pipeline struct {
 	backend.Pipeline // delegates Dispose to inner
-	Desc             backend.PipelineDescriptor
+	desc             backend.PipelineDescriptor
 }
 
 // InnerPipeline returns the wrapped soft pipeline for encoder unwrapping.

@@ -2,6 +2,9 @@ package softdelegate
 
 import "github.com/michaelraines/future-render/internal/backend"
 
+// Compile-time assertion that Encoder implements backend.CommandEncoder.
+var _ backend.CommandEncoder = (*Encoder)(nil)
+
 // PipelineUnwrapper provides access to the inner soft pipeline.
 type PipelineUnwrapper interface {
 	InnerPipeline() backend.Pipeline
