@@ -23,7 +23,9 @@ type DrawOptions struct {
 	// GeoM applies a 2D transformation to the text.
 	GeoM futurerender.GeoM
 
-	// ColorScale tints the text. Zero value draws white text.
+	// ColorScale tints the text. A zero-valued ColorScale is treated as
+	// opaque white (1,1,1,1), matching Ebitengine's convention so that
+	// default DrawOptions{} draws white text.
 	ColorScale fmath.Color
 
 	// Align specifies horizontal text alignment. Default is AlignLeft.

@@ -382,6 +382,10 @@ type DrawImageOptions struct {
 	GeoM GeoM
 
 	// ColorScale scales the RGBA color of each pixel.
+	// A zero-valued ColorScale is treated as opaque white (1,1,1,1), matching
+	// Ebitengine's behavior so that a default DrawImageOptions{} draws the
+	// image unmodified. To make an image invisible, use ColorM or set the
+	// alpha channel in vertex colors instead.
 	ColorScale fmath.Color
 
 	// ColorM is the color matrix transformation.
@@ -412,6 +416,10 @@ type DrawRectShaderOptions struct {
 	GeoM GeoM
 
 	// ColorScale scales the RGBA color of each pixel.
+	// A zero-valued ColorScale is treated as opaque white (1,1,1,1), matching
+	// Ebitengine's behavior so that a default DrawImageOptions{} draws the
+	// image unmodified. To make an image invisible, use ColorM or set the
+	// alpha channel in vertex colors instead.
 	ColorScale fmath.Color
 
 	// Blend specifies the blend mode.
@@ -690,7 +698,9 @@ func colorMatrixToUniforms(cm fmath.ColorMatrix) (body [16]float32, translation 
 }
 
 // colorScaleOrDefault returns RGBA components from a ColorScale, defaulting
-// to opaque white if the color is zero-valued.
+// to opaque white if the color is zero-valued. This matches Ebitengine's
+// convention: a zero-valued DrawImageOptions{} draws the image as-is.
+// Transparent black (0,0,0,0) is indistinguishable from "not set".
 func colorScaleOrDefault(c fmath.Color) (r, g, b, a float32) {
 	if c.R == 0 && c.G == 0 && c.B == 0 && c.A == 0 {
 		return 1, 1, 1, 1
