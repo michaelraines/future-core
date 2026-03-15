@@ -221,6 +221,95 @@ func TestBatcherSortOrder(t *testing.T) {
 	require.Equal(t, uint32(3), batches[3].TextureID)
 }
 
+func TestAddQuadDirect(t *testing.T) {
+	b := NewBatcher(65535, 65535)
+
+	v0 := Vertex2D{PosX: 0, PosY: 0, TexU: 0, TexV: 0, R: 1, G: 1, B: 1, A: 1}
+	v1 := Vertex2D{PosX: 10, PosY: 0, TexU: 1, TexV: 0, R: 1, G: 1, B: 1, A: 1}
+	v2 := Vertex2D{PosX: 10, PosY: 10, TexU: 1, TexV: 1, R: 1, G: 1, B: 1, A: 1}
+	v3 := Vertex2D{PosX: 0, PosY: 10, TexU: 0, TexV: 1, R: 1, G: 1, B: 1, A: 1}
+
+	b.AddQuadDirect(v0, v1, v2, v3, DrawCommand{
+		TextureID: 1,
+		BlendMode: backend.BlendSourceOver,
+	})
+
+	require.Equal(t, 1, b.CommandCount())
+
+	batches := b.Flush()
+	require.Len(t, batches, 1)
+	require.Len(t, batches[0].Vertices, 4)
+	require.Len(t, batches[0].Indices, 6)
+	require.Equal(t, float32(0), batches[0].Vertices[0].PosX)
+	require.Equal(t, float32(10), batches[0].Vertices[1].PosX)
+}
+
+func TestAddQuadDirectMerge(t *testing.T) {
+	b := NewBatcher(65535, 65535)
+
+	v0 := Vertex2D{PosX: 0, PosY: 0, R: 1, G: 1, B: 1, A: 1}
+	v1 := Vertex2D{PosX: 10, PosY: 0, R: 1, G: 1, B: 1, A: 1}
+	v2 := Vertex2D{PosX: 10, PosY: 10, R: 1, G: 1, B: 1, A: 1}
+	v3 := Vertex2D{PosX: 0, PosY: 10, R: 1, G: 1, B: 1, A: 1}
+
+	cmd := DrawCommand{TextureID: 1, BlendMode: backend.BlendSourceOver}
+
+	// Two quads with same state should merge.
+	b.AddQuadDirect(v0, v1, v2, v3, cmd)
+	b.AddQuadDirect(v0, v1, v2, v3, cmd)
+
+	batches := b.Flush()
+	require.Len(t, batches, 1)
+	require.Len(t, batches[0].Vertices, 8)
+	require.Len(t, batches[0].Indices, 12)
+}
+
+func TestArenaGrowth(t *testing.T) {
+	// Create a batcher with a very small arena to force growth.
+	b := NewBatcher(65535, 65535)
+	b.vertexArena = make([]Vertex2D, 4)
+	b.indexArena = make([]uint16, 6)
+
+	// First quad fits.
+	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+	require.Equal(t, 4, b.vertexPos)
+	require.Equal(t, 6, b.indexPos)
+
+	// Second quad forces growth.
+	b.AddQuad(20, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+	require.Equal(t, 8, b.vertexPos)
+	require.Equal(t, 12, b.indexPos)
+	require.GreaterOrEqual(t, len(b.vertexArena), 8)
+	require.GreaterOrEqual(t, len(b.indexArena), 12)
+
+	// Verify data integrity after growth.
+	batches := b.Flush()
+	require.Len(t, batches, 1)
+	require.Len(t, batches[0].Vertices, 8)
+	require.Len(t, batches[0].Indices, 12)
+}
+
+func TestArenaResetOnFlush(t *testing.T) {
+	b := NewBatcher(65535, 65535)
+
+	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+	require.Greater(t, b.vertexPos, 0)
+	require.Greater(t, b.indexPos, 0)
+
+	b.Flush()
+	require.Equal(t, 0, b.vertexPos)
+	require.Equal(t, 0, b.indexPos)
+}
+
+func TestArenaResetOnReset(t *testing.T) {
+	b := NewBatcher(65535, 65535)
+
+	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+	b.Reset()
+	require.Equal(t, 0, b.vertexPos)
+	require.Equal(t, 0, b.indexPos)
+}
+
 func BenchmarkBatcherFlush100Quads(b *testing.B) {
 	batcher := NewBatcher(65535, 65535)
 	for b.Loop() {

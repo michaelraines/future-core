@@ -79,6 +79,20 @@ func (f *Face) Metrics() Metrics {
 	return f.metrics
 }
 
+// Close releases resources associated with this Face, including its glyph
+// cache and atlas texture. After calling Close, the Face must not be used.
+func (f *Face) Close() {
+	// Remove and dispose the atlas for this face.
+	if a, ok := globalAtlases[f]; ok {
+		if a.image != nil {
+			a.image.Dispose()
+		}
+		delete(globalAtlases, f)
+	}
+	// Clear the glyph cache.
+	clear(f.cache.entries)
+}
+
 // Measure returns the advance width of a string in pixels.
 func (f *Face) Measure(text string) float64 {
 	var advance fixed.Int26_6

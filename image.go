@@ -181,22 +181,21 @@ func (img *Image) DrawImage(src *Image, opts *DrawImageOptions) {
 	filter := filterToBackend(o.Filter)
 	colorBody, colorTrans := colorMatrixToUniforms(o.ColorM)
 
-	rend.batcher.Add(batch.DrawCommand{
-		Vertices: []batch.Vertex2D{
-			{PosX: float32(x0), PosY: float32(y0), TexU: u0, TexV: v0, R: cr, G: cg, B: cb, A: ca},
-			{PosX: float32(x1), PosY: float32(y1), TexU: u1, TexV: v0, R: cr, G: cg, B: cb, A: ca},
-			{PosX: float32(x2), PosY: float32(y2), TexU: u1, TexV: v1, R: cr, G: cg, B: cb, A: ca},
-			{PosX: float32(x3), PosY: float32(y3), TexU: u0, TexV: v1, R: cr, G: cg, B: cb, A: ca},
+	rend.batcher.AddQuadDirect(
+		batch.Vertex2D{PosX: float32(x0), PosY: float32(y0), TexU: u0, TexV: v0, R: cr, G: cg, B: cb, A: ca},
+		batch.Vertex2D{PosX: float32(x1), PosY: float32(y1), TexU: u1, TexV: v0, R: cr, G: cg, B: cb, A: ca},
+		batch.Vertex2D{PosX: float32(x2), PosY: float32(y2), TexU: u1, TexV: v1, R: cr, G: cg, B: cb, A: ca},
+		batch.Vertex2D{PosX: float32(x3), PosY: float32(y3), TexU: u0, TexV: v1, R: cr, G: cg, B: cb, A: ca},
+		batch.DrawCommand{
+			TextureID:        texID,
+			BlendMode:        blend,
+			Filter:           filter,
+			ShaderID:         0, // default sprite shader
+			TargetID:         img.textureID,
+			ColorBody:        colorBody,
+			ColorTranslation: colorTrans,
 		},
-		Indices:          []uint16{0, 1, 2, 0, 2, 3},
-		TextureID:        texID,
-		BlendMode:        blend,
-		Filter:           filter,
-		ShaderID:         0, // default sprite shader
-		TargetID:         img.textureID,
-		ColorBody:        colorBody,
-		ColorTranslation: colorTrans,
-	})
+	)
 }
 
 // DrawTriangles draws triangles with the given vertices, indices, and options.
@@ -271,20 +270,19 @@ func (img *Image) Fill(c fmath.Color) {
 	// Use the white texture and multiply by vertex color.
 	texID := rend.whiteTextureID
 
-	rend.batcher.Add(batch.DrawCommand{
-		Vertices: []batch.Vertex2D{
-			{PosX: 0, PosY: 0, TexU: 0, TexV: 0, R: r, G: g, B: b, A: a},
-			{PosX: w, PosY: 0, TexU: 1, TexV: 0, R: r, G: g, B: b, A: a},
-			{PosX: w, PosY: h, TexU: 1, TexV: 1, R: r, G: g, B: b, A: a},
-			{PosX: 0, PosY: h, TexU: 0, TexV: 1, R: r, G: g, B: b, A: a},
+	rend.batcher.AddQuadDirect(
+		batch.Vertex2D{PosX: 0, PosY: 0, TexU: 0, TexV: 0, R: r, G: g, B: b, A: a},
+		batch.Vertex2D{PosX: w, PosY: 0, TexU: 1, TexV: 0, R: r, G: g, B: b, A: a},
+		batch.Vertex2D{PosX: w, PosY: h, TexU: 1, TexV: 1, R: r, G: g, B: b, A: a},
+		batch.Vertex2D{PosX: 0, PosY: h, TexU: 0, TexV: 1, R: r, G: g, B: b, A: a},
+		batch.DrawCommand{
+			TextureID: texID,
+			BlendMode: backend.BlendSourceOver,
+			ShaderID:  0,
+			TargetID:  img.textureID,
+			ColorBody: colorMatrixIdentityBody,
 		},
-		Indices:   []uint16{0, 1, 2, 0, 2, 3},
-		TextureID: texID,
-		BlendMode: backend.BlendSourceOver,
-		ShaderID:  0,
-		TargetID:  img.textureID,
-		ColorBody: colorMatrixIdentityBody,
-	})
+	)
 }
 
 // SubImage returns a sub-region of the image for sprite sheet support.
@@ -493,20 +491,19 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 		}
 	}
 
-	rend.batcher.Add(batch.DrawCommand{
-		Vertices: []batch.Vertex2D{
-			{PosX: float32(x0), PosY: float32(y0), TexU: 0, TexV: 0, R: cr, G: cg, B: cb, A: ca},
-			{PosX: float32(x1), PosY: float32(y1), TexU: 1, TexV: 0, R: cr, G: cg, B: cb, A: ca},
-			{PosX: float32(x2), PosY: float32(y2), TexU: 1, TexV: 1, R: cr, G: cg, B: cb, A: ca},
-			{PosX: float32(x3), PosY: float32(y3), TexU: 0, TexV: 1, R: cr, G: cg, B: cb, A: ca},
+	rend.batcher.AddQuadDirect(
+		batch.Vertex2D{PosX: float32(x0), PosY: float32(y0), TexU: 0, TexV: 0, R: cr, G: cg, B: cb, A: ca},
+		batch.Vertex2D{PosX: float32(x1), PosY: float32(y1), TexU: 1, TexV: 0, R: cr, G: cg, B: cb, A: ca},
+		batch.Vertex2D{PosX: float32(x2), PosY: float32(y2), TexU: 1, TexV: 1, R: cr, G: cg, B: cb, A: ca},
+		batch.Vertex2D{PosX: float32(x3), PosY: float32(y3), TexU: 0, TexV: 1, R: cr, G: cg, B: cb, A: ca},
+		batch.DrawCommand{
+			TextureID: texID,
+			BlendMode: blend,
+			ShaderID:  shader.id,
+			TargetID:  img.textureID,
+			ColorBody: colorMatrixIdentityBody,
 		},
-		Indices:   []uint16{0, 1, 2, 0, 2, 3},
-		TextureID: texID,
-		BlendMode: blend,
-		ShaderID:  shader.id,
-		TargetID:  img.textureID,
-		ColorBody: colorMatrixIdentityBody,
-	})
+	)
 }
 
 // DrawTrianglesShader draws triangles using a custom shader. This is the

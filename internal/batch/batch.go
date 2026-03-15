@@ -69,7 +69,20 @@ type Batcher struct {
 	commands    []DrawCommand
 	maxVertices int
 	maxIndices  int
+
+	// Arena pools for vertex/index data. Draw commands slice into these
+	// pre-allocated buffers, eliminating per-draw heap allocations.
+	vertexArena []Vertex2D
+	indexArena  []uint16
+	vertexPos   int
+	indexPos    int
 }
+
+// Default arena sizes — enough for ~256 quads before needing to grow.
+const (
+	defaultVertexArena = 1024 // 256 quads × 4 vertices
+	defaultIndexArena  = 1536 // 256 quads × 6 indices
+)
 
 // NewBatcher creates a new Batcher with the given capacity hints.
 func NewBatcher(maxVertices, maxIndices int) *Batcher {
@@ -77,11 +90,77 @@ func NewBatcher(maxVertices, maxIndices int) *Batcher {
 		commands:    make([]DrawCommand, 0, 256),
 		maxVertices: maxVertices,
 		maxIndices:  maxIndices,
+		vertexArena: make([]Vertex2D, defaultVertexArena),
+		indexArena:  make([]uint16, defaultIndexArena),
 	}
 }
 
-// Add adds a draw command to be batched.
+// allocVertices returns a slice of n vertices from the arena.
+// Grows the arena if needed.
+func (b *Batcher) allocVertices(n int) []Vertex2D {
+	if b.vertexPos+n > len(b.vertexArena) {
+		newSize := len(b.vertexArena) * 2
+		for newSize < b.vertexPos+n {
+			newSize *= 2
+		}
+		arena := make([]Vertex2D, newSize)
+		copy(arena, b.vertexArena[:b.vertexPos])
+		b.vertexArena = arena
+	}
+	s := b.vertexArena[b.vertexPos : b.vertexPos+n]
+	b.vertexPos += n
+	return s
+}
+
+// allocIndices returns a slice of n indices from the arena.
+// Grows the arena if needed.
+func (b *Batcher) allocIndices(n int) []uint16 {
+	if b.indexPos+n > len(b.indexArena) {
+		newSize := len(b.indexArena) * 2
+		for newSize < b.indexPos+n {
+			newSize *= 2
+		}
+		arena := make([]uint16, newSize)
+		copy(arena, b.indexArena[:b.indexPos])
+		b.indexArena = arena
+	}
+	s := b.indexArena[b.indexPos : b.indexPos+n]
+	b.indexPos += n
+	return s
+}
+
+// Add adds a draw command to be batched. The vertex and index data
+// is copied into the batcher's arena to avoid retaining caller memory.
 func (b *Batcher) Add(cmd DrawCommand) {
+	verts := b.allocVertices(len(cmd.Vertices))
+	copy(verts, cmd.Vertices)
+	idx := b.allocIndices(len(cmd.Indices))
+	copy(idx, cmd.Indices)
+	cmd.Vertices = verts
+	cmd.Indices = idx
+	b.commands = append(b.commands, cmd)
+}
+
+// AddQuadDirect adds a quad command by writing vertices directly into the
+// arena, avoiding any intermediate slice allocation. This is the
+// zero-allocation path for DrawImage, Fill, and DrawRectShader.
+func (b *Batcher) AddQuadDirect(v0, v1, v2, v3 Vertex2D, cmd DrawCommand) {
+	verts := b.allocVertices(4)
+	verts[0] = v0
+	verts[1] = v1
+	verts[2] = v2
+	verts[3] = v3
+
+	idx := b.allocIndices(6)
+	idx[0] = 0
+	idx[1] = 1
+	idx[2] = 2
+	idx[3] = 0
+	idx[4] = 2
+	idx[5] = 3
+
+	cmd.Vertices = verts
+	cmd.Indices = idx
 	b.commands = append(b.commands, cmd)
 }
 
@@ -94,15 +173,23 @@ func (b *Batcher) AddQuad(
 	blendMode backend.BlendMode,
 	shaderID uint32,
 ) {
-	baseIdx := uint16(0) // will be adjusted during batching
+	verts := b.allocVertices(4)
+	verts[0] = Vertex2D{PosX: x, PosY: y, TexU: u0, TexV: v0, R: r, G: g, B: bl, A: a}
+	verts[1] = Vertex2D{PosX: x + w, PosY: y, TexU: u1, TexV: v0, R: r, G: g, B: bl, A: a}
+	verts[2] = Vertex2D{PosX: x + w, PosY: y + h, TexU: u1, TexV: v1, R: r, G: g, B: bl, A: a}
+	verts[3] = Vertex2D{PosX: x, PosY: y + h, TexU: u0, TexV: v1, R: r, G: g, B: bl, A: a}
+
+	idx := b.allocIndices(6)
+	idx[0] = 0
+	idx[1] = 1
+	idx[2] = 2
+	idx[3] = 0
+	idx[4] = 2
+	idx[5] = 3
+
 	b.commands = append(b.commands, DrawCommand{
-		Vertices: []Vertex2D{
-			{PosX: x, PosY: y, TexU: u0, TexV: v0, R: r, G: g, B: bl, A: a},
-			{PosX: x + w, PosY: y, TexU: u1, TexV: v0, R: r, G: g, B: bl, A: a},
-			{PosX: x + w, PosY: y + h, TexU: u1, TexV: v1, R: r, G: g, B: bl, A: a},
-			{PosX: x, PosY: y + h, TexU: u0, TexV: v1, R: r, G: g, B: bl, A: a},
-		},
-		Indices:   []uint16{baseIdx, baseIdx + 1, baseIdx + 2, baseIdx, baseIdx + 2, baseIdx + 3},
+		Vertices:  verts,
+		Indices:   idx,
 		TextureID: textureID,
 		BlendMode: blendMode,
 		ShaderID:  shaderID,
@@ -191,6 +278,8 @@ func (b *Batcher) Flush() []Batch {
 
 	// Reset for next frame
 	b.commands = b.commands[:0]
+	b.vertexPos = 0
+	b.indexPos = 0
 
 	return batches
 }
@@ -198,6 +287,8 @@ func (b *Batcher) Flush() []Batch {
 // Reset clears accumulated commands without producing batches.
 func (b *Batcher) Reset() {
 	b.commands = b.commands[:0]
+	b.vertexPos = 0
+	b.indexPos = 0
 }
 
 // CommandCount returns the number of pending commands.

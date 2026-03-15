@@ -42,6 +42,35 @@ func TestFaceMetrics(t *testing.T) {
 	require.Greater(t, m.Height, m.Ascent)
 }
 
+func TestFaceClose(t *testing.T) {
+	cleanupAtlases(t)
+
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	target := futurerender.NewImage(200, 200)
+
+	// Draw to create atlas and cache entries.
+	Draw(target, "Hello", face, 10, 20, nil)
+	_, ok := globalAtlases[face]
+	require.True(t, ok, "atlas should exist after Draw")
+	require.NotEmpty(t, face.cache.entries)
+
+	// Close should remove the atlas and clear the cache.
+	face.Close()
+	_, ok = globalAtlases[face]
+	require.False(t, ok, "atlas should be removed after Close")
+	require.Empty(t, face.cache.entries)
+}
+
+func TestFaceCloseWithoutAtlas(t *testing.T) {
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	// Close on a face that was never used should not panic.
+	face.Close()
+}
+
 func TestFaceMeasure(t *testing.T) {
 	face, err := NewFace(goregular.TTF, 24)
 	require.NoError(t, err)
