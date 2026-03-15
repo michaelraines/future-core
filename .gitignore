@@ -1,3 +1,6 @@
 # Coverage artifacts
 cover.out
 coverage.html
+
+# Claude Code local settings
+.claude/
