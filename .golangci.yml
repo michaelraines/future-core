@@ -59,6 +59,37 @@ linters:
     misspell:
       locale: US
 
+  exclusions:
+    rules:
+      # Test files can use dot imports for convenience
+      - path: _test\.go
+        linters:
+          - revive
+        text: "dot-imports"
+
+      # Test files don't need exported function docs
+      - path: _test\.go
+        linters:
+          - revive
+        text: "exported"
+
+      # Allow unused params in test helpers
+      - path: _test\.go
+        linters:
+          - unparam
+
+      # Internal backend implementations have exported methods on unexported
+      # types to satisfy backend interfaces — no doc comments needed.
+      - path: internal/backend/.+\.go
+        linters:
+          - revive
+        text: "exported"
+
+      - path: internal/platform/.+\.go
+        linters:
+          - revive
+        text: "exported"
+
 formatters:
   enable:
     - gofmt
@@ -69,35 +100,5 @@ formatters:
         - github.com/michaelraines/future-render
 
 issues:
-  exclude-rules:
-    # Test files can use dot imports for convenience
-    - path: _test\.go
-      linters:
-        - revive
-      text: "dot-imports"
-
-    # Test files don't need exported function docs
-    - path: _test\.go
-      linters:
-        - revive
-      text: "exported"
-
-    # Allow unused params in test helpers
-    - path: _test\.go
-      linters:
-        - unparam
-
-    # Internal backend implementations have exported methods on unexported
-    # types to satisfy backend interfaces — no doc comments needed.
-    - path: internal/backend/.+\.go
-      linters:
-        - revive
-      text: "exported"
-
-    - path: internal/platform/.+\.go
-      linters:
-        - revive
-      text: "exported"
-
   max-issues-per-linter: 0
   max-same-issues: 0
