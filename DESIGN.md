@@ -57,13 +57,19 @@ future-render/
 │   ├── geom.go             # Rect, AABB, Frustum, Plane, Ray
 │   └── util.go             # Clamp, Lerp, etc.
 ├── internal/
-│   ├── backend/            # Graphics backend interface
+│   ├── backend/            # Graphics backend interface + registry
 │   │   ├── backend.go      # Device, Texture, Buffer, Shader, Pipeline,
 │   │   │                   # CommandEncoder, RenderTarget interfaces
 │   │   ├── types.go        # VertexFormat, BlendMode, TextureFormat, etc.
-│   │   ├── opengl/         # (Phase 1 implementation)
-│   │   ├── metal/          # (Future)
-│   │   └── webgl/          # (Future)
+│   │   ├── registry.go     # Backend factory registry: Register/Create/Available
+│   │   ├── conformance/    # Golden-image conformance test framework (10 scenes)
+│   │   ├── soft/           # Software rasterizer — reference backend, no GPU needed
+│   │   ├── opengl/         # OpenGL 3.3+ via purego (build tag: glfw)
+│   │   ├── webgl/          # WebGL2 — soft-delegating, ready for syscall/js
+│   │   ├── vulkan/         # Vulkan — soft-delegating, ready for purego libvulkan
+│   │   ├── metal/          # Metal — soft-delegating, ready for purego objc_msgSend
+│   │   ├── webgpu/         # WebGPU — soft-delegating, ready for wgpu-native
+│   │   └── dx12/           # DirectX 12 — soft-delegating, ready for purego d3d12.dll
 │   ├── pipeline/           # Render pass definitions and execution
 │   │   └── pass.go         # Pass interface, Pipeline, PassContext
 │   ├── batch/              # Draw call batching and sorting
@@ -103,12 +109,12 @@ The backend is defined by 7 interfaces (see `internal/backend/backend.go`):
 | Interface | Methods | Purpose |
 |---|---|---|
 | `Device` | 10 | GPU context: create resources, begin/end frame |
-| `Texture` | 5 | GPU texture: upload, query size/format, dispose |
+| `Texture` | 7 | GPU texture: upload, upload region, read pixels, query size/format, dispose |
 | `Buffer` | 4 | GPU buffer: upload data, query size, dispose |
-| `Shader` | 7 | Compiled shader: set uniforms, dispose |
-| `RenderTarget` | 4 | Off-screen framebuffer: attachments, dispose |
+| `Shader` | 7 | Compiled shader: set uniforms (float, vec2, vec4, mat4, int, block), dispose |
+| `RenderTarget` | 5 | Off-screen framebuffer: color/depth attachments, size, dispose |
 | `Pipeline` | 1 | Pre-compiled render state: dispose |
-| `CommandEncoder` | 10 | Record and submit draw commands |
+| `CommandEncoder` | 14 | Record and submit draw commands, bind state, set viewport/scissor |
 
 ### Why Not a Single Large Interface
 
@@ -118,13 +124,30 @@ render targets (e.g., a software rasterizer for testing) only needs to stub `Ren
 
 ### Backend Selection
 
-Required backends: OpenGL 3.3+ (desktop), WebGL2 (web/WASM), Vulkan (desktop/Android).
-Future: Metal, WebGPU, DirectX 12.
+Seven backends are implemented, each registered via `init()` in the backend
+registry (`internal/backend/registry.go`):
+
+| Backend | Package | Status | Platform |
+|---|---|---|---|
+| Software | `soft/` | Production — CPU rasterizer, headless CI reference | All |
+| OpenGL 3.3 | `opengl/` | Production — purego, no CGo | Desktop (glfw tag) |
+| WebGL2 | `webgl/` | Soft-delegating — ready for syscall/js | Browser (WASM) |
+| Vulkan | `vulkan/` | Soft-delegating — ready for purego libvulkan | Linux/Windows/Android |
+| Metal | `metal/` | Soft-delegating — ready for purego objc_msgSend | macOS/iOS |
+| WebGPU | `webgpu/` | Soft-delegating — ready for wgpu-native | Cross-platform |
+| DirectX 12 | `dx12/` | Soft-delegating — ready for purego d3d12.dll | Windows |
+
+"Soft-delegating" backends wrap the software rasterizer so conformance tests
+pass in any environment. When real GPU bindings are added, only the delegation
+layer needs replacement — the type structure and API surface are already in place.
 
 Selection is compile-time via build tags and runtime via environment variable:
 ```
-FUTURE_RENDER_BACKEND=opengl|webgl|vulkan|auto
+FUTURE_RENDER_BACKEND=opengl|webgl|vulkan|metal|webgpu|dx12|soft|auto
 ```
+
+The `backend.Create(name)` function looks up the named factory in the registry.
+`backend.Available()` returns all registered backend names.
 
 ---
 
@@ -237,8 +260,14 @@ minimum per package via `make cover-check`. See `CLAUDE.md` for details.
 - **Mock-based tests**: GPU code paths tested with mock `backend.Device` and
   `backend.Texture` implementations (see `image_test.go`).
 - **Benchmarks**: Vec2 ops, Mat4 multiply/inverse, quaternion slerp, batch flush.
-- **Integration tests** (future): Render known scenes, compare against golden images.
-  Will use a headless OpenGL context or software rasterizer.
+- **Conformance tests** (`internal/backend/conformance/`): Golden-image integration
+  tests that render 10 canonical scenes through any `backend.Device` and compare
+  pixel output against reference PNGs (±3 tolerance per channel). The software
+  rasterizer (`internal/backend/soft/`) serves as the reference implementation.
+  New backends call `conformance.RunAll(t, dev, enc)` to verify correctness.
+  On failure, `_actual.png` and `_diff.png` artifacts are saved for debugging.
+  All 7 backends (soft, opengl, webgl, vulkan, metal, webgpu, dx12) pass the
+  full 10-scene conformance suite.
 - **Fuzz tests** (future): Asset parsers (image, font, audio).
 
 ---

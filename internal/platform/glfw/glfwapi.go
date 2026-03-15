@@ -116,6 +116,10 @@ const (
 	glfwModControl = 0x0002
 	glfwModAlt     = 0x0004
 	glfwModSuper   = 0x0008
+
+	// Joystick IDs.
+	glfwJoystick1    = 0
+	glfwJoystickLast = 15
 )
 
 // ---------------------------------------------------------------------------
@@ -150,6 +154,11 @@ var (
 	fnGlfwSetCursorPosCallback       func(window, cbfun uintptr) uintptr
 	fnGlfwSetScrollCallback          func(window, cbfun uintptr) uintptr
 	fnGlfwSetFramebufferSizeCallback func(window, cbfun uintptr) uintptr
+
+	// Joystick/gamepad functions.
+	fnGlfwJoystickPresent    func(jid int32) int32
+	fnGlfwGetJoystickAxes    func(jid int32, count *int32) uintptr
+	fnGlfwGetJoystickButtons func(jid int32, count *int32) uintptr
 )
 
 // glfwVideoMode mirrors the C GLFWvidmode struct.
@@ -214,6 +223,9 @@ func initGLFWAPI() error {
 		{&fnGlfwSetCursorPosCallback, "glfwSetCursorPosCallback"},
 		{&fnGlfwSetScrollCallback, "glfwSetScrollCallback"},
 		{&fnGlfwSetFramebufferSizeCallback, "glfwSetFramebufferSizeCallback"},
+		{&fnGlfwJoystickPresent, "glfwJoystickPresent"},
+		{&fnGlfwGetJoystickAxes, "glfwGetJoystickAxes"},
+		{&fnGlfwGetJoystickButtons, "glfwGetJoystickButtons"},
 	} {
 		if ferr := must(e.fn, e.name); ferr != nil {
 			return ferr

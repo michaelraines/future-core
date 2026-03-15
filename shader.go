@@ -94,6 +94,11 @@ func newShaderFromGLSLInternal(vertSrc, fragSrc []byte, uniforms []shaderir.Unif
 		globalRenderer.registerShader(id, s)
 	}
 
+	// Track for context loss recovery.
+	if globalTracker != nil {
+		globalTracker.TrackShader(s, string(vertSrc), string(fragSrc), uniforms)
+	}
+
 	return s, nil
 }
 
@@ -103,6 +108,12 @@ func (s *Shader) Deallocate() {
 		return
 	}
 	s.disposed = true
+
+	// Untrack from context loss recovery.
+	if globalTracker != nil {
+		globalTracker.UntrackShader(s)
+	}
+
 	if s.pipeline != nil {
 		s.pipeline.Dispose()
 	}

@@ -55,6 +55,37 @@ There are no external Go dependencies yet (`go.mod` has only the standard
 library). When platform backends are added, they will use build tags
 (`-tags glfw`).
 
+### Known CI Limitation: Audio Packages Excluded
+
+The `audio/` package depends on `github.com/ebitengine/oto/v3`, which uses
+CGo and requires ALSA development headers (`libasound2-dev` / `alsa.pc`) on
+Linux. These headers are not installed in the CI environment, so **all audio
+packages (`audio/`, `audio/vorbis/`, `audio/wav/`) are excluded** from the
+default `make` targets (vet, lint, test, build, coverage).
+
+The exclusion is implemented in the `Makefile` via the `PKGS` and `LINT_PATHS`
+variables, which filter out packages matching `/audio`. The CI workflow
+(`.github/workflows/ci.yml`) delegates linting to `make lint` so it respects
+the same exclusion.
+
+**To resolve this in the future**, choose one of:
+1. **Install ALSA headers in CI** — add `sudo apt-get install -y libasound2-dev`
+   to the workflow, then remove the `grep -v /audio` filters from the Makefile.
+2. **Use a build tag** — gate audio packages behind `//go:build audio` (similar
+   to the `glfw` tag used by `cmd/` examples and platform code), so they are
+   excluded by default and only built/tested with `-tags audio`.
+3. **Use a pure-Go audio backend** — replace `oto/v3` with a backend that
+   doesn't require CGo, eliminating the system dependency entirely.
+
+Until resolved, to test audio locally you need ALSA headers installed:
+```bash
+# Ubuntu/Debian
+sudo apt-get install libasound2-dev
+
+# Then test audio packages directly
+go test ./audio/...
+```
+
 ## Architecture Rules
 
 These are non-negotiable. Violating them creates technical debt that compounds.
@@ -78,6 +109,49 @@ These are non-negotiable. Violating them creates technical debt that compounds.
 
 5. **Interfaces are defined by consumers, not implementors.** Follow Go
    interface design conventions. Keep interfaces small and focused.
+
+## Multi-Backend Architecture
+
+Seven backends implement the `backend.Device` and `backend.CommandEncoder`
+interfaces. Read `internal/backend/CLAUDE.md` for detailed backend
+development guidance.
+
+### Backend Registry
+
+All backends self-register via `init()` in their `register.go` files using
+`backend.Register(name, factory)`. The engine selects a backend via the
+`FUTURE_RENDER_BACKEND` env var (values: `opengl`, `webgl`, `vulkan`,
+`metal`, `webgpu`, `dx12`, `soft`, `auto`).
+
+### Soft-Delegation Pattern
+
+Five backends (webgl, vulkan, metal, webgpu, dx12) delegate rendering to
+the software rasterizer (`internal/backend/soft/`). This lets all backends
+pass the 10-scene conformance suite in CI without GPU hardware. Each backend
+wraps soft types and adds API-specific constants/types for the target GPU API.
+
+**When converting a soft-delegating backend to real GPU bindings**: replace
+the `inner` delegation in each method with actual GPU API calls. The type
+structure, registration, conformance tests, and coverage are already in place.
+
+### Conformance Testing
+
+Every backend must pass `conformance.RunAll(t, dev, enc)` which renders
+10 canonical scenes and compares pixel output against golden PNGs (±3
+tolerance). Golden images are auto-generated on first run. See
+`internal/backend/conformance/conformance.go` for the full scene list.
+
+### Backend Coverage
+
+| Backend | Package | Coverage | Conformance |
+|---|---|---|---|
+| Software | `internal/backend/soft/` | 91% | 10/10 |
+| OpenGL | `internal/backend/opengl/` | (build-tagged) | N/A in CI |
+| WebGL2 | `internal/backend/webgl/` | 92% | 10/10 |
+| Vulkan | `internal/backend/vulkan/` | 92% | 10/10 |
+| Metal | `internal/backend/metal/` | 90% | 10/10 |
+| WebGPU | `internal/backend/webgpu/` | 91% | 10/10 |
+| DirectX 12 | `internal/backend/dx12/` | 90% | 10/10 |
 
 ## Development Workflow
 
@@ -236,7 +310,14 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
 | `internal/batch/` | 80% | 100% | Core optimization logic, must be correct |
 | `internal/pipeline/` | 80% | 100% | Test pass ordering, context, sprite pass |
 | `internal/input/` | 80% | 100% | Test state transitions, edge detection |
-| `internal/backend/` | Excluded | — | Interface definitions only; implementations tested via integration |
+| `internal/backend/` | 80% | — | Interface definitions + registry; minimal tests |
+| `internal/backend/soft/` | 80% | 100% | CPU rasterizer + Device impl; reference backend for conformance |
+| `internal/backend/conformance/` | 80% | 100% | Golden-image test framework; exercises full pipeline |
+| `internal/backend/webgl/` | 80% | 100% | WebGL2 soft-delegating backend; conformance + unit tests |
+| `internal/backend/vulkan/` | 80% | 100% | Vulkan soft-delegating backend; conformance + unit tests |
+| `internal/backend/metal/` | 80% | 100% | Metal soft-delegating backend; conformance + unit tests |
+| `internal/backend/webgpu/` | 80% | 100% | WebGPU soft-delegating backend; conformance + unit tests |
+| `internal/backend/dx12/` | 80% | 100% | DirectX 12 soft-delegating backend; conformance + unit tests |
 | `internal/platform/` | Excluded | — | Interface definitions only; implementations tested via integration |
 | Public API (root) | 80% | 100% | Image, GeoM, DrawImage, options, type mapping |
 
@@ -245,6 +326,44 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
 Use mock implementations of `backend.Device` and `backend.Texture` to test
 GPU code paths in unit tests. See `image_test.go` for the established pattern:
 `mockDevice`, `mockTexture`, and the `withMockRenderer` helper.
+
+### Conformance Testing (Golden Images)
+
+The golden-image conformance framework in `internal/backend/conformance/`
+verifies that any `backend.Device` implementation produces correct pixel
+output. It renders 10 canonical scenes and compares against reference PNG
+images with a per-channel tolerance of ±3.
+
+**Running conformance tests:**
+```bash
+go test ./internal/backend/conformance/ -v   # Run against soft backend
+```
+
+**Adding a new backend to conformance:**
+```go
+// In your_backend_test.go:
+func TestConformance(t *testing.T) {
+    dev := yourbackend.New()
+    require.NoError(t, dev.Init(backend.DeviceConfig{
+        Width: conformance.SceneSize, Height: conformance.SceneSize,
+    }))
+    defer dev.Dispose()
+    conformance.RunAll(t, dev, dev.Encoder())
+}
+```
+
+**Updating golden images** (after intentional rasterizer changes):
+```bash
+rm internal/backend/conformance/testdata/golden/*.png
+go test ./internal/backend/conformance/ -v   # Regenerates all goldens
+```
+
+**On failure**, the framework saves `_actual.png` and `_diff.png` artifacts
+in `testdata/golden/diff/` for visual debugging.
+
+**Test scenes** cover: clear, solid triangles, vertex-color interpolation,
+textured quads, blend modes (source-over, additive), scissor clipping, and
+orthographic projection.
 
 ### Coverage Commands
 

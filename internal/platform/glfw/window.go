@@ -7,6 +7,7 @@ package glfw
 import (
 	"fmt"
 	"runtime"
+	"unsafe"
 
 	"github.com/ebitengine/purego"
 
@@ -37,6 +38,9 @@ type Window struct {
 	cursorPosCB   uintptr
 	scrollCB      uintptr
 	framebufferCB uintptr
+
+	// Track previously connected gamepads for disconnect detection.
+	connectedGamepads [glfwJoystickLast + 1]bool
 }
 
 // New creates a new GLFW window (uninitialized — call Create to open it).
@@ -209,6 +213,66 @@ func (w *Window) NativeHandle() uintptr {
 // SetInputHandler sets the handler for input events.
 func (w *Window) SetInputHandler(handler platform.InputHandler) {
 	w.handler = handler
+}
+
+// PollGamepads queries GLFW for connected joysticks and dispatches
+// GamepadEvent to the input handler. GLFW joystick input uses a polling
+// API rather than callbacks, so this must be called each frame.
+func (w *Window) PollGamepads() {
+	if w.handler == nil {
+		return
+	}
+	for jid := int32(glfwJoystick1); jid <= int32(glfwJoystickLast); jid++ {
+		present := fnGlfwJoystickPresent(jid) != 0
+
+		if !present {
+			// Send disconnect event if previously connected.
+			if w.connectedGamepads[jid] {
+				w.connectedGamepads[jid] = false
+				w.handler.OnGamepadEvent(platform.GamepadEvent{
+					ID:           int(jid),
+					Disconnected: true,
+				})
+			}
+			continue
+		}
+
+		w.connectedGamepads[jid] = true
+
+		var event platform.GamepadEvent
+		event.ID = int(jid)
+
+		// Read axes.
+		var axisCount int32
+		axesPtr := fnGlfwGetJoystickAxes(jid, &axisCount)
+		if axesPtr != 0 && axisCount > 0 {
+			n := int(axisCount)
+			if n > len(event.Axes) {
+				n = len(event.Axes)
+			}
+			for i := 0; i < n; i++ {
+				event.Axes[i] = float64(*(*float32)(
+					unsafe.Pointer(axesPtr + uintptr(i)*unsafe.Sizeof(float32(0))),
+				))
+			}
+		}
+
+		// Read buttons.
+		var buttonCount int32
+		buttonsPtr := fnGlfwGetJoystickButtons(jid, &buttonCount)
+		if buttonsPtr != 0 && buttonCount > 0 {
+			n := int(buttonCount)
+			if n > len(event.Buttons) {
+				n = len(event.Buttons)
+			}
+			for i := 0; i < n; i++ {
+				b := *(*byte)(unsafe.Pointer(buttonsPtr + uintptr(i)))
+				event.Buttons[i] = b == byte(glfwPress)
+			}
+		}
+
+		w.handler.OnGamepadEvent(event)
+	}
 }
 
 // activeWindows maps GLFW window handles to Window instances for callbacks.

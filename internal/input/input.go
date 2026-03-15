@@ -124,7 +124,16 @@ func (s *State) OnTouchEvent(event platform.TouchEvent) {
 
 // OnGamepadEvent handles a gamepad state update.
 func (s *State) OnGamepadEvent(event platform.GamepadEvent) {
+	if event.Disconnected {
+		delete(s.gamepads, event.ID)
+		return
+	}
 	s.gamepads[event.ID] = Gamepad{Axes: event.Axes, Buttons: event.Buttons}
+}
+
+// RemoveGamepad removes a gamepad from the state (disconnected).
+func (s *State) RemoveGamepad(id int) {
+	delete(s.gamepads, id)
 }
 
 // OnResizeEvent handles a window resize. No-op for input state.

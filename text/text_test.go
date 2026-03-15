@@ -350,3 +350,219 @@ func TestFixedFloorCeil(t *testing.T) {
 	require.Equal(t, 1, fixedCeil(64))
 	require.Equal(t, 0, fixedCeil(0))
 }
+
+// --- Multi-line text tests ---
+
+func TestDrawMultiline(t *testing.T) {
+	cleanupAtlases(t)
+
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	target := futurerender.NewImage(400, 400)
+	// Should not panic with multi-line text.
+	Draw(target, "Hello\nWorld", face, 10, 20, nil)
+}
+
+func TestDrawMultilineWithAlignment(t *testing.T) {
+	cleanupAtlases(t)
+
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	target := futurerender.NewImage(400, 400)
+
+	for _, align := range []Align{AlignLeft, AlignCenter, AlignRight} {
+		opts := &DrawOptions{Align: align}
+		Draw(target, "Short\nLonger line here", face, 10, 20, opts)
+	}
+}
+
+// --- Word wrapping tests ---
+
+func TestWrapLines(t *testing.T) {
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	// Measure a known word to set a reasonable maxWidth.
+	wordW := face.Measure("Hello")
+	require.Greater(t, wordW, 0.0)
+
+	// Two words that fit on one line.
+	lines := WrapLines("Hello World", face, wordW*3)
+	require.Equal(t, []string{"Hello World"}, lines)
+
+	// Two words that don't fit on one line.
+	lines = WrapLines("Hello World", face, wordW*1.5)
+	require.Len(t, lines, 2)
+	require.Equal(t, "Hello", lines[0])
+	require.Equal(t, "World", lines[1])
+}
+
+func TestWrapLinesPreservesNewlines(t *testing.T) {
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	lines := WrapLines("Hello\nWorld", face, 1000)
+	require.Equal(t, []string{"Hello", "World"}, lines)
+}
+
+func TestWrapLinesEmptyParagraphs(t *testing.T) {
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	lines := WrapLines("A\n\nB", face, 1000)
+	require.Equal(t, []string{"A", "", "B"}, lines)
+}
+
+func TestWrapLinesLongWord(t *testing.T) {
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	// A single long word always stays on its own line.
+	lines := WrapLines("Supercalifragilistic", face, 10)
+	require.Len(t, lines, 1)
+	require.Equal(t, "Supercalifragilistic", lines[0])
+}
+
+func TestWrapLinesNilFace(t *testing.T) {
+	lines := WrapLines("Hello", nil, 100)
+	require.Equal(t, []string{"Hello"}, lines)
+}
+
+func TestWrapLinesZeroWidth(t *testing.T) {
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	lines := WrapLines("Hello", face, 0)
+	require.Equal(t, []string{"Hello"}, lines)
+}
+
+func TestDrawWrapped(t *testing.T) {
+	cleanupAtlases(t)
+
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	target := futurerender.NewImage(400, 400)
+	// Should not panic.
+	DrawWrapped(target, "The quick brown fox jumps over the lazy dog", face, 10, 20, 200, nil)
+}
+
+func TestDrawWrappedNilTarget(t *testing.T) {
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+	DrawWrapped(nil, "Hello", face, 0, 0, 100, nil)
+}
+
+func TestDrawWrappedWithAlignment(t *testing.T) {
+	cleanupAtlases(t)
+
+	face, err := NewFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	target := futurerender.NewImage(400, 400)
+	opts := &DrawOptions{Align: AlignCenter}
+	DrawWrapped(target, "Short\nA much longer line", face, 10, 20, 300, opts)
+}
+
+// --- splitWords tests ---
+
+func TestSplitWords(t *testing.T) {
+	require.Equal(t, []string{"Hello", "World"}, splitWords("Hello World"))
+	require.Equal(t, []string{"One"}, splitWords("  One  "))
+	require.Empty(t, splitWords("   "))
+	require.Empty(t, splitWords(""))
+	require.Equal(t, []string{"A", "B", "C"}, splitWords("A  B\tC"))
+}
+
+// --- Alignment constants test ---
+
+func TestAlignConstants(t *testing.T) {
+	require.Equal(t, Align(0), AlignLeft)
+	require.Equal(t, Align(1), AlignCenter)
+	require.Equal(t, Align(2), AlignRight)
+}
+
+// --- Shaping tests ---
+
+func TestNewShaperFace(t *testing.T) {
+	face, err := NewShaperFace(goregular.TTF, 24)
+	require.NoError(t, err)
+	require.NotNil(t, face)
+
+	m := face.Metrics()
+	require.Greater(t, m.Height, 0.0)
+	require.Greater(t, m.Ascent, 0.0)
+	require.Greater(t, m.Descent, 0.0)
+}
+
+func TestNewShaperFaceInvalidData(t *testing.T) {
+	_, err := NewShaperFace([]byte("not a font"), 24)
+	require.Error(t, err)
+}
+
+func TestShaperFaceShape(t *testing.T) {
+	face, err := NewShaperFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	glyphs := face.Shape("Hello")
+	require.NotEmpty(t, glyphs)
+	// Each glyph should have positive advance for Latin text.
+	for _, g := range glyphs {
+		require.Greater(t, g.XAdvance, 0.0, "glyph %d", g.GlyphID)
+	}
+}
+
+func TestShaperFaceShapeEmpty(t *testing.T) {
+	face, err := NewShaperFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	glyphs := face.Shape("")
+	require.Empty(t, glyphs)
+}
+
+func TestShaperFaceShapeBidi(t *testing.T) {
+	face, err := NewShaperFace(goregular.TTF, 24)
+	require.NoError(t, err)
+
+	// Mixed LTR + RTL text (Hebrew characters).
+	glyphs := face.ShapeBidi("Hello \u05E9\u05DC\u05D5\u05DD World")
+	require.NotEmpty(t, glyphs)
+}
+
+// --- BiDi run splitting tests ---
+
+func TestSplitBidiRunsLTR(t *testing.T) {
+	runs := splitBidiRuns("Hello World")
+	require.Len(t, runs, 1)
+	require.Equal(t, "Hello World", runs[0].text)
+}
+
+func TestSplitBidiRunsRTL(t *testing.T) {
+	runs := splitBidiRuns("\u05E9\u05DC\u05D5\u05DD")
+	require.Len(t, runs, 1)
+}
+
+func TestSplitBidiRunsMixed(t *testing.T) {
+	runs := splitBidiRuns("Hello \u05E9\u05DC\u05D5\u05DD World")
+	require.Greater(t, len(runs), 1)
+}
+
+func TestSplitBidiRunsEmpty(t *testing.T) {
+	runs := splitBidiRuns("")
+	require.Nil(t, runs)
+}
+
+func TestRuneDirection(t *testing.T) {
+	require.False(t, isRTLRune('A'))
+	require.False(t, isRTLRune('z'))
+	require.True(t, isRTLRune('\u05E9')) // Hebrew Shin
+	require.True(t, isRTLRune('\u0627')) // Arabic Alef
+}
+
+func TestRuneScript(t *testing.T) {
+	require.NotZero(t, runeScript('A'))
+	require.NotZero(t, runeScript('\u05E9'))
+	require.NotZero(t, runeScript('\u0627'))
+}

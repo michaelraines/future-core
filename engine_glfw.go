@@ -280,6 +280,7 @@ func (e *engine) run() error {
 			for accumulator >= tickDuration {
 				inputState.Update()
 				win.PollEvents()
+				win.PollGamepads()
 				if err := e.game.Update(); err != nil {
 					if errors.Is(err, ErrTermination) {
 						return nil
@@ -293,6 +294,7 @@ func (e *engine) run() error {
 			// Uncapped: one update per frame.
 			inputState.Update()
 			win.PollEvents()
+			win.PollGamepads()
 			if err := e.game.Update(); err != nil {
 				if errors.Is(err, ErrTermination) {
 					return nil

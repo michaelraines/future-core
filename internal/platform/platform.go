@@ -51,6 +51,10 @@ type Window interface {
 
 	// SetInputHandler sets the handler for input events.
 	SetInputHandler(handler InputHandler)
+
+	// PollGamepads queries connected gamepads and dispatches events.
+	// This must be called each frame since gamepad input is polling-based.
+	PollGamepads()
 }
 
 // WindowConfig holds configuration for window creation.
@@ -126,9 +130,10 @@ type TouchEvent struct {
 
 // GamepadEvent represents a gamepad state update.
 type GamepadEvent struct {
-	ID      int
-	Axes    [6]float64
-	Buttons [16]bool
+	ID           int
+	Axes         [6]float64
+	Buttons      [16]bool
+	Disconnected bool // true if the gamepad was disconnected
 }
 
 // Action represents an input action.

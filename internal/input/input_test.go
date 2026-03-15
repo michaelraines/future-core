@@ -299,6 +299,35 @@ func TestGamepadButtonOutOfBounds(t *testing.T) {
 	require.False(t, s.GamepadButton(0, 100))
 }
 
+func TestGamepadDisconnect(t *testing.T) {
+	s := New()
+
+	// Connect gamepad.
+	axes := [6]float64{0.5, -0.3, 0, 0, 0, 0}
+	buttons := [16]bool{true}
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Axes: axes, Buttons: buttons})
+	require.Len(t, s.GamepadIDs(), 1)
+
+	// Disconnect via event.
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Disconnected: true})
+	require.Empty(t, s.GamepadIDs())
+	require.InDelta(t, 0.0, s.GamepadAxis(0, 0), 1e-9)
+	require.False(t, s.GamepadButton(0, 0))
+}
+
+func TestRemoveGamepad(t *testing.T) {
+	s := New()
+
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 1, Axes: [6]float64{1.0}})
+	require.Len(t, s.GamepadIDs(), 1)
+
+	s.RemoveGamepad(1)
+	require.Empty(t, s.GamepadIDs())
+
+	// Removing a non-existent gamepad is safe.
+	s.RemoveGamepad(99)
+}
+
 // --- Character input ---
 
 func TestOnCharEvent(t *testing.T) {

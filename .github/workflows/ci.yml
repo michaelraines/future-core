@@ -33,11 +33,14 @@ jobs:
       - name: Vet
         run: make vet
 
-      - name: Lint
-        uses: golangci/golangci-lint-action@v6
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
-          args: ./...
+          version: v2.5.0
+          install-only: true
+
+      - name: Lint
+        run: make lint
 
       - name: Test
         run: make test
