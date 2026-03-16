@@ -452,7 +452,104 @@ fields. CI expanded with `cross-platform` job testing on macOS and Windows.
 
 ---
 
-## Milestone 10 — 3D Rendering (Future)
+## Milestone 10 — Native Platform Backends (In Progress)
+
+Goal: eliminate the system GLFW install requirement. `go run ./cmd/driver`
+must "just work" on a fresh machine with only Go installed — matching
+Ebitengine's zero-install developer experience.
+
+**Strategy** (mirrors Ebitengine's approach):
+- **Linux/BSD**: Vendor GLFW C source, compile via CGo. Static linking means
+  no `libglfw.so` needed at runtime.
+- **macOS**: Call Cocoa/AppKit directly via purego. System frameworks are
+  always present — no GLFW dependency at all.
+- **Windows**: Call Win32 APIs directly via `golang.org/x/sys/windows`
+  syscalls. Win32 is always present — no GLFW dependency at all.
+
+OpenGL loading (`internal/gl/`) is unaffected — `OpenGL.framework` (macOS),
+`opengl32.dll` (Windows), and `libGL.so` (Linux) are always system-provided.
+
+### 10a — Linux/BSD: Vendored GLFW via CGo (Done)
+
+Vendor GLFW 3.4 C source into the repo and compile it directly via CGo,
+eliminating the runtime `libglfw.so` dependency. Follows Ebitengine's
+`internal/glfw/` pattern: GLFW `.c`/`.h` files with Go build constraints,
+thin Go wrappers via `import "C"`.
+
+| Task | Status | Notes |
+|---|---|---|
+| Vendor GLFW 3.4 source (`internal/platform/glfw/cglfw/`) | Done | 38 C source + headers, zlib/libpng license compatible |
+| CGo bridge (`glfwapi_cgo.go`, `callbacks_cgo.go`) | Done | Wraps C functions into Go function pointer vars |
+| Build constraints `//go:build linux \|\| freebsd` | Done | CGo path only on Linux/BSD |
+| Shared constants + function pointers (`glfwconst.go`) | Done | Platform-neutral, used by both CGo and purego paths |
+| purego path preserved for macOS/Windows (`glfwapi_purego.go`) | Done | `//go:build darwin \|\| windows` |
+| X11 support via vendored GLFW | Done | Needs X11 dev headers at build time |
+| Gamepad input via vendored GLFW | Done | Same joystick API, now compiled in |
+| CI needs `libxcursor-dev` etc. for X11 headers | Planned | Add to CI apt-get step |
+
+### 10b — macOS: Cocoa/AppKit via purego (Done)
+
+Native macOS windowing without GLFW. Uses purego to call Objective-C runtime
+(`objc_msgSend`) and AppKit/Cocoa classes directly. Zero CGo — pure Go.
+
+| Task | Status | Notes |
+|---|---|---|
+| Cocoa platform package (`internal/platform/cocoa/`) | Done | Implements full `platform.Window` interface |
+| NSApplication setup + event polling | Done | `sharedApplication`, `finishLaunching`, `nextEventMatchingMask` loop |
+| NSWindow creation | Done | `initWithContentRect:styleMask:backing:defer:` |
+| NSOpenGLContext for OpenGL rendering | Done | `NSOpenGLPixelFormat` + `makeCurrentContext` + VSync |
+| Keyboard events via FRContentView | Done | `keyDown`/`keyUp`/`flagsChanged` → `InputHandler.OnKeyEvent` |
+| Mouse events via FRContentView | Done | Button, move, scroll → `InputHandler.OnMouse*Event` |
+| Character input via `keyDown:` characters | Done | UTF-8 decoding → `InputHandler.OnCharEvent` |
+| Window resize + high-DPI (`backingScaleFactor`) | Done | FRWindowDelegate `windowDidResize:`, `convertRectToBacking:` |
+| Fullscreen toggle | Done | `toggleFullScreen:` on NSWindow |
+| Cursor visibility + lock | Done | `NSCursor hide`/`unhide`, `CGAssociateMouseAndMouseCursorPosition` |
+| macOS keycode mapping (108 keys) | Done | `keymap.go` — Carbon virtual key codes → platform.Key |
+| Custom ObjC classes (FRWindowDelegate, FRContentView) | Done | `objc.RegisterClass` with ivars for Go pointer |
+| Gamepad via GCController framework | Done | Polls `GCController.controllers`, reads `extendedGamepad` profile |
+| Build constraint `//go:build darwin` | Done | Cross-compiles clean on arm64 + amd64 |
+
+### 10c — Windows: Win32 via syscalls (Done)
+
+Native Windows windowing without GLFW. Uses `syscall.NewLazyDLL` for
+Win32 API calls. Zero CGo — pure Go with syscalls.
+
+| Task | Status | Notes |
+|---|---|---|
+| Win32 platform package (`internal/platform/win32/`) | Done | Implements full `platform.Window` interface |
+| Window class registration + `CreateWindowExW` | Done | WNDCLASS + centered window |
+| WGL context for OpenGL rendering | Done | `wglCreateContext`, `wglMakeCurrent`, pixel format |
+| VSync via `wglSwapIntervalEXT` | Done | Dynamic extension loading |
+| `WndProc` message dispatch | Done | Full message handling for input events |
+| `WM_KEYDOWN`/`WM_KEYUP`/`WM_SYSKEY*` | Done | Repeat detection, modifier mapping |
+| Mouse messages (move, buttons, wheel, H-wheel, X-buttons) | Done | All 5 buttons + delta tracking |
+| Character input (`WM_CHAR`) | Done | → `InputHandler.OnCharEvent` |
+| Window resize (`WM_SIZE`) | Done | → `InputHandler.OnResizeEvent` |
+| Fullscreen toggle | Done | Style change + `SetWindowPos` to monitor rect |
+| Cursor visibility + lock (`ShowCursor`, `ClipCursor`) | Done | Show/hide + confine to client rect |
+| Virtual key mapping (100+ keys) | Done | `keymap.go` — VK codes → platform.Key |
+| Gamepad via XInput | Done | Polls up to 4 controllers, dead zone filtering, axis/button mapping |
+| DPI awareness (per-monitor) | Done | `SetProcessDpiAwarenessContext` (V2) with V1/Vista fallbacks, `WM_DPICHANGED` |
+| Build constraint `//go:build windows` | Done | Cross-compiles clean on amd64 |
+
+### 10d — Integration + Cleanup (In Progress)
+
+| Task | Status | Notes |
+|---|---|---|
+| Engine selects native platform per OS | Done | `platform_darwin.go` / `platform_windows.go` / `platform_unix.go` via build tags |
+| `engine_desktop.go` decoupled from GLFW | Done | Uses `newPlatformWindow()` — no direct GLFW import |
+| Cross-compilation verified | Done | darwin/arm64, darwin/amd64, windows/amd64 all clean |
+| Update CI: add X11 dev headers for Linux | Done | `libxcursor-dev`, `libxrandr-dev`, `libxi-dev`, `libxinerama-dev`, `libxxf86vm-dev` |
+| Remove system GLFW requirement from docs | Planned | Update README, DESIGN.md |
+| Cross-platform CI validation | Planned | GitHub Actions matrix: Linux (CGo GLFW), macOS (Cocoa), Windows (Win32) |
+
+**Exit criteria**: `go run ./cmd/driver` opens a window and runs on Linux,
+macOS, and Windows with no system library installs beyond Go and a C compiler
+(Linux only).
+
+---
+
+## Milestone 11 — 3D Rendering (Future)
 
 Goal: 3D mesh rendering, lighting, materials — as described in FUTURE_3D.md.
 
@@ -479,14 +576,20 @@ These guide every milestone:
    existing working code.
 2. **Tests before merge** — every milestone must pass `go test ./...` and
    `go vet ./...`.
-3. **No CGo anywhere** — the entire engine is pure Go. OpenGL and GLFW are
-   loaded at runtime via purego (`internal/gl/`, `internal/platform/glfw/`).
+3. **CGo only in platform packages** — CGo is permitted in
+   `internal/platform/<impl>/` and `internal/backend/<impl>/` for native
+   bindings. Core packages (`math/`, `internal/batch/`, `internal/pipeline/`,
+   `internal/input/`) remain pure Go. OpenGL is loaded via purego
+   (`internal/gl/`).
 4. **Ebitengine API compatibility** — public API names and signatures match
    Ebitengine where possible, enabling straightforward migration.
 5. **3D-ready from day one** — no 2D-only assumptions in internal layers. See
    FUTURE_3D.md for constraints.
 6. **Manual texture management** — no automatic atlas. Users control GPU memory
    explicitly, with optional atlas utilities.
+7. **Zero-install on macOS and Windows** — platform backends use only
+   system-provided frameworks (Cocoa, Win32, OpenGL). No shared library
+   installs required. Linux requires only a C compiler for CGo GLFW.
 
 ---
 

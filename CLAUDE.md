@@ -105,7 +105,8 @@ These are non-negotiable. Violating them creates technical debt that compounds.
 
 4. **No CGo in core packages.** `math/`, `internal/batch/`,
    `internal/pipeline/`, `internal/input/` must remain pure Go. CGo is
-   permitted only in `internal/backend/<impl>/` and `internal/platform/<impl>/`.
+   permitted in `internal/backend/<impl>/` and `internal/platform/<impl>/`
+   (e.g., vendored GLFW on Linux, native Cocoa/Win32 bindings).
 
 5. **Interfaces are defined by consumers, not implementors.** Follow Go
    interface design conventions. Keep interfaces small and focused.

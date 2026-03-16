@@ -26,6 +26,11 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
+      - name: Install X11 development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev libxxf86vm-dev
+
       - name: Check formatting
         run: make fmt
 

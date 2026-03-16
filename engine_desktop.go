@@ -13,7 +13,6 @@ import (
 	"github.com/michaelraines/future-render/internal/input"
 	"github.com/michaelraines/future-render/internal/pipeline"
 	"github.com/michaelraines/future-render/internal/platform"
-	glfwplatform "github.com/michaelraines/future-render/internal/platform/glfw"
 	fmath "github.com/michaelraines/future-render/math"
 
 	// Register backends so they are available for selection.
@@ -236,8 +235,8 @@ func (e *engine) disposeRenderResources() {
 }
 
 func (e *engine) run() error {
-	// Create platform window.
-	win := glfwplatform.New()
+	// Create platform window (selected per OS via build tags).
+	win := newPlatformWindow()
 	e.window = win
 
 	winCfg := e.windowConfig()

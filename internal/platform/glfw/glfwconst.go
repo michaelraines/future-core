@@ -1,16 +1,9 @@
 //go:build darwin || linux || freebsd || windows
 
-// This file provides pure Go GLFW bindings loaded at runtime via purego.
-// No CGo is required. The GLFW shared library (libglfw.so on Linux,
-// libglfw.dylib on macOS, glfw3.dll on Windows) must be available.
+// This file contains GLFW constants, types, and function pointer declarations
+// shared across all desktop platforms. The function pointers are populated by
+// platform-specific initGLFWAPI() implementations (purego or CGo).
 package glfw
-
-import (
-	"fmt"
-	"unsafe"
-
-	"github.com/ebitengine/purego"
-)
 
 // ---------------------------------------------------------------------------
 // GLFW constants
@@ -159,7 +152,7 @@ const (
 )
 
 // ---------------------------------------------------------------------------
-// GLFW function variables
+// GLFW function variables — populated by platform-specific initGLFWAPI()
 // ---------------------------------------------------------------------------
 
 var (
@@ -205,77 +198,4 @@ type glfwVideoMode struct {
 	GreenBits   int32
 	BlueBits    int32
 	RefreshRate int32
-}
-
-// ---------------------------------------------------------------------------
-// GLFW library loading
-// ---------------------------------------------------------------------------
-
-func initGLFWAPI() error {
-	if err := openGLFWLib(); err != nil {
-		return err
-	}
-
-	must := func(fn interface{}, name string) error {
-		addr, serr := getGLFWProcAddr(name)
-		if serr != nil {
-			return fmt.Errorf("glfw: symbol %s: %w", name, serr)
-		}
-		purego.RegisterFunc(fn, addr)
-		return nil
-	}
-
-	for _, e := range []struct {
-		fn   interface{}
-		name string
-	}{
-		{&fnGlfwInit, "glfwInit"},
-		{&fnGlfwTerminate, "glfwTerminate"},
-		{&fnGlfwWindowHint, "glfwWindowHint"},
-		{&fnGlfwCreateWindow, "glfwCreateWindow"},
-		{&fnGlfwDestroyWindow, "glfwDestroyWindow"},
-		{&fnGlfwWindowShouldClose, "glfwWindowShouldClose"},
-		{&fnGlfwPollEvents, "glfwPollEvents"},
-		{&fnGlfwSwapBuffers, "glfwSwapBuffers"},
-		{&fnGlfwSwapInterval, "glfwSwapInterval"},
-		{&fnGlfwMakeContextCurrent, "glfwMakeContextCurrent"},
-		{&fnGlfwGetWindowSize, "glfwGetWindowSize"},
-		{&fnGlfwSetWindowSize, "glfwSetWindowSize"},
-		{&fnGlfwGetFramebufferSize, "glfwGetFramebufferSize"},
-		{&fnGlfwGetWindowPos, "glfwGetWindowPos"},
-		{&fnGlfwSetWindowTitle, "glfwSetWindowTitle"},
-		{&fnGlfwSetWindowMonitor, "glfwSetWindowMonitor"},
-		{&fnGlfwSetInputMode, "glfwSetInputMode"},
-		{&fnGlfwGetCursorPos, "glfwGetCursorPos"},
-		{&fnGlfwGetPrimaryMonitor, "glfwGetPrimaryMonitor"},
-		{&fnGlfwGetVideoMode, "glfwGetVideoMode"},
-		{&fnGlfwSetKeyCallback, "glfwSetKeyCallback"},
-		{&fnGlfwSetCharCallback, "glfwSetCharCallback"},
-		{&fnGlfwSetMouseButtonCallback, "glfwSetMouseButtonCallback"},
-		{&fnGlfwSetCursorPosCallback, "glfwSetCursorPosCallback"},
-		{&fnGlfwSetScrollCallback, "glfwSetScrollCallback"},
-		{&fnGlfwSetFramebufferSizeCallback, "glfwSetFramebufferSizeCallback"},
-		{&fnGlfwJoystickPresent, "glfwJoystickPresent"},
-		{&fnGlfwGetJoystickAxes, "glfwGetJoystickAxes"},
-		{&fnGlfwGetJoystickButtons, "glfwGetJoystickButtons"},
-	} {
-		if ferr := must(e.fn, e.name); ferr != nil {
-			return ferr
-		}
-	}
-
-	return nil
-}
-
-// cStr converts a Go string to a null-terminated byte pointer.
-// Safe when passed directly as a purego function argument (pinned during call).
-func cStr(s string) *byte {
-	b := make([]byte, len(s)+1)
-	copy(b, s)
-	return &b[0]
-}
-
-// getVideoMode reads the GLFWvidmode struct from a pointer.
-func getVideoMode(ptr uintptr) glfwVideoMode {
-	return *(*glfwVideoMode)(unsafe.Pointer(ptr)) //nolint:govet // purego interop: reading struct from C pointer
 }

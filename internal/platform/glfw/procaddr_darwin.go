@@ -1,10 +1,9 @@
-//go:build darwin || linux || freebsd
+//go:build darwin
 
 package glfw
 
 import (
 	"fmt"
-	"runtime"
 
 	"github.com/ebitengine/purego"
 )
@@ -12,15 +11,9 @@ import (
 // glfwLib holds the loaded GLFW library handle.
 var glfwLib uintptr
 
-// openGLFWLib opens the platform-specific GLFW shared library using purego.
+// openGLFWLib opens the macOS GLFW shared library using purego.
 func openGLFWLib() error {
-	var names []string
-	switch runtime.GOOS {
-	case "darwin":
-		names = []string{"libglfw.3.dylib", "libglfw.dylib"}
-	default: // linux, freebsd, etc.
-		names = []string{"libglfw.so.3", "libglfw.so"}
-	}
+	names := []string{"libglfw.3.dylib", "libglfw.dylib"}
 
 	var firstErr error
 	for _, name := range names {
