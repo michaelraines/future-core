@@ -5,6 +5,7 @@ package futurerender
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/michaelraines/future-render/internal/backend"
@@ -16,8 +17,12 @@ import (
 	fmath "github.com/michaelraines/future-render/math"
 
 	// Register backends so they are available for selection.
+	_ "github.com/michaelraines/future-render/internal/backend/dx12"
+	_ "github.com/michaelraines/future-render/internal/backend/metal"
 	_ "github.com/michaelraines/future-render/internal/backend/opengl"
 	_ "github.com/michaelraines/future-render/internal/backend/soft"
+	_ "github.com/michaelraines/future-render/internal/backend/vulkan"
+	_ "github.com/michaelraines/future-render/internal/backend/webgpu"
 )
 
 const (
@@ -242,8 +247,9 @@ func (e *engine) run() error {
 	defer win.Destroy()
 
 	// Select rendering backend via FUTURE_RENDER_BACKEND env var or auto-detect.
-	// On desktop (GLFW) builds, prefer OpenGL, then fall back to software.
-	preferred := []string{"opengl", "soft"}
+	// Platform-aware preferred order: try the native GPU API first, then
+	// OpenGL as a portable fallback, then the software rasterizer.
+	preferred := preferredBackends()
 	dev, resolved, err := backend.Resolve(backendName(), preferred)
 	if err != nil {
 		return fmt.Errorf("backend selection: %w", err)
@@ -456,4 +462,19 @@ func (e *engine) deviceScaleFactor() float64 {
 		return e.window.DevicePixelRatio()
 	}
 	return 1.0
+}
+
+// preferredBackends returns the platform-specific preferred backend order.
+// The first registered backend in the list wins during auto-detection.
+func preferredBackends() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{"metal", "vulkan", "opengl", "soft"}
+	case "windows":
+		return []string{"dx12", "vulkan", "opengl", "soft"}
+	case "linux", "freebsd":
+		return []string{"vulkan", "opengl", "soft"}
+	default:
+		return []string{"opengl", "soft"}
+	}
 }

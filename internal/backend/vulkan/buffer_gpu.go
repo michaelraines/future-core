@@ -31,7 +31,7 @@ func (b *Buffer) Upload(data []byte) {
 	if err != nil {
 		return
 	}
-	dst := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), len(data))
+	dst := unsafe.Slice((*byte)(ptr), len(data))
 	copy(dst, data)
 	vk.UnmapMemory(b.dev.device, b.memory)
 }
@@ -45,7 +45,7 @@ func (b *Buffer) UploadRegion(data []byte, offset int) {
 	if err != nil {
 		return
 	}
-	dst := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), len(data))
+	dst := unsafe.Slice((*byte)(ptr), len(data))
 	copy(dst, data)
 	vk.UnmapMemory(b.dev.device, b.memory)
 }

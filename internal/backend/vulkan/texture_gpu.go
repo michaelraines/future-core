@@ -28,7 +28,7 @@ func (t *Texture) InnerTexture() backend.Texture { return nil }
 
 // Upload uploads pixel data to the texture via staging buffer + vkCmdCopyBufferToImage.
 func (t *Texture) Upload(data []byte, _ int) {
-	if len(data) == 0 || t.dev.stagingMapped == 0 {
+	if len(data) == 0 || t.dev.stagingMapped == nil {
 		return
 	}
 	n := len(data)
@@ -36,7 +36,7 @@ func (t *Texture) Upload(data []byte, _ int) {
 		n = t.dev.stagingSize
 	}
 	// Copy to staging buffer.
-	dst := unsafe.Slice((*byte)(unsafe.Pointer(t.dev.stagingMapped)), n)
+	dst := unsafe.Slice((*byte)(t.dev.stagingMapped), n)
 	copy(dst, data[:n])
 
 	// Record and submit a one-time command buffer to copy staging → image.

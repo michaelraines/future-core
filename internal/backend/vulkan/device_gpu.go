@@ -37,7 +37,7 @@ type Device struct {
 	stagingBuffer vk.Buffer
 	stagingMemory vk.DeviceMemory
 	stagingSize   int
-	stagingMapped uintptr
+	stagingMapped unsafe.Pointer
 
 	// Vulkan-specific state for public API compatibility.
 	instanceInfo       InstanceCreateInfo

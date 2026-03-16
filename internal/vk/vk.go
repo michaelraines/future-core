@@ -760,7 +760,7 @@ var (
 
 	fnAllocateMemory func(device Device, pAllocateInfo uintptr, pAllocator uintptr, pMemory *DeviceMemory) Result
 	fnFreeMemory     func(device Device, memory DeviceMemory, pAllocator uintptr)
-	fnMapMemory      func(device Device, memory DeviceMemory, offset, size uint64, flags uint32, ppData *uintptr) Result
+	fnMapMemory      func(device Device, memory DeviceMemory, offset, size uint64, flags uint32, ppData *unsafe.Pointer) Result
 	fnUnmapMemory    func(device Device, memory DeviceMemory)
 
 	fnCreateSampler  func(device Device, pCreateInfo uintptr, pAllocator uintptr, pSampler *Sampler) Result
@@ -1086,11 +1086,11 @@ func AllocateMemory(dev Device, info *MemoryAllocateInfo) (DeviceMemory, error) 
 func FreeMemory(dev Device, mem DeviceMemory) { fnFreeMemory(dev, mem, 0) }
 
 // MapMemory wraps vkMapMemory.
-func MapMemory(dev Device, mem DeviceMemory, offset, size uint64) (uintptr, error) {
-	var ptr uintptr
+func MapMemory(dev Device, mem DeviceMemory, offset, size uint64) (unsafe.Pointer, error) {
+	var ptr unsafe.Pointer
 	r := fnMapMemory(dev, mem, offset, size, 0, &ptr)
 	if r != Success {
-		return 0, fmt.Errorf("vkMapMemory: %w", r)
+		return nil, fmt.Errorf("vkMapMemory: %w", r)
 	}
 	return ptr, nil
 }
