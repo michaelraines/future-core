@@ -66,6 +66,7 @@ func (t *Texture) Upload(data []byte, _ int) {
 	}
 	_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfo, 0)
 	_ = vk.DeviceWaitIdle(t.dev.device)
+	vk.FreeCommandBuffers(t.dev.device, t.dev.commandPool, cmd)
 }
 
 // UploadRegion uploads pixel data to a rectangular region.

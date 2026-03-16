@@ -1226,6 +1226,11 @@ func CmdCopyBufferToImage(cmd CommandBuffer, srcBuffer Buffer, dstImage Image, d
 	fnCmdCopyBufferToImage(cmd, srcBuffer, dstImage, dstLayout, 1, uintptr(unsafe.Pointer(&region)))
 }
 
+// FreeCommandBuffers wraps vkFreeCommandBuffers for a single command buffer.
+func FreeCommandBuffers(dev Device, pool CommandPool, cmd CommandBuffer) {
+	fnFreeCommandBuffers(dev, pool, 1, &cmd)
+}
+
 // ---------------------------------------------------------------------------
 // Memory helpers
 // ---------------------------------------------------------------------------

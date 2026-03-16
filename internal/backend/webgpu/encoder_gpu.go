@@ -3,6 +3,8 @@
 package webgpu
 
 import (
+	"unsafe"
+
 	"github.com/michaelraines/future-render/internal/backend"
 	"github.com/michaelraines/future-render/internal/wgpu"
 )
@@ -100,7 +102,7 @@ func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat) {
 	if b, ok := buf.(*Buffer); ok {
 		idxFmt := wgpu.IndexFormatUint16
-		if format == backend.IndexFormatUint32 {
+		if format == backend.IndexUint32 {
 			idxFmt = wgpu.IndexFormatUint32
 		}
 		wgpu.RenderPassSetIndexBuffer(e.passEncoder, b.handle, idxFmt, 0, uint64(b.size))

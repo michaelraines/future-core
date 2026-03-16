@@ -81,7 +81,7 @@ func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat) {
 	if b, ok := buf.(*Buffer); ok {
 		idxType := uint32(vk.IndexTypeUint16)
-		if format == backend.IndexFormatUint32 {
+		if format == backend.IndexUint32 {
 			idxType = vk.IndexTypeUint32
 		}
 		vk.CmdBindIndexBuffer(e.cmd, b.buffer, 0, idxType)
