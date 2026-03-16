@@ -1,4 +1,4 @@
-//go:build darwin || linux || freebsd || windows
+//go:build darwin || linux || freebsd
 
 // Package glfw implements the platform.Window interface using GLFW,
 // loaded at runtime via purego (no CGo required).

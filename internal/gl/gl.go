@@ -1,4 +1,4 @@
-//go:build darwin || linux || freebsd || windows
+//go:build darwin || linux || freebsd
 
 // Package gl provides pure Go OpenGL 3.3 core profile bindings loaded at
 // runtime via purego. No CGo is required. The shared library (libGL.so on

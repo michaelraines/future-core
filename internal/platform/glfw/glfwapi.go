@@ -1,4 +1,4 @@
-//go:build darwin || linux || freebsd || windows
+//go:build darwin || linux || freebsd
 
 // This file provides pure Go GLFW bindings loaded at runtime via purego.
 // No CGo is required. The GLFW shared library (libglfw.so on Linux,

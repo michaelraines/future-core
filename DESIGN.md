@@ -130,7 +130,7 @@ registry (`internal/backend/registry.go`):
 | Backend | Package | Status | Platform |
 |---|---|---|---|
 | Software | `soft/` | Production — CPU rasterizer, headless CI reference | All |
-| OpenGL 3.3 | `opengl/` | Production — purego, no CGo | Desktop (darwin/linux/freebsd/windows) |
+| OpenGL 3.3 | `opengl/` | Production — purego, no CGo | Desktop (darwin/linux/freebsd) |
 | WebGL2 | `webgl/` | Soft-delegating — ready for syscall/js | Browser (WASM) |
 | Vulkan | `vulkan/` | Soft-delegating — ready for purego libvulkan | Linux/Windows/Android |
 | Metal | `metal/` | Soft-delegating — ready for purego objc_msgSend | macOS/iOS |
