@@ -341,8 +341,10 @@ func (w *Window) SetInputHandler(handler platform.InputHandler) {
 	w.handler = handler
 }
 
-// PollGamepads is a stub on macOS Cocoa — gamepad support requires IOKit
-// integration which will be added later.
+// PollGamepads queries the Game Controller framework for connected controllers.
 func (w *Window) PollGamepads() {
-	// TODO: implement via IOKit HID Manager
+	if w.handler == nil {
+		return
+	}
+	pollGamepadsGC(w.handler)
 }

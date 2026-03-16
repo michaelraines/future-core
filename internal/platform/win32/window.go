@@ -56,6 +56,7 @@ var windowMap = map[uintptr]*Window{}
 
 // Create creates and shows a Win32 window with an OpenGL context.
 func (w *Window) Create(cfg platform.WindowConfig) error {
+	initDPIAwareness()
 	w.hInstance = getModuleHandle()
 
 	// Register window class.
@@ -260,8 +261,14 @@ func (w *Window) FramebufferSize() (int, int) {
 
 // DevicePixelRatio returns the ratio of physical to logical pixels.
 func (w *Window) DevicePixelRatio() float64 {
-	// Basic implementation — assumes 1:1 unless DPI-aware.
-	return 1.0
+	if w.hwnd == 0 {
+		return 1.0
+	}
+	dpi := getDPIForWindow(w.hwnd)
+	if dpi == 0 {
+		return 1.0
+	}
+	return float64(dpi) / float64(defaultDPI)
 }
 
 // SetTitle sets the window title.
@@ -395,9 +402,12 @@ func (w *Window) SetInputHandler(handler platform.InputHandler) {
 	w.handler = handler
 }
 
-// PollGamepads is a stub — gamepad support via XInput will be added later.
+// PollGamepads queries XInput for connected controllers and dispatches events.
 func (w *Window) PollGamepads() {
-	// TODO: implement via XInput
+	if w.handler == nil {
+		return
+	}
+	pollGamepadsXInput(w.handler)
 }
 
 // ---------------------------------------------------------------------------
@@ -558,6 +568,20 @@ func wndProc(hwnd uintptr, umsg uint32, wParam, lParam uintptr) uintptr {
 			w.handler.OnMouseScrollEvent(platform.MouseScrollEvent{
 				DX: delta, DY: 0,
 			})
+		}
+		return 0
+
+	case wmDPIChanged:
+		// lParam points to a RECT with the suggested new window position/size.
+		if lParam != 0 {
+			suggested := (*rect)(unsafe.Pointer(lParam))
+			procSetWindowPos.Call(
+				hwnd, 0,
+				uintptr(suggested.Left), uintptr(suggested.Top),
+				uintptr(suggested.Right-suggested.Left),
+				uintptr(suggested.Bottom-suggested.Top),
+				swpNoZOrder,
+			)
 		}
 		return 0
 	}

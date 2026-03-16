@@ -506,7 +506,7 @@ Native macOS windowing without GLFW. Uses purego to call Objective-C runtime
 | Cursor visibility + lock | Done | `NSCursor hide`/`unhide`, `CGAssociateMouseAndMouseCursorPosition` |
 | macOS keycode mapping (108 keys) | Done | `keymap.go` — Carbon virtual key codes → platform.Key |
 | Custom ObjC classes (FRWindowDelegate, FRContentView) | Done | `objc.RegisterClass` with ivars for Go pointer |
-| Gamepad via IOKit/GCController | Planned | Stub in place, needs IOKit HID Manager |
+| Gamepad via GCController framework | Done | Polls `GCController.controllers`, reads `extendedGamepad` profile |
 | Build constraint `//go:build darwin` | Done | Cross-compiles clean on arm64 + amd64 |
 
 ### 10c — Windows: Win32 via syscalls (Done)
@@ -528,8 +528,8 @@ Win32 API calls. Zero CGo — pure Go with syscalls.
 | Fullscreen toggle | Done | Style change + `SetWindowPos` to monitor rect |
 | Cursor visibility + lock (`ShowCursor`, `ClipCursor`) | Done | Show/hide + confine to client rect |
 | Virtual key mapping (100+ keys) | Done | `keymap.go` — VK codes → platform.Key |
-| Gamepad via XInput | Planned | Stub in place |
-| DPI awareness | Planned | Basic 1:1 for now |
+| Gamepad via XInput | Done | Polls up to 4 controllers, dead zone filtering, axis/button mapping |
+| DPI awareness (per-monitor) | Done | `SetProcessDpiAwarenessContext` (V2) with V1/Vista fallbacks, `WM_DPICHANGED` |
 | Build constraint `//go:build windows` | Done | Cross-compiles clean on amd64 |
 
 ### 10d — Integration + Cleanup (In Progress)
@@ -539,7 +539,7 @@ Win32 API calls. Zero CGo — pure Go with syscalls.
 | Engine selects native platform per OS | Done | `platform_darwin.go` / `platform_windows.go` / `platform_unix.go` via build tags |
 | `engine_desktop.go` decoupled from GLFW | Done | Uses `newPlatformWindow()` — no direct GLFW import |
 | Cross-compilation verified | Done | darwin/arm64, darwin/amd64, windows/amd64 all clean |
-| Update CI: add X11 dev headers for Linux | Planned | `libxcursor-dev`, `libxrandr-dev`, `libxi-dev`, `libxinerama-dev` |
+| Update CI: add X11 dev headers for Linux | Done | `libxcursor-dev`, `libxrandr-dev`, `libxi-dev`, `libxinerama-dev`, `libxxf86vm-dev` |
 | Remove system GLFW requirement from docs | Planned | Update README, DESIGN.md |
 | Cross-platform CI validation | Planned | GitHub Actions matrix: Linux (CGo GLFW), macOS (Cocoa), Windows (Win32) |
 
