@@ -311,8 +311,8 @@ func sampleNearest(pixels []byte, w, h, bpp int, u, v float32) (cr, cg, cb, ca f
 	u = clampf(u)
 	v = clampf(v)
 
-	x := int(u * float32(w-1))
-	y := int(v * float32(h-1))
+	x := int(math.Floor(float64(u*float32(w-1)) + 0.5))
+	y := int(math.Floor(float64(v*float32(h-1)) + 0.5))
 	if x >= w {
 		x = w - 1
 	}
