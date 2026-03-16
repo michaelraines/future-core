@@ -3,6 +3,8 @@
 package vulkan
 
 import (
+	"unsafe"
+
 	"github.com/michaelraines/future-render/internal/backend"
 	"github.com/michaelraines/future-render/internal/vk"
 )

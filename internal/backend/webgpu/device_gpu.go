@@ -20,6 +20,10 @@ type Device struct {
 	width  int
 	height int
 
+	// Default render target for screen rendering.
+	defaultColorTex  wgpu.Texture
+	defaultColorView wgpu.TextureView
+
 	adapterInfo AdapterInfo
 	limits      Limits
 }
@@ -89,6 +93,20 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 
 	if d.device != 0 {
 		d.queue = wgpu.DeviceGetQueue(d.device)
+
+		// Create default color texture for screen rendering.
+		texDesc := wgpu.TextureDescriptor{
+			Usage:         wgpu.TextureUsage(wgpu.TextureUsageTextureBinding | wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageCopyDst | wgpu.TextureUsageCopySrc),
+			Dimension:     1, // 2D
+			Size:          wgpu.Extent3D{Width: uint32(d.width), Height: uint32(d.height), DepthOrArrayLayers: 1},
+			Format:        wgpu.TextureFormatRGBA8Unorm,
+			MipLevelCount: 1,
+			SampleCount:   1,
+		}
+		d.defaultColorTex = wgpu.DeviceCreateTexture(d.device, &texDesc)
+		if d.defaultColorTex != 0 {
+			d.defaultColorView = wgpu.TextureCreateView(d.defaultColorTex)
+		}
 	}
 
 	return nil
@@ -96,6 +114,14 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 
 // Dispose releases all WebGPU resources.
 func (d *Device) Dispose() {
+	if d.defaultColorView != 0 {
+		wgpu.TextureViewRelease(d.defaultColorView)
+		d.defaultColorView = 0
+	}
+	if d.defaultColorTex != 0 {
+		wgpu.TextureRelease(d.defaultColorTex)
+		d.defaultColorTex = 0
+	}
 	if d.device != 0 {
 		wgpu.DeviceRelease(d.device)
 		d.device = 0

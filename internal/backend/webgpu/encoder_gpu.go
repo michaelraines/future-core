@@ -25,7 +25,7 @@ type Encoder struct {
 func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	e.cmdEncoder = wgpu.DeviceCreateCommandEncoder(e.dev.device)
 
-	var view wgpu.TextureView
+	view := e.dev.defaultColorView
 	w, h := uint32(e.width), uint32(e.height)
 	if desc.Target != nil {
 		if rt, ok := desc.Target.(*RenderTarget); ok {
