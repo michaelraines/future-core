@@ -4,7 +4,6 @@ package webgpu
 
 import (
 	"fmt"
-	"sync"
 	"unsafe"
 
 	"github.com/michaelraines/future-render/internal/backend"
@@ -23,9 +22,6 @@ type Device struct {
 
 	adapterInfo AdapterInfo
 	limits      Limits
-
-	// Synchronization for adapter/device request callbacks.
-	mu sync.Mutex
 }
 
 // New creates a new WebGPU device.
@@ -334,8 +330,10 @@ func bytesPerPixel(f backend.TextureFormat) int {
 		return 4
 	case backend.TextureFormatRGBA16F:
 		return 8
-	case backend.TextureFormatRGBA32F, backend.TextureFormatDepth32F:
+	case backend.TextureFormatRGBA32F:
 		return 16
+	case backend.TextureFormatDepth32F:
+		return 4
 	case backend.TextureFormatDepth24:
 		return 4
 	default:

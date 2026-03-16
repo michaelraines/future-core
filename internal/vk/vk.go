@@ -693,6 +693,26 @@ type Rect2D struct {
 	ExtentW, ExtentH uint32
 }
 
+// BufferImageCopy mirrors VkBufferImageCopy.
+type BufferImageCopy struct {
+	BufferOffset      uint64
+	BufferRowLength   uint32
+	BufferImageHeight uint32
+	// ImageSubresourceLayers fields (inlined for C-compatibility).
+	AspectMask     uint32
+	MipLevel       uint32
+	BaseArrayLayer uint32
+	LayerCount     uint32
+	// ImageOffset (VkOffset3D).
+	ImageOffsetX int32
+	ImageOffsetY int32
+	ImageOffsetZ int32
+	// ImageExtent (VkExtent3D).
+	ImageExtentW uint32
+	ImageExtentH uint32
+	ImageExtentD uint32
+}
+
 // ---------------------------------------------------------------------------
 // Internal function variables — populated by Init()
 // ---------------------------------------------------------------------------
@@ -1199,6 +1219,11 @@ func CmdSetViewport(cmd CommandBuffer, vp Viewport) {
 // CmdSetScissor wraps vkCmdSetScissor.
 func CmdSetScissor(cmd CommandBuffer, rect Rect2D) {
 	fnCmdSetScissor(cmd, 0, 1, uintptr(unsafe.Pointer(&rect)))
+}
+
+// CmdCopyBufferToImage wraps vkCmdCopyBufferToImage.
+func CmdCopyBufferToImage(cmd CommandBuffer, srcBuffer Buffer, dstImage Image, dstLayout uint32, region BufferImageCopy) {
+	fnCmdCopyBufferToImage(cmd, srcBuffer, dstImage, dstLayout, 1, uintptr(unsafe.Pointer(&region)))
 }
 
 // ---------------------------------------------------------------------------

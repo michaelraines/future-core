@@ -26,7 +26,7 @@ type Texture struct {
 // InnerTexture returns nil for GPU textures (no soft delegation).
 func (t *Texture) InnerTexture() backend.Texture { return nil }
 
-// Upload uploads pixel data to the texture via staging buffer.
+// Upload uploads pixel data to the texture via staging buffer + vkCmdCopyBufferToImage.
 func (t *Texture) Upload(data []byte, _ int) {
 	if len(data) == 0 || t.dev.stagingMapped == 0 {
 		return
@@ -38,6 +38,34 @@ func (t *Texture) Upload(data []byte, _ int) {
 	// Copy to staging buffer.
 	dst := unsafe.Slice((*byte)(unsafe.Pointer(t.dev.stagingMapped)), n)
 	copy(dst, data[:n])
+
+	// Record and submit a one-time command buffer to copy staging → image.
+	cmd, err := vk.AllocateCommandBuffer(t.dev.device, t.dev.commandPool)
+	if err != nil {
+		return
+	}
+	if err := vk.BeginCommandBuffer(cmd, vk.CommandBufferUsageOneTimeSubmit); err != nil {
+		return
+	}
+
+	region := vk.BufferImageCopy{
+		AspectMask:   vk.ImageAspectColor,
+		LayerCount:   1,
+		ImageExtentW: uint32(t.w),
+		ImageExtentH: uint32(t.h),
+		ImageExtentD: 1,
+	}
+	vk.CmdCopyBufferToImage(cmd, t.dev.stagingBuffer, t.image, vk.ImageLayoutTransferDstOptimal, region)
+
+	_ = vk.EndCommandBuffer(cmd)
+
+	submitInfo := vk.SubmitInfo{
+		SType:              vk.StructureTypeSubmitInfo,
+		CommandBufferCount: 1,
+		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
+	}
+	_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfo, 0)
+	_ = vk.DeviceWaitIdle(t.dev.device)
 }
 
 // UploadRegion uploads pixel data to a rectangular region.

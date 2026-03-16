@@ -2,7 +2,10 @@
 
 package vulkan
 
-import "github.com/michaelraines/future-render/internal/backend"
+import (
+	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-render/internal/vk"
+)
 
 // RenderTarget implements backend.RenderTarget for Vulkan.
 type RenderTarget struct {
@@ -10,6 +13,10 @@ type RenderTarget struct {
 	colorTex *Texture
 	depthTex backend.Texture
 	w, h     int
+
+	// Vulkan resources for this render target.
+	renderPass  vk.RenderPass
+	framebuffer vk.Framebuffer
 }
 
 // InnerRenderTarget returns nil for GPU render targets (no soft delegation).

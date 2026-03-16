@@ -28,12 +28,15 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	h := uint32(e.dev.height)
 
 	if desc.Target != nil {
-		// Use custom render target — in a full implementation we'd look up
-		// or create the VkRenderPass and VkFramebuffer for this target.
 		if rt, ok := desc.Target.(*RenderTarget); ok {
 			w = uint32(rt.w)
 			h = uint32(rt.h)
-			_ = rt // Use rt's framebuffer in full implementation
+			if rt.renderPass != 0 {
+				rp = rt.renderPass
+			}
+			if rt.framebuffer != 0 {
+				fb = rt.framebuffer
+			}
 		}
 	}
 
@@ -44,7 +47,7 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		RenderAreaW:     w,
 		RenderAreaH:     h,
 		ClearValueCount: 1,
-		PClearValues:    uintptr(uintptrOf(&clearColor)),
+		PClearValues:    uintptrOf(&clearColor),
 	}
 	vk.CmdBeginRenderPass(e.cmd, &rpBegin)
 	e.inRenderPass = true

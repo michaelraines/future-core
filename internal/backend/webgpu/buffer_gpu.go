@@ -5,6 +5,7 @@ package webgpu
 import (
 	"unsafe"
 
+	"github.com/michaelraines/future-render/internal/backend"
 	"github.com/michaelraines/future-render/internal/wgpu"
 )
 
@@ -16,7 +17,7 @@ type Buffer struct {
 }
 
 // InnerBuffer returns nil for GPU buffers (no soft delegation).
-func (b *Buffer) InnerBuffer() interface{ Size() int } { return nil }
+func (b *Buffer) InnerBuffer() backend.Buffer { return nil }
 
 // Upload replaces the entire buffer data.
 func (b *Buffer) Upload(data []byte) {
