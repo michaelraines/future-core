@@ -26,19 +26,15 @@ COVERAGE_MIN := 80
 # - cmd/: example binaries with no test files
 # - internal/gl, internal/platform/glfw, internal/backend/opengl: purego interop
 #   requires uintptr→unsafe.Pointer conversions that go vet flags; no tests in CI
-# - root package and text/: import root which imports platform/glfw (CGo/X11) on Linux
-PKGS := $(shell go list ./... | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl | grep -v /internal/platform/glfw | grep -v /internal/backend/opengl | grep -v 'future-render$$' | grep -v /text)
+PKGS := $(shell go list ./... | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl | grep -v /internal/platform/glfw | grep -v /internal/backend/opengl)
 
 # LINT_PATHS provides relative directory paths for golangci-lint, which
 # requires filesystem paths rather than Go module paths.
 MODULE := $(shell go list -m)
-LINT_PATHS := $(shell go list ./... | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl | grep -v /internal/platform/glfw | grep -v /internal/backend/opengl | grep -v 'future-render$$' | grep -v /text | sed "s|^$(MODULE)|.|")
+LINT_PATHS := $(shell go list ./... | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl | grep -v /internal/platform/glfw | grep -v /internal/backend/opengl | sed "s|^$(MODULE)|.|")
 
-# All buildable packages. Excludes:
-# - audio/: requires ALSA headers (CGo) on Linux
-# - internal/platform/glfw: requires X11 development headers on Linux
-# - root package, text/, cmd/: transitively depend on platform/glfw via platform_unix.go
-BUILD_PKGS := $(shell go list ./... | grep -v /audio | grep -v /cmd/ | grep -v /internal/platform/glfw | grep -v 'future-render$$' | grep -v /text)
+# All buildable packages (excludes only audio due to CGo/ALSA dependency).
+BUILD_PKGS := $(shell go list ./... | grep -v /audio)
 
 # Default target runs the full CI pipeline
 all: ci

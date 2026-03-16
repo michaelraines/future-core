@@ -1,6 +1,7 @@
 package futurerender
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -117,6 +118,12 @@ func TestNewPlatformEngine(t *testing.T) {
 }
 
 func TestEngineRunReturnsError(t *testing.T) {
+	// Skip on platforms where run() creates a real window — Cocoa/Win32
+	// windows must be created on the main thread, which tests don't run on.
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		t.Skip("window creation requires main thread on " + runtime.GOOS)
+	}
+
 	old := getEngine()
 	defer func() { setEngine(old) }()
 
