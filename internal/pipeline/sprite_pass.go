@@ -98,9 +98,14 @@ func (sp *SpritePass) Name() string { return "sprite" }
 // Execute flushes the batcher and renders all batches.
 // Batches are grouped by render target. For each target group, a render pass
 // is begun, all batches are drawn, and the pass is ended.
+// If no batches exist, the screen target is still cleared (when enabled).
 func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 	batches := sp.batcher.Flush()
 	if len(batches) == 0 {
+		// Even with no draws, clear the screen target so the previous
+		// frame's content doesn't persist.
+		sp.beginTargetPass(enc, ctx, 0)
+		enc.EndRenderPass()
 		return
 	}
 
@@ -191,14 +196,17 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 	}
 
 	loadAction := backend.LoadActionLoad
-	if targetID == 0 {
-		// Screen target clears each frame.
+	clearColor := [4]float32{0, 0, 0, 0}
+	if targetID == 0 && ctx.ScreenClearEnabled {
+		// Screen target clears each frame to opaque black.
 		loadAction = backend.LoadActionClear
+		clearColor = [4]float32{0, 0, 0, 1}
 	}
 
 	enc.BeginRenderPass(backend.RenderPassDescriptor{
 		Target:      rt,
-		ClearColor:  [4]float32{0, 0, 0, 0},
+		ClearColor:  clearColor,
+		ClearDepth:  1.0,
 		LoadAction:  loadAction,
 		StoreAction: backend.StoreActionStore,
 	})

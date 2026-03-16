@@ -365,26 +365,11 @@ func (e *engine) run() error {
 		proj := fmath.Mat4Ortho(0, float64(screenW), float64(screenH), 0, -1, 1)
 		e.spritePass.Projection = proj.Float32()
 
-		// Begin render pass: clear or preserve based on user setting.
-		loadAction := backend.LoadActionClear
-		if !IsScreenClearedEveryFrame() {
-			loadAction = backend.LoadActionLoad
-		}
-		e.encoder.BeginRenderPass(backend.RenderPassDescriptor{
-			ClearColor:  [4]float32{0, 0, 0, 1},
-			ClearDepth:  1.0,
-			LoadAction:  loadAction,
-			StoreAction: backend.StoreActionStore,
-		})
-		e.encoder.SetViewport(backend.Viewport{
-			X: 0, Y: 0, Width: fbW, Height: fbH,
-		})
-
-		// Execute the render pipeline (sprite pass flushes batcher).
+		// Execute the render pipeline (sprite pass manages its own render
+		// passes per target, including clearing the screen target).
 		ctx := pipeline.NewPassContext(fbW, fbH)
+		ctx.ScreenClearEnabled = IsScreenClearedEveryFrame()
 		e.renderPipeline.Execute(e.encoder, ctx)
-
-		e.encoder.EndRenderPass()
 
 		win.SwapBuffers()
 		frameCount++

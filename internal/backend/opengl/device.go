@@ -17,6 +17,7 @@ import (
 type Device struct {
 	width, height int
 	encoder       *commandEncoder
+	vao           uint32
 }
 
 // New creates a new OpenGL device (uninitialized — call Init after GL context is current).
@@ -39,6 +40,10 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	d.height = cfg.Height
 	d.encoder = &commandEncoder{}
 
+	// OpenGL 3.3 core profile requires a VAO to be bound for draw calls.
+	gl.GenVertexArrays(1, &d.vao)
+	gl.BindVertexArray(d.vao)
+
 	// Standard 2D defaults.
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
@@ -47,7 +52,12 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 }
 
 // Dispose releases device resources.
-func (d *Device) Dispose() {}
+func (d *Device) Dispose() {
+	if d.vao != 0 {
+		gl.DeleteVertexArrays(1, &d.vao)
+		d.vao = 0
+	}
+}
 
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {}
@@ -427,6 +437,21 @@ func formatToGL(f backend.TextureFormat) (internalFmt int32, format, typ uint32)
 		return gl.DEPTH_COMPONENT32F, gl.DEPTH_COMPONENT, gl.FLOAT
 	default:
 		return gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE
+	}
+}
+
+func attributeFormatToGL(f backend.AttributeFormat) (size int32, typ uint32) {
+	switch f {
+	case backend.AttributeFloat2:
+		return 2, gl.FLOAT
+	case backend.AttributeFloat3:
+		return 3, gl.FLOAT
+	case backend.AttributeFloat4:
+		return 4, gl.FLOAT
+	case backend.AttributeByte4Norm:
+		return 4, gl.UNSIGNED_BYTE
+	default:
+		return 4, gl.FLOAT
 	}
 }
 

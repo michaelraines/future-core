@@ -207,6 +207,13 @@ var (
 	fnSamplerParameteri func(sampler, pname uint32, param int32)
 
 	fnGetTexImage func(target uint32, level int32, format, typ uint32, pixels uintptr)
+
+	fnGenVertexArrays          func(n int32, arrays *uint32)
+	fnDeleteVertexArrays       func(n int32, arrays *uint32)
+	fnBindVertexArray          func(array uint32)
+	fnEnableVertexAttribArray  func(index uint32)
+	fnDisableVertexAttribArray func(index uint32)
+	fnVertexAttribPointer      func(index uint32, size int32, typ uint32, normalized uint8, stride int32, pointer uintptr)
 )
 
 // ---------------------------------------------------------------------------
@@ -355,6 +362,20 @@ func DrawElementsInstanced(mode uint32, count int32, typ uint32, indices unsafe.
 }
 
 func Flush() { fnFlush() }
+
+func GenVertexArrays(n int32, arrays *uint32)    { fnGenVertexArrays(n, arrays) }
+func DeleteVertexArrays(n int32, arrays *uint32) { fnDeleteVertexArrays(n, arrays) }
+func BindVertexArray(array uint32)               { fnBindVertexArray(array) }
+func EnableVertexAttribArray(index uint32)       { fnEnableVertexAttribArray(index) }
+func DisableVertexAttribArray(index uint32)      { fnDisableVertexAttribArray(index) }
+
+func VertexAttribPointer(index uint32, size int32, typ uint32, normalized bool, stride int32, offset uintptr) {
+	n := uint8(0)
+	if normalized {
+		n = 1
+	}
+	fnVertexAttribPointer(index, size, typ, n, stride, offset)
+}
 
 func GenSamplers(n int32, samplers *uint32)    { fnGenSamplers(n, samplers) }
 func DeleteSamplers(n int32, samplers *uint32) { fnDeleteSamplers(n, samplers) }
@@ -566,6 +587,23 @@ func Init() error {
 		{&fnDeleteSamplers, "glDeleteSamplers"},
 		{&fnBindSampler, "glBindSampler"},
 		{&fnSamplerParameteri, "glSamplerParameteri"},
+	} {
+		if ferr := must(e.fn, e.name); ferr != nil {
+			return ferr
+		}
+	}
+
+	// GL 3.0+ VAO and vertex attribute functions.
+	for _, e := range []struct {
+		fn   interface{}
+		name string
+	}{
+		{&fnGenVertexArrays, "glGenVertexArrays"},
+		{&fnDeleteVertexArrays, "glDeleteVertexArrays"},
+		{&fnBindVertexArray, "glBindVertexArray"},
+		{&fnEnableVertexAttribArray, "glEnableVertexAttribArray"},
+		{&fnDisableVertexAttribArray, "glDisableVertexAttribArray"},
+		{&fnVertexAttribPointer, "glVertexAttribPointer"},
 	} {
 		if ferr := must(e.fn, e.name); ferr != nil {
 			return ferr

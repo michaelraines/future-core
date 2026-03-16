@@ -127,7 +127,7 @@ func (e *mockEncoder) record(method string, args ...interface{}) {
 }
 
 func (e *mockEncoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
-	e.record("BeginRenderPass", desc.Target)
+	e.record("BeginRenderPass", desc.Target, desc.LoadAction)
 }
 func (e *mockEncoder) EndRenderPass()                             { e.record("EndRenderPass") }
 func (e *mockEncoder) SetPipeline(_ backend.Pipeline)             { e.record("SetPipeline") }
@@ -195,8 +195,74 @@ func TestSpritePassExecuteEmpty(t *testing.T) {
 
 	sp.Execute(enc, NewPassContext(800, 600))
 
-	// No batches → no draw calls.
+	// No batches → no draw calls, but screen is still cleared.
 	require.Empty(t, enc.callsByMethod("DrawIndexed"))
+	begins := enc.callsByMethod("BeginRenderPass")
+	require.Len(t, begins, 1)
+	require.Nil(t, begins[0].Args[0]) // screen target (nil)
+	ends := enc.callsByMethod("EndRenderPass")
+	require.Len(t, ends, 1)
+}
+
+func TestSpritePassScreenClearDisabled(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	b.Add(batch.DrawCommand{
+		Vertices:  []batch.Vertex2D{{}, {}, {}},
+		Indices:   []uint16{0, 1, 2},
+		TextureID: 1,
+		TargetID:  0,
+	})
+
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenClearEnabled = false
+	sp.Execute(enc, ctx)
+
+	// Screen target should use LoadActionLoad, not Clear.
+	begins := enc.callsByMethod("BeginRenderPass")
+	require.Len(t, begins, 1)
+	require.Equal(t, backend.LoadActionLoad, begins[0].Args[1])
+}
+
+func TestSpritePassScreenClearEnabled(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	b.Add(batch.DrawCommand{
+		Vertices:  []batch.Vertex2D{{}, {}, {}},
+		Indices:   []uint16{0, 1, 2},
+		TextureID: 1,
+		TargetID:  0,
+	})
+
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	// ScreenClearEnabled defaults to true via NewPassContext.
+	sp.Execute(enc, ctx)
+
+	begins := enc.callsByMethod("BeginRenderPass")
+	require.Len(t, begins, 1)
+	require.Equal(t, backend.LoadActionClear, begins[0].Args[1])
+}
+
+func TestSpritePassEmptyNoClearWhenDisabled(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+	enc := &mockEncoder{}
+
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenClearEnabled = false
+	sp.Execute(enc, ctx)
+
+	// Even with no batches, a render pass is emitted for the screen target,
+	// but with LoadActionLoad (preserving previous content).
+	begins := enc.callsByMethod("BeginRenderPass")
+	require.Len(t, begins, 1)
+	require.Equal(t, backend.LoadActionLoad, begins[0].Args[1])
 }
 
 func TestSpritePassExecuteNonZero(t *testing.T) {
@@ -554,5 +620,6 @@ func TestNewPassContext(t *testing.T) {
 	ctx := NewPassContext(1920, 1080)
 	require.Equal(t, 1920, ctx.FramebufferWidth)
 	require.Equal(t, 1080, ctx.FramebufferHeight)
+	require.True(t, ctx.ScreenClearEnabled)
 	require.NotNil(t, ctx.Resources)
 }

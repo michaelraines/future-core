@@ -19,6 +19,13 @@ type commandEncoder struct {
 	// indexFormat is the format set by the most recent SetIndexBuffer call.
 	// Used by DrawIndexed to select between gl.UNSIGNED_SHORT and gl.UNSIGNED_INT.
 	indexFormat backend.IndexFormat
+
+	// currentFormat holds the vertex format from the most recent SetPipeline call.
+	currentFormat backend.VertexFormat
+
+	// prevAttribCount tracks how many vertex attributes were enabled by the
+	// previous pipeline, so stale slots can be disabled on switch.
+	prevAttribCount int
 }
 
 // BeginRenderPass begins a render pass.
@@ -52,6 +59,7 @@ func (e *commandEncoder) EndRenderPass() {
 // SetPipeline binds a render pipeline.
 func (e *commandEncoder) SetPipeline(pipeline backend.Pipeline) {
 	ps := pipeline.(*pipelineState)
+	e.currentFormat = ps.desc.VertexFormat
 
 	// Bind shader.
 	s := ps.desc.Shader.(*shader)
@@ -86,10 +94,34 @@ func (e *commandEncoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 }
 
-// SetVertexBuffer binds a vertex buffer.
+// SetVertexBuffer binds a vertex buffer and configures vertex attribute
+// pointers based on the current pipeline's vertex format. Attribute pointers
+// snap to the currently-bound VBO, so this must be called after binding.
 func (e *commandEncoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 	b := buf.(*buffer)
 	gl.BindBuffer(gl.ARRAY_BUFFER, b.id)
+	e.applyVertexFormat()
+}
+
+// applyVertexFormat configures vertex attribute pointers from the current
+// pipeline's vertex format and disables any stale attribute slots left
+// over from a previous pipeline with more attributes.
+func (e *commandEncoder) applyVertexFormat() {
+	count := len(e.currentFormat.Attributes)
+	stride := int32(e.currentFormat.Stride)
+	for i, attr := range e.currentFormat.Attributes {
+		idx := uint32(i)
+		size, typ := attributeFormatToGL(attr.Format)
+		normalized := attr.Format == backend.AttributeByte4Norm
+		gl.EnableVertexAttribArray(idx)
+		gl.VertexAttribPointer(idx, size, typ, normalized, stride, uintptr(attr.Offset))
+	}
+	// Disable attribute slots that were enabled by the previous pipeline
+	// but are no longer used by the current one.
+	for i := count; i < e.prevAttribCount; i++ {
+		gl.DisableVertexAttribArray(uint32(i))
+	}
+	e.prevAttribCount = count
 }
 
 // SetIndexBuffer binds an index buffer and records the index format
