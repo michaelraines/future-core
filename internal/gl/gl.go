@@ -1,4 +1,4 @@
-//go:build glfw
+//go:build darwin || linux || freebsd || windows
 
 // Package gl provides pure Go OpenGL 3.3 core profile bindings loaded at
 // runtime via purego. No CGo is required. The shared library (libGL.so on
@@ -8,7 +8,6 @@ package gl
 
 import (
 	"fmt"
-	"runtime"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -209,9 +208,6 @@ var (
 
 	fnGetTexImage func(target uint32, level int32, format, typ uint32, pixels uintptr)
 )
-
-// lib holds the loaded OpenGL library handle.
-var lib uintptr
 
 // ---------------------------------------------------------------------------
 // Public wrappers
@@ -441,14 +437,14 @@ func cString(ptr uintptr) string {
 	}
 	var length int
 	for {
-		if *(*byte)(unsafe.Pointer(ptr + uintptr(length))) == 0 {
+		if *(*byte)(unsafe.Add(unsafe.Pointer(ptr), length)) == 0 {
 			break
 		}
 		length++
 	}
 	bs := make([]byte, length)
 	for i := range bs {
-		bs[i] = *(*byte)(unsafe.Pointer(ptr + uintptr(i)))
+		bs[i] = *(*byte)(unsafe.Add(unsafe.Pointer(ptr), i))
 	}
 	return string(bs)
 }
@@ -460,14 +456,12 @@ func cString(ptr uintptr) string {
 // Init loads the OpenGL shared library and resolves all function pointers.
 // Must be called after an OpenGL context has been made current.
 func Init() error {
-	var err error
-	lib, err = openGLLib()
-	if err != nil {
+	if err := openGLLib(); err != nil {
 		return fmt.Errorf("gl: %w", err)
 	}
 
 	must := func(fn interface{}, name string) error {
-		addr, serr := purego.Dlsym(lib, name)
+		addr, serr := getProcAddr(name)
 		if serr != nil {
 			return fmt.Errorf("gl: symbol %s: %w", name, serr)
 		}
@@ -595,29 +589,4 @@ func Init() error {
 	}
 
 	return nil
-}
-
-// openGLLib opens the platform-specific OpenGL shared library.
-func openGLLib() (uintptr, error) {
-	var names []string
-	switch runtime.GOOS {
-	case "darwin":
-		names = []string{"/System/Library/Frameworks/OpenGL.framework/OpenGL"}
-	case "windows":
-		names = []string{"opengl32.dll"}
-	default: // linux, freebsd, etc.
-		names = []string{"libGL.so.1", "libGL.so"}
-	}
-
-	var firstErr error
-	for _, name := range names {
-		h, err := purego.Dlopen(name, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
-		if err == nil {
-			return h, nil
-		}
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-	return 0, fmt.Errorf("failed to load OpenGL: %w", firstErr)
 }

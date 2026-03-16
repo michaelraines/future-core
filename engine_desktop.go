@@ -1,4 +1,4 @@
-//go:build glfw
+//go:build darwin || linux || freebsd || windows
 
 package futurerender
 

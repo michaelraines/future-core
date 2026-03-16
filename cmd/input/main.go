@@ -1,5 +1,3 @@
-//go:build glfw
-
 // Command input demonstrates input state display: keyboard, mouse, and
 // gamepad state rendered as text each frame.
 //

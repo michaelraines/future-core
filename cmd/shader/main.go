@@ -1,5 +1,3 @@
-//go:build glfw
-
 // Command shader demonstrates custom shader rendering: a fullscreen quad
 // with a time-varying gradient effect using DrawRectShader and raw GLSL.
 //

@@ -101,6 +101,13 @@ func ndcToScreen(ndcX, ndcY float32, vp viewportRect) (sx, sy float32) {
 
 // rasterizeTriangle rasterizes a single triangle using the half-space method.
 // It calls emit for each fragment that passes the depth test.
+//
+// All vertex transform, screen projection, barycentric weight, and UV
+// interpolation is computed in float64 with explicit math.FMA to guarantee
+// cross-platform determinism. ARM64 auto-FMAs float32/float64 multiply-add
+// chains while x86_64 (GOAMD64=v1) does not, causing different rounding at
+// texel boundaries. math.FMA forces identical correctly-rounded results on
+// both platforms (hardware FMA on ARM64, software on x86_64).
 func (r *rasterizer) rasterizeTriangle(
 	v0, v1, v2 vertex2D,
 	proj [16]float32,
@@ -108,29 +115,56 @@ func (r *rasterizer) rasterizeTriangle(
 	colorBody [16]float32,
 	colorTranslation [4]float32,
 ) {
-	// Transform vertices to clip space.
-	x0, y0, z0, w0 := transformVertex(v0, proj)
-	x1, y1, z1, w1 := transformVertex(v1, proj)
-	x2, y2, z2, w2 := transformVertex(v2, proj)
+	// Transform vertices to clip space in float64 with explicit FMA.
+	p := [16]float64{}
+	for i, v := range proj {
+		p[i] = float64(v)
+	}
+	px0, py0 := float64(v0.px), float64(v0.py)
+	px1, py1 := float64(v1.px), float64(v1.py)
+	px2, py2 := float64(v2.px), float64(v2.py)
+
+	// proj * [px, py, 0, 1] using math.FMA for determinism.
+	cx0 := math.FMA(p[0], px0, math.FMA(p[4], py0, p[12]))
+	cy0 := math.FMA(p[1], px0, math.FMA(p[5], py0, p[13]))
+	cz0 := math.FMA(p[2], px0, math.FMA(p[6], py0, p[14]))
+	cw0 := math.FMA(p[3], px0, math.FMA(p[7], py0, p[15]))
+
+	cx1 := math.FMA(p[0], px1, math.FMA(p[4], py1, p[12]))
+	cy1 := math.FMA(p[1], px1, math.FMA(p[5], py1, p[13]))
+	cz1 := math.FMA(p[2], px1, math.FMA(p[6], py1, p[14]))
+	cw1 := math.FMA(p[3], px1, math.FMA(p[7], py1, p[15]))
+
+	cx2 := math.FMA(p[0], px2, math.FMA(p[4], py2, p[12]))
+	cy2 := math.FMA(p[1], px2, math.FMA(p[5], py2, p[13]))
+	cz2 := math.FMA(p[2], px2, math.FMA(p[6], py2, p[14]))
+	cw2 := math.FMA(p[3], px2, math.FMA(p[7], py2, p[15]))
 
 	// Perspective divide → NDC.
-	if w0 == 0 || w1 == 0 || w2 == 0 {
+	if cw0 == 0 || cw1 == 0 || cw2 == 0 {
 		return
 	}
-	nx0, ny0, nz0 := x0/w0, y0/w0, z0/w0
-	nx1, ny1, nz1 := x1/w1, y1/w1, z1/w1
-	nx2, ny2, nz2 := x2/w2, y2/w2, z2/w2
+	nx0, ny0, nz0 := cx0/cw0, cy0/cw0, cz0/cw0
+	nx1, ny1, nz1 := cx1/cw1, cy1/cw1, cz1/cw1
+	nx2, ny2, nz2 := cx2/cw2, cy2/cw2, cz2/cw2
 
-	// NDC → screen.
-	sx0, sy0 := ndcToScreen(nx0, ny0, r.viewport)
-	sx1, sy1 := ndcToScreen(nx1, ny1, r.viewport)
-	sx2, sy2 := ndcToScreen(nx2, ny2, r.viewport)
+	// NDC → screen in float64 with math.FMA.
+	vpx, vpy := float64(r.viewport.x), float64(r.viewport.y)
+	halfW := 0.5 * float64(r.viewport.w)
+	halfH := 0.5 * float64(r.viewport.h)
+
+	sx0 := math.FMA(nx0+1, halfW, vpx)
+	sy0 := math.FMA(ny0+1, halfH, vpy)
+	sx1 := math.FMA(nx1+1, halfW, vpx)
+	sy1 := math.FMA(ny1+1, halfH, vpy)
+	sx2 := math.FMA(nx2+1, halfW, vpx)
+	sy2 := math.FMA(ny2+1, halfH, vpy)
 
 	// Bounding box (clamped to framebuffer).
-	minX := int(math.Floor(float64(min3f(sx0, sx1, sx2))))
-	maxX := int(math.Ceil(float64(max3f(sx0, sx1, sx2))))
-	minY := int(math.Floor(float64(min3f(sy0, sy1, sy2))))
-	maxY := int(math.Ceil(float64(max3f(sy0, sy1, sy2))))
+	minX := int(math.Floor(min3(sx0, sx1, sx2)))
+	maxX := int(math.Ceil(max3(sx0, sx1, sx2)))
+	minY := int(math.Floor(min3(sy0, sy1, sy2)))
+	maxY := int(math.Ceil(max3(sy0, sy1, sy2)))
 
 	if minX < 0 {
 		minX = 0
@@ -162,48 +196,55 @@ func (r *rasterizer) rasterizeTriangle(
 	}
 
 	// Edge function denominator for barycentric coordinates.
-	denom := edgeFunc(sx0, sy0, sx1, sy1, sx2, sy2)
+	denom := edgeFuncFMA(sx0, sy0, sx1, sy1, sx2, sy2)
 	if denom == 0 {
 		return // degenerate triangle
 	}
 	invDenom := 1.0 / denom
 
+	// Precompute float64 UV coordinates.
+	tu0, tv0 := float64(v0.tu), float64(v0.tv)
+	tu1, tv1 := float64(v1.tu), float64(v1.tv)
+	tu2, tv2 := float64(v2.tu), float64(v2.tv)
+
 	// Rasterize: iterate over bounding box pixels.
 	for py := minY; py < maxY; py++ {
 		for px := minX; px < maxX; px++ {
 			// Sample at pixel center.
-			cx := float32(px) + 0.5
-			cy := float32(py) + 0.5
+			pcx := float64(px) + 0.5
+			pcy := float64(py) + 0.5
 
-			// Barycentric coordinates.
-			w0f := edgeFunc(sx1, sy1, sx2, sy2, cx, cy) * invDenom
-			w1f := edgeFunc(sx2, sy2, sx0, sy0, cx, cy) * invDenom
-			w2f := edgeFunc(sx0, sy0, sx1, sy1, cx, cy) * invDenom
+			// Barycentric coordinates via FMA edge function.
+			w0 := edgeFuncFMA(sx1, sy1, sx2, sy2, pcx, pcy) * invDenom
+			w1 := edgeFuncFMA(sx2, sy2, sx0, sy0, pcx, pcy) * invDenom
+			w2 := edgeFuncFMA(sx0, sy0, sx1, sy1, pcx, pcy) * invDenom
 
 			// Inside triangle test.
-			if w0f < 0 || w1f < 0 || w2f < 0 {
+			if w0 < 0 || w1 < 0 || w2 < 0 {
 				continue
 			}
 
 			// Interpolate depth.
-			depth := w0f*nz0 + w1f*nz1 + w2f*nz2
+			depth := math.FMA(w0, nz0, math.FMA(w1, nz1, w2*nz2))
 
 			// Depth test.
 			if r.depthTest {
+				depthF32 := float32(depth)
 				idx := py*r.width + px
-				if idx < len(r.depthBuf) && depth > r.depthBuf[idx] {
+				if idx < len(r.depthBuf) && depthF32 > r.depthBuf[idx] {
 					continue
 				}
 				if r.depthWrite && idx < len(r.depthBuf) {
-					r.depthBuf[idx] = depth
+					r.depthBuf[idx] = depthF32
 				}
 			}
 
-			// Interpolate texcoords.
-			u := w0f*v0.tu + w1f*v1.tu + w2f*v2.tu
-			v := w0f*v0.tv + w1f*v1.tv + w2f*v2.tv
+			// Interpolate texcoords with FMA for determinism.
+			u := float32(math.FMA(w0, tu0, math.FMA(w1, tu1, w2*tu2)))
+			v := float32(math.FMA(w0, tv0, math.FMA(w1, tv1, w2*tv2)))
 
-			// Interpolate vertex color.
+			// Interpolate vertex color (float32 — ±3 tolerance absorbs any FMA diff).
+			w0f, w1f, w2f := float32(w0), float32(w1), float32(w2)
 			cr := w0f*v0.r + w1f*v1.r + w2f*v2.r
 			cg := w0f*v0.g + w1f*v1.g + w2f*v2.g
 			cb := w0f*v0.b + w1f*v1.b + w2f*v2.b
@@ -311,8 +352,8 @@ func sampleNearest(pixels []byte, w, h, bpp int, u, v float32) (cr, cg, cb, ca f
 	u = clampf(u)
 	v = clampf(v)
 
-	x := int(u * float32(w-1))
-	y := int(v * float32(h-1))
+	x := int(math.Round(float64(u) * float64(w-1)))
+	y := int(math.Round(float64(v) * float64(h-1)))
 	if x >= w {
 		x = w - 1
 	}
@@ -384,8 +425,38 @@ func bilerp(v00, v10, v01, v11, dx, dy float32) float32 {
 
 // --- Helpers ---
 
+// edgeFuncFMA computes the edge function using math.FMA for cross-platform
+// determinism. The result is (bx-ax)*(cy-ay) - (by-ay)*(cx-ax) with the
+// subtraction fused into the second multiply via FMA.
+func edgeFuncFMA(ax, ay, bx, by, cx, cy float64) float64 {
+	dx1, dy1 := bx-ax, cy-ay
+	dx2, dy2 := by-ay, cx-ax
+	// FMA computes dx1*dy1 + (-(dx2*dy2)) with single rounding.
+	return math.FMA(dx1, dy1, -(dx2 * dy2))
+}
+
 func edgeFunc(ax, ay, bx, by, cx, cy float32) float32 {
 	return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax)
+}
+
+func min3(a, b, c float64) float64 {
+	if b < a {
+		a = b
+	}
+	if c < a {
+		a = c
+	}
+	return a
+}
+
+func max3(a, b, c float64) float64 {
+	if b > a {
+		a = b
+	}
+	if c > a {
+		a = c
+	}
+	return a
 }
 
 func min3f(a, b, c float32) float32 {

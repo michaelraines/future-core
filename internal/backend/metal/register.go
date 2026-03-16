@@ -1,3 +1,5 @@
+//go:build darwin
+
 package metal
 
 import "github.com/michaelraines/future-render/internal/backend"

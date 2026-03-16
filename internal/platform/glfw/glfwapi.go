@@ -1,4 +1,4 @@
-//go:build glfw
+//go:build darwin || linux || freebsd || windows
 
 // This file provides pure Go GLFW bindings loaded at runtime via purego.
 // No CGo is required. The GLFW shared library (libglfw.so on Linux,
@@ -7,7 +7,6 @@ package glfw
 
 import (
 	"fmt"
-	"runtime"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -212,17 +211,13 @@ type glfwVideoMode struct {
 // GLFW library loading
 // ---------------------------------------------------------------------------
 
-var glfwLib uintptr
-
 func initGLFWAPI() error {
-	var err error
-	glfwLib, err = openGLFWLib()
-	if err != nil {
+	if err := openGLFWLib(); err != nil {
 		return err
 	}
 
 	must := func(fn interface{}, name string) error {
-		addr, serr := purego.Dlsym(glfwLib, name)
+		addr, serr := getGLFWProcAddr(name)
 		if serr != nil {
 			return fmt.Errorf("glfw: symbol %s: %w", name, serr)
 		}
@@ -272,30 +267,6 @@ func initGLFWAPI() error {
 	return nil
 }
 
-func openGLFWLib() (uintptr, error) {
-	var names []string
-	switch runtime.GOOS {
-	case "darwin":
-		names = []string{"libglfw.3.dylib", "libglfw.dylib"}
-	case "windows":
-		names = []string{"glfw3.dll"}
-	default: // linux, freebsd, etc.
-		names = []string{"libglfw.so.3", "libglfw.so"}
-	}
-
-	var firstErr error
-	for _, name := range names {
-		h, err := purego.Dlopen(name, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
-		if err == nil {
-			return h, nil
-		}
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-	return 0, fmt.Errorf("failed to load GLFW: %w", firstErr)
-}
-
 // cStr converts a Go string to a null-terminated byte pointer.
 // Safe when passed directly as a purego function argument (pinned during call).
 func cStr(s string) *byte {
@@ -306,5 +277,5 @@ func cStr(s string) *byte {
 
 // getVideoMode reads the GLFWvidmode struct from a pointer.
 func getVideoMode(ptr uintptr) glfwVideoMode {
-	return *(*glfwVideoMode)(unsafe.Pointer(ptr))
+	return *(*glfwVideoMode)(unsafe.Pointer(ptr)) //nolint:govet // purego interop: reading struct from C pointer
 }

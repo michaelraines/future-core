@@ -43,14 +43,14 @@ proof that the full stack (platform → backend → pipeline → engine) connect
 
 | Task | Status | Notes |
 |---|---|---|
-| GLFW window implementation (`internal/platform/glfw/`) | Done | purego (no CGo), build-tagged |
+| GLFW window implementation (`internal/platform/glfw/`) | Done | purego (no CGo), OS-based build constraints |
 | OpenGL 3.3 device implementation (`internal/backend/opengl/`) | Done | purego (no CGo), full Device + CommandEncoder |
 | Remove CGo dependencies (go-gl/gl, go-gl/glfw) | Done | Replaced with purego dynamic loading via `internal/gl/` |
 | Wire engine.run() → platform window → backend device | Done | Fixed-timestep update + variable draw |
 | Clear pass implementation | Done | Engine clears via CommandEncoder.BeginRenderPass |
 | Present pass (logical screen → window blit) | Done | SwapBuffers via GLFW |
 | Smoke test: window opens, clears blue, Escape exits | Done | `cmd/clear/main.go` |
-| `go build` with `-tags glfw` compiles and links | Done | Also compiles without tags (stub engine) |
+| `go build` compiles and links on desktop platforms | Done | OS-based build constraints; stub engine on non-desktop |
 | CI lint pipeline (golangci-lint v2) | Done | 0 issues on both tagged and untagged builds |
 | Makefile with `ci`, `lint`, `test`, `build` targets | Done | |
 | GitHub Actions CI workflow | Done | `.github/workflows/ci.yml` |
@@ -83,7 +83,7 @@ The default shader that all 2D sprite drawing uses.
 
 | Task | Status | Notes |
 |---|---|---|
-| Default sprite vertex shader (GLSL 330) | Done | `engine_glfw.go` constants |
+| Default sprite vertex shader (GLSL 330) | Done | `engine_desktop.go` constants |
 | Default sprite fragment shader (GLSL 330) | Done | `texture() * vColor` |
 | VAO setup for Vertex2D layout | Done | SpritePass binds VBO with Vertex2D format |
 | Orthographic projection matrix from screen dimensions | Done | `Mat4Ortho` + `Float32()` conversion |
@@ -98,7 +98,7 @@ Connect `Image.DrawImage()` through the batcher to actual draw calls.
 | `Image.DrawImage()` submits `DrawCommand` to batcher | Done | TextureID, ShaderID, BlendMode, Depth |
 | `Image.Fill()` wired to fullscreen quad | Done | Uses white texture × vertex color |
 | Sprite render pass: flush batcher → upload VBO/IBO → draw | Done | `pipeline.SpritePass` |
-| Engine loop: collect draws → flush batcher → execute passes → swap | Done | `engine_glfw.go` render loop |
+| Engine loop: collect draws → flush batcher → execute passes → swap | Done | `engine_desktop.go` render loop |
 
 ### Phase 2d — DrawImageOptions + SubImage ✓
 
@@ -308,7 +308,7 @@ pipeline 90.6%, batch 97.5%.
 
 ---
 
-## Milestone 9 — Multi-Backend Support (In Progress)
+## Milestone 9 — Multi-Backend Support (Done)
 
 Goal: ship all planned GPU backends — WebGL2, Vulkan, Metal, WebGPU, and
 DirectX 12 — alongside the existing OpenGL 3.3 backend. Every backend
@@ -428,17 +428,27 @@ Windows-only backend using DirectX 12 for best native performance on Windows.
 | Win32 platform integration (`internal/platform/win32/`) | Planned | HWND creation via purego; alternative to GLFW on Windows |
 | Build tag `//go:build windows && dx12` | Planned | Windows-only |
 
-### 9g — Integration + Polish (Planned)
+### 9g — Integration + Polish (Done)
 
 Cross-backend validation, auto-detection, and documentation.
 
 | Task | Status | Notes |
 |---|---|---|
-| All backends pass conformance suite | Done | All 6 backends (soft, webgl, vulkan, metal, webgpu, dx12) pass 10/10 conformance scenes |
-| Auto-detection logic in `backend.Create("auto")` | Planned | Platform-aware: macOS→Metal, Windows→DX12 or Vulkan, Linux→Vulkan, browser→WebGPU→WebGL2, fallback→OpenGL |
-| `cmd/backends/main.go` example | Planned | Lists available backends, creates device with each, reports capabilities |
-| Backend comparison documentation | Planned | Feature matrix: which backends support which capabilities, platform availability |
-| CI matrix expansion | Planned | GitHub Actions: Linux (OpenGL+Vulkan+soft), macOS (Metal+OpenGL), Windows (DX12+Vulkan+OpenGL), WASM (WebGL2+WebGPU) |
+| All backends pass conformance suite | Done | All 7 backends (soft, opengl, webgl, vulkan, metal, webgpu, dx12) pass 10/10 conformance scenes |
+| Auto-detection logic in `backend.Resolve("auto")` | Done | Platform-aware preference lists: macOS→Metal, Windows→DX12, Linux→Vulkan, browser→WebGPU→WebGL2, fallback→OpenGL |
+| `cmd/backends/main.go` example | Done | Lists registered backends, creates device for each, prints capability table |
+| Backend comparison documentation | Done | Feature matrix added to DESIGN.md: platform availability, GPU binding status, shader language, capabilities |
+| CI matrix expansion | Done | GitHub Actions: Linux (full CI), macOS and Windows (test + build) |
+
+**Exit criteria**: all backends registered, auto-detected per platform, documented,
+and tested across platforms in CI.
+
+**Completed**: `backend.Resolve("auto", preferred)` selects backends using
+platform-specific preference lists (macOS→Metal→Vulkan→OpenGL→Soft, etc.).
+`cmd/backends` prints a capability table for all registered backends. DESIGN.md
+now contains a full backend feature comparison matrix covering platform
+availability, GPU binding status, shader languages, and `DeviceCapabilities`
+fields. CI expanded with `cross-platform` job testing on macOS and Windows.
 
 ---
 

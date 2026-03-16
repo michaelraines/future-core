@@ -1,4 +1,4 @@
-//go:build glfw
+//go:build darwin || linux || freebsd || windows
 
 // Package glfw implements the platform.Window interface using GLFW,
 // loaded at runtime via purego (no CGo required).
@@ -253,7 +253,7 @@ func (w *Window) PollGamepads() {
 			}
 			for i := 0; i < n; i++ {
 				event.Axes[i] = float64(*(*float32)(
-					unsafe.Pointer(axesPtr + uintptr(i)*unsafe.Sizeof(float32(0))),
+					unsafe.Add(unsafe.Pointer(axesPtr), uintptr(i)*unsafe.Sizeof(float32(0))),
 				))
 			}
 		}
@@ -267,7 +267,7 @@ func (w *Window) PollGamepads() {
 				n = len(event.Buttons)
 			}
 			for i := 0; i < n; i++ {
-				b := *(*byte)(unsafe.Pointer(buttonsPtr + uintptr(i)))
+				b := *(*byte)(unsafe.Add(unsafe.Pointer(buttonsPtr), i))
 				event.Buttons[i] = b == byte(glfwPress)
 			}
 		}

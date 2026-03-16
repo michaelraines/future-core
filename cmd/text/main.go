@@ -1,5 +1,3 @@
-//go:build glfw
-
 // Command text demonstrates text rendering: large titles, word-wrapped
 // paragraphs, and left/center/right alignment modes.
 //

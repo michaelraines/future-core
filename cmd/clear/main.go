@@ -1,9 +1,7 @@
-//go:build glfw
-
 // Command clear is a minimal smoke test for Future Render.
 // It opens a window, clears it to cornflower blue, and exits on Escape.
 //
-// Build: go build -tags glfw ./cmd/clear
+// Build: go build ./cmd/clear
 // Run:   ./clear
 package main
 

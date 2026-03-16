@@ -1,3 +1,5 @@
+//go:build windows
+
 package dx12
 
 import "github.com/michaelraines/future-render/internal/backend"

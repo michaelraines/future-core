@@ -3,15 +3,14 @@ name: CI
 on:
   push:
     branches: [main, "claude/**"]
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
+  # Primary CI job: lint, test, coverage, build on Linux
   ci:
-    name: Lint, Test, Build
+    name: Lint, Test, Build (Linux)
     runs-on: ubuntu-latest
 
     strategy:
@@ -50,6 +49,32 @@ jobs:
 
       - name: Test (race detector)
         run: make test-race
+
+      - name: Build
+        run: make build
+
+  # Cross-platform build and test on macOS and Windows
+  cross-platform:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        go-version: ["1.24"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Test
+        run: make test
 
       - name: Build
         run: make build

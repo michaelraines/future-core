@@ -283,6 +283,39 @@ func TestSyncString(t *testing.T) {
 	require.Equal(t, "world", s.Load())
 }
 
+func TestPreferredBackends(t *testing.T) {
+	backends := preferredBackends()
+	require.NotEmpty(t, backends)
+	// soft should always be in the list as a fallback.
+	require.Equal(t, "soft", backends[len(backends)-1])
+}
+
+func TestRegisterTexture(t *testing.T) {
+	old := getEngine()
+	defer func() { setEngine(old) }()
+
+	game := &stubGame{}
+	e := newPlatformEngine(game)
+	setEngine(e)
+
+	// Verify the method doesn't panic and stores correctly.
+	e.registerTexture(42, nil)
+	require.Contains(t, e.textures, uint32(42))
+}
+
+func TestSetVSyncWithEngine(t *testing.T) {
+	old := getEngine()
+	defer func() { setEngine(old) }()
+
+	game := &stubGame{}
+	e := newPlatformEngine(game)
+	setEngine(e)
+
+	// setVSync is a no-op but should not panic.
+	e.setVSync(false)
+	e.setVSync(true)
+}
+
 func TestSetScreenClearedEveryFrame(t *testing.T) {
 	defer SetScreenClearedEveryFrame(true)
 
