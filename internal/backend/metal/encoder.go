@@ -1,3 +1,5 @@
+//go:build !metal
+
 package metal
 
 import "github.com/michaelraines/future-render/internal/backend/softdelegate"

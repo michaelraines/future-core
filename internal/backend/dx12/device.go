@@ -1,3 +1,5 @@
+//go:build !dx12native
+
 // Package dx12 implements backend.Device targeting DirectX 12.
 //
 // In its current form this backend delegates all rendering to the software

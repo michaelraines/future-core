@@ -1,3 +1,5 @@
+//go:build !metal
+
 package metal
 
 import (

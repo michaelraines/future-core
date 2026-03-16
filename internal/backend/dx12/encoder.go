@@ -1,3 +1,5 @@
+//go:build !dx12native
+
 package dx12
 
 import "github.com/michaelraines/future-render/internal/backend/softdelegate"

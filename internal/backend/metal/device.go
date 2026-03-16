@@ -1,3 +1,5 @@
+//go:build !metal
+
 // Package metal implements backend.Device targeting Apple's Metal API.
 //
 // In its current form this backend delegates all rendering to the software
