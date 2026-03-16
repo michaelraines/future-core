@@ -1,3 +1,5 @@
+//go:build darwin || linux || freebsd || windows
+
 package vulkan
 
 import "github.com/michaelraines/future-render/internal/backend"

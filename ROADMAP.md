@@ -43,14 +43,14 @@ proof that the full stack (platform → backend → pipeline → engine) connect
 
 | Task | Status | Notes |
 |---|---|---|
-| GLFW window implementation (`internal/platform/glfw/`) | Done | purego (no CGo), build-tagged |
+| GLFW window implementation (`internal/platform/glfw/`) | Done | purego (no CGo), OS-based build constraints |
 | OpenGL 3.3 device implementation (`internal/backend/opengl/`) | Done | purego (no CGo), full Device + CommandEncoder |
 | Remove CGo dependencies (go-gl/gl, go-gl/glfw) | Done | Replaced with purego dynamic loading via `internal/gl/` |
 | Wire engine.run() → platform window → backend device | Done | Fixed-timestep update + variable draw |
 | Clear pass implementation | Done | Engine clears via CommandEncoder.BeginRenderPass |
 | Present pass (logical screen → window blit) | Done | SwapBuffers via GLFW |
 | Smoke test: window opens, clears blue, Escape exits | Done | `cmd/clear/main.go` |
-| `go build` with `-tags glfw` compiles and links | Done | Also compiles without tags (stub engine) |
+| `go build` compiles and links on desktop platforms | Done | OS-based build constraints; stub engine on non-desktop |
 | CI lint pipeline (golangci-lint v2) | Done | 0 issues on both tagged and untagged builds |
 | Makefile with `ci`, `lint`, `test`, `build` targets | Done | |
 | GitHub Actions CI workflow | Done | `.github/workflows/ci.yml` |
@@ -83,7 +83,7 @@ The default shader that all 2D sprite drawing uses.
 
 | Task | Status | Notes |
 |---|---|---|
-| Default sprite vertex shader (GLSL 330) | Done | `engine_glfw.go` constants |
+| Default sprite vertex shader (GLSL 330) | Done | `engine_desktop.go` constants |
 | Default sprite fragment shader (GLSL 330) | Done | `texture() * vColor` |
 | VAO setup for Vertex2D layout | Done | SpritePass binds VBO with Vertex2D format |
 | Orthographic projection matrix from screen dimensions | Done | `Mat4Ortho` + `Float32()` conversion |
@@ -98,7 +98,7 @@ Connect `Image.DrawImage()` through the batcher to actual draw calls.
 | `Image.DrawImage()` submits `DrawCommand` to batcher | Done | TextureID, ShaderID, BlendMode, Depth |
 | `Image.Fill()` wired to fullscreen quad | Done | Uses white texture × vertex color |
 | Sprite render pass: flush batcher → upload VBO/IBO → draw | Done | `pipeline.SpritePass` |
-| Engine loop: collect draws → flush batcher → execute passes → swap | Done | `engine_glfw.go` render loop |
+| Engine loop: collect draws → flush batcher → execute passes → swap | Done | `engine_desktop.go` render loop |
 
 ### Phase 2d — DrawImageOptions + SubImage ✓
 

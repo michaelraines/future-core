@@ -1,4 +1,4 @@
-//go:build glfw
+//go:build darwin || linux || freebsd || windows
 
 // This file provides pure Go GLFW bindings loaded at runtime via purego.
 // No CGo is required. The GLFW shared library (libglfw.so on Linux,
@@ -306,5 +306,5 @@ func cStr(s string) *byte {
 
 // getVideoMode reads the GLFWvidmode struct from a pointer.
 func getVideoMode(ptr uintptr) glfwVideoMode {
-	return *(*glfwVideoMode)(unsafe.Pointer(ptr))
+	return *(*glfwVideoMode)(unsafe.Pointer(ptr)) //nolint:govet // purego interop: reading struct from C pointer
 }

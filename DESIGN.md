@@ -64,7 +64,7 @@ future-render/
 │   │   ├── registry.go     # Backend factory registry: Register/Create/Available
 │   │   ├── conformance/    # Golden-image conformance test framework (10 scenes)
 │   │   ├── soft/           # Software rasterizer — reference backend, no GPU needed
-│   │   ├── opengl/         # OpenGL 3.3+ via purego (build tag: glfw)
+│   │   ├── opengl/         # OpenGL 3.3+ via purego (desktop OS constraint)
 │   │   ├── webgl/          # WebGL2 — soft-delegating, ready for syscall/js
 │   │   ├── vulkan/         # Vulkan — soft-delegating, ready for purego libvulkan
 │   │   ├── metal/          # Metal — soft-delegating, ready for purego objc_msgSend
@@ -130,7 +130,7 @@ registry (`internal/backend/registry.go`):
 | Backend | Package | Status | Platform |
 |---|---|---|---|
 | Software | `soft/` | Production — CPU rasterizer, headless CI reference | All |
-| OpenGL 3.3 | `opengl/` | Production — purego, no CGo | Desktop (glfw tag) |
+| OpenGL 3.3 | `opengl/` | Production — purego, no CGo | Desktop (darwin/linux/freebsd/windows) |
 | WebGL2 | `webgl/` | Soft-delegating — ready for syscall/js | Browser (WASM) |
 | Vulkan | `vulkan/` | Soft-delegating — ready for purego libvulkan | Linux/Windows/Android |
 | Metal | `metal/` | Soft-delegating — ready for purego objc_msgSend | macOS/iOS |
@@ -141,7 +141,8 @@ registry (`internal/backend/registry.go`):
 pass in any environment. When real GPU bindings are added, only the delegation
 layer needs replacement — the type structure and API surface are already in place.
 
-Selection is compile-time via build tags and runtime via environment variable:
+Selection is compile-time via OS-based build constraints and runtime via
+environment variable:
 ```
 FUTURE_RENDER_BACKEND=opengl|webgl|vulkan|metal|webgpu|dx12|soft|auto
 ```

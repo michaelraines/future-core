@@ -1,5 +1,3 @@
-//go:build glfw
-
 // Command sprite demonstrates M2 image rendering: loading a PNG,
 // drawing it with transforms (scale, rotation), and alpha blending.
 //

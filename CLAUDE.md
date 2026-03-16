@@ -52,8 +52,9 @@ defaults: `gocritic`, `revive`, `errname`, `errorlint`, `exhaustive`,
 `goimports`, `misspell`, `prealloc`, `unparam`.
 
 There are no external Go dependencies yet (`go.mod` has only the standard
-library). When platform backends are added, they will use build tags
-(`-tags glfw`).
+library). Desktop platform code (GLFW, OpenGL) is gated by OS-based build
+constraints (`//go:build darwin || linux || freebsd || windows`) and compiles
+automatically on desktop platforms — no `-tags` flags needed.
 
 ### Known CI Limitation: Audio Packages Excluded
 
@@ -71,9 +72,8 @@ the same exclusion.
 **To resolve this in the future**, choose one of:
 1. **Install ALSA headers in CI** — add `sudo apt-get install -y libasound2-dev`
    to the workflow, then remove the `grep -v /audio` filters from the Makefile.
-2. **Use a build tag** — gate audio packages behind `//go:build audio` (similar
-   to the `glfw` tag used by `cmd/` examples and platform code), so they are
-   excluded by default and only built/tested with `-tags audio`.
+2. **Use a build tag** — gate audio packages behind `//go:build audio`, so they
+   are excluded by default and only built/tested with `-tags audio`.
 3. **Use a pure-Go audio backend** — replace `oto/v3` with a backend that
    doesn't require CGo, eliminating the system dependency entirely.
 

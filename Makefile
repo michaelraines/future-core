@@ -21,16 +21,20 @@
 # Minimum required test coverage per package (percentage).
 COVERAGE_MIN := 80
 
-# Packages to build/test. Audio packages require platform-specific C libraries
-# (ALSA on Linux) that may not be available in all environments, so they are
-# excluded from the default package set. Use "go test ./audio/..." directly
-# when ALSA development headers are installed.
-PKGS := $(shell go list ./... | grep -v /audio | grep -v cmd/audio)
+# Packages for vet/lint/test/coverage. Excludes:
+# - audio/: requires ALSA headers (CGo) on Linux
+# - cmd/: example binaries with no test files
+# - internal/gl, internal/platform/glfw, internal/backend/opengl: purego interop
+#   requires uintptr→unsafe.Pointer conversions that go vet flags; no tests in CI
+PKGS := $(shell go list ./... | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl | grep -v /internal/platform/glfw | grep -v /internal/backend/opengl)
 
 # LINT_PATHS provides relative directory paths for golangci-lint, which
 # requires filesystem paths rather than Go module paths.
 MODULE := $(shell go list -m)
-LINT_PATHS := $(shell go list ./... | grep -v /audio | grep -v cmd/audio | sed "s|^$(MODULE)|.|")
+LINT_PATHS := $(shell go list ./... | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl | grep -v /internal/platform/glfw | grep -v /internal/backend/opengl | sed "s|^$(MODULE)|.|")
+
+# All buildable packages (excludes only audio due to CGo/ALSA dependency).
+BUILD_PKGS := $(shell go list ./... | grep -v /audio)
 
 # Default target runs the full CI pipeline
 all: ci
@@ -72,10 +76,10 @@ bench:
 	@echo "==> Running benchmarks..."
 	go test -bench=. -benchmem ./math/ ./internal/batch/
 
-# Build all packages
+# Build all packages (includes cmd/ examples and platform code)
 build:
 	@echo "==> Building..."
-	go build $(PKGS)
+	go build $(BUILD_PKGS)
 
 # --- Coverage Targets ---
 

@@ -1,5 +1,3 @@
-//go:build glfw
-
 // Command triangles demonstrates M3 custom geometry: drawing overlapping
 // triangles with DrawTriangles using both NonZero and EvenOdd fill rules.
 //

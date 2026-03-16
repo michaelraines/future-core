@@ -1,4 +1,4 @@
-//go:build glfw
+//go:build darwin || linux || freebsd || windows
 
 // Package gl provides pure Go OpenGL 3.3 core profile bindings loaded at
 // runtime via purego. No CGo is required. The shared library (libGL.so on
@@ -441,14 +441,14 @@ func cString(ptr uintptr) string {
 	}
 	var length int
 	for {
-		if *(*byte)(unsafe.Pointer(ptr + uintptr(length))) == 0 {
+		if *(*byte)(unsafe.Add(unsafe.Pointer(ptr), length)) == 0 {
 			break
 		}
 		length++
 	}
 	bs := make([]byte, length)
 	for i := range bs {
-		bs[i] = *(*byte)(unsafe.Pointer(ptr + uintptr(i)))
+		bs[i] = *(*byte)(unsafe.Add(unsafe.Pointer(ptr), i))
 	}
 	return string(bs)
 }

@@ -1,3 +1,5 @@
+//go:build darwin || linux || freebsd || windows || js
+
 package webgpu
 
 import "github.com/michaelraines/future-render/internal/backend"

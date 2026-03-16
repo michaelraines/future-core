@@ -1,5 +1,3 @@
-//go:build glfw
-
 // Command audio demonstrates audio playback: generating a sine wave WAV
 // in memory, decoding it, looping it with InfiniteLoop, and controlling
 // playback with keyboard input.
