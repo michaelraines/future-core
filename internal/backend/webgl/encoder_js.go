@@ -16,6 +16,7 @@ type Encoder struct {
 
 	inRenderPass    bool
 	currentPipeline *Pipeline
+	indexFormat     backend.IndexFormat
 }
 
 // BeginRenderPass begins a WebGL2 render pass.
@@ -82,9 +83,10 @@ func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 }
 
 // SetIndexBuffer binds an index buffer.
-func (e *Encoder) SetIndexBuffer(buf backend.Buffer, _ backend.IndexFormat) {
+func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat) {
 	if b, ok := buf.(*Buffer); ok {
 		e.gl.Call("bindBuffer", e.gl.Get("ELEMENT_ARRAY_BUFFER").Int(), b.handle)
+		e.indexFormat = format
 	}
 }
 
@@ -153,6 +155,10 @@ func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
 func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 	idxType := e.gl.Get("UNSIGNED_SHORT").Int()
 	byteOffset := firstIndex * 2
+	if e.indexFormat == backend.IndexUint32 {
+		idxType = e.gl.Get("UNSIGNED_INT").Int()
+		byteOffset = firstIndex * 4
+	}
 	if instanceCount <= 1 {
 		e.gl.Call("drawElements", e.gl.Get("TRIANGLES").Int(),
 			indexCount, idxType, byteOffset)
