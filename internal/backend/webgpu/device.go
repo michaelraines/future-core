@@ -1,3 +1,5 @@
+//go:build !wgpunative
+
 // Package webgpu implements backend.Device targeting the WebGPU API.
 //
 // WebGPU is a next-generation cross-platform GPU API that runs natively

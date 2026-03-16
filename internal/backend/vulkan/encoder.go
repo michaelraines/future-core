@@ -1,3 +1,5 @@
+//go:build !vulkan
+
 package vulkan
 
 import "github.com/michaelraines/future-render/internal/backend/softdelegate"

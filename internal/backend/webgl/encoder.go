@@ -1,3 +1,5 @@
+//go:build !js
+
 package webgl
 
 import "github.com/michaelraines/future-render/internal/backend/softdelegate"

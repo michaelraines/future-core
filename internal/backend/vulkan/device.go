@@ -1,3 +1,5 @@
+//go:build !vulkan
+
 // Package vulkan implements backend.Device targeting the Vulkan API.
 //
 // In its current form this backend delegates all rendering to the software

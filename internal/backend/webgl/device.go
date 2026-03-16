@@ -1,3 +1,5 @@
+//go:build !js
+
 // Package webgl implements backend.Device targeting the WebGL2 API.
 //
 // In its current form this backend delegates all rendering to the software

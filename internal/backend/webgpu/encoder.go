@@ -1,3 +1,5 @@
+//go:build !wgpunative
+
 package webgpu
 
 import "github.com/michaelraines/future-render/internal/backend/softdelegate"
