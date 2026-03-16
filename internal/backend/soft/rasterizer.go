@@ -168,6 +168,20 @@ func (r *rasterizer) rasterizeTriangle(
 	}
 	invDenom := 1.0 / denom
 
+	// Precompute float64 screen coords and UV for cross-platform determinism.
+	// ARM64 FMA and x86_64 non-FMA produce different float32 results in
+	// multiply-add chains. Computing barycentric UV interpolation in float64
+	// eliminates this: the extra precision ensures both platforms agree when
+	// the result is narrowed back to float32.
+	sx0d, sy0d := float64(sx0), float64(sy0)
+	sx1d, sy1d := float64(sx1), float64(sy1)
+	sx2d, sy2d := float64(sx2), float64(sy2)
+	denom64 := edgeFuncF64(sx0d, sy0d, sx1d, sy1d, sx2d, sy2d)
+	invDenom64 := 1.0 / denom64
+	tu0d, tv0d := float64(v0.tu), float64(v0.tv)
+	tu1d, tv1d := float64(v1.tu), float64(v1.tv)
+	tu2d, tv2d := float64(v2.tu), float64(v2.tv)
+
 	// Rasterize: iterate over bounding box pixels.
 	for py := minY; py < maxY; py++ {
 		for px := minX; px < maxX; px++ {
@@ -199,9 +213,13 @@ func (r *rasterizer) rasterizeTriangle(
 				}
 			}
 
-			// Interpolate texcoords.
-			u := w0f*v0.tu + w1f*v1.tu + w2f*v2.tu
-			v := w0f*v0.tv + w1f*v1.tv + w2f*v2.tv
+			// Interpolate texcoords in float64 for cross-platform determinism.
+			cxd, cyd := float64(cx), float64(cy)
+			w0d := edgeFuncF64(sx1d, sy1d, sx2d, sy2d, cxd, cyd) * invDenom64
+			w1d := edgeFuncF64(sx2d, sy2d, sx0d, sy0d, cxd, cyd) * invDenom64
+			w2d := edgeFuncF64(sx0d, sy0d, sx1d, sy1d, cxd, cyd) * invDenom64
+			u := float32(w0d*tu0d + w1d*tu1d + w2d*tu2d)
+			v := float32(w0d*tv0d + w1d*tv1d + w2d*tv2d)
 
 			// Interpolate vertex color.
 			cr := w0f*v0.r + w1f*v1.r + w2f*v2.r
@@ -311,12 +329,8 @@ func sampleNearest(pixels []byte, w, h, bpp int, u, v float32) (cr, cg, cb, ca f
 	u = clampf(u)
 	v = clampf(v)
 
-	// Compute texel indices in float64 to avoid float32 precision loss,
-	// then use roundTexel which snaps near-boundary values for cross-platform
-	// determinism (ARM64 FMA vs x86_64 non-FMA produce slightly different
-	// UV values at texel boundaries).
-	x := roundTexel(float64(u) * float64(w-1))
-	y := roundTexel(float64(v) * float64(h-1))
+	x := int(math.Round(float64(u) * float64(w-1)))
+	y := int(math.Round(float64(v) * float64(h-1)))
 	if x >= w {
 		x = w - 1
 	}
@@ -388,16 +402,11 @@ func bilerp(v00, v10, v01, v11, dx, dy float32) float32 {
 
 // --- Helpers ---
 
-// roundTexel rounds a texel coordinate to the nearest integer. Values within
-// epsilon of a half-integer rounding boundary are snapped to the boundary
-// before rounding. This prevents cross-platform divergence where ARM64 FMA
-// and x86_64 non-FMA produce UV values on opposite sides of the boundary.
-func roundTexel(f float64) int {
-	nearestHalf := math.Floor(f) + 0.5
-	if math.Abs(f-nearestHalf) < 1e-3 {
-		f = nearestHalf
-	}
-	return int(math.Round(f))
+// edgeFuncF64 computes the edge function in float64 precision.
+// Used for UV interpolation to avoid FMA-related divergence between
+// ARM64 and x86_64 at texel boundaries.
+func edgeFuncF64(ax, ay, bx, by, cx, cy float64) float64 {
+	return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax)
 }
 
 func edgeFunc(ax, ay, bx, by, cx, cy float32) float32 {

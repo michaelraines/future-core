@@ -166,33 +166,18 @@ func TestSampleNearest(t *testing.T) {
 	require.InDelta(t, 1.0, float64(g2), 1e-2)
 }
 
-func TestRoundTexel(t *testing.T) {
-	tests := []struct {
-		name string
-		in   float64
-		want int
-	}{
-		{"exact_zero", 0.0, 0},
-		{"exact_one", 1.0, 1},
-		{"exact_two", 2.0, 2},
-		{"mid_round_up", 0.6, 1},
-		{"mid_round_down", 0.4, 0},
-		// Half-integer boundary: both sides snap to 0.5, then Round(0.5)=1.
-		{"half_minus_epsilon", 0.4999999, 1},
-		{"half_plus_epsilon", 0.5000001, 1},
-		{"exact_half", 0.5, 1},
-		// 1.5 boundary: both sides snap, Round(1.5)=2.
-		{"one_half_minus_epsilon", 1.4999999, 2},
-		{"one_half_plus_epsilon", 1.5000001, 2},
-		// Integer boundary: both sides round to same integer.
-		{"near_integer_below", 0.9999999, 1},
-		{"near_integer_above", 1.0000001, 1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, roundTexel(tt.in))
-		})
-	}
+func TestEdgeFuncF64(t *testing.T) {
+	// CCW triangle: (0,0), (1,0), (0,1) → positive area
+	area := edgeFuncF64(0, 0, 1, 0, 0, 1)
+	require.InDelta(t, 1.0, area, 1e-12)
+
+	// CW triangle → negative area
+	area = edgeFuncF64(0, 0, 0, 1, 1, 0)
+	require.InDelta(t, -1.0, area, 1e-12)
+
+	// Degenerate (collinear) → zero
+	area = edgeFuncF64(0, 0, 1, 1, 2, 2)
+	require.InDelta(t, 0.0, area, 1e-12)
 }
 
 func TestSampleNearestOutOfBounds(t *testing.T) {

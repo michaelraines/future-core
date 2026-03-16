@@ -3,8 +3,7 @@ cover.out
 coverage.out
 coverage.html
 
-# Conformance test golden and diff artifacts (auto-generated per platform)
-**/testdata/golden/*.png
+# Conformance test diff artifacts
 **/testdata/golden/diff/
 
 # Claude Code local settings (allow skills)
