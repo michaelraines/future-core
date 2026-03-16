@@ -69,7 +69,10 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 		Cursor:    loadCursor(idcArrow),
 		ClassName: w.className,
 	}
-	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	atom, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	if atom == 0 {
+		return fmt.Errorf("RegisterClassExW failed: %w", err)
+	}
 
 	// Calculate window rect for desired client area.
 	style := uintptr(wsOverlappedWindow)
@@ -126,6 +129,7 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 	// Initialize OpenGL.
 	w.hdc, _, _ = procGetDC.Call(hwnd)
 	if w.hdc == 0 {
+		w.Destroy()
 		return fmt.Errorf("GetDC failed")
 	}
 
@@ -141,21 +145,25 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 
 	pixelFmt, _, _ := procChoosePixelFormat.Call(w.hdc, uintptr(unsafe.Pointer(&pfd)))
 	if pixelFmt == 0 {
+		w.Destroy()
 		return fmt.Errorf("ChoosePixelFormat failed")
 	}
 
 	ret, _, _ := procSetPixelFormat.Call(w.hdc, pixelFmt, uintptr(unsafe.Pointer(&pfd)))
 	if ret == 0 {
+		w.Destroy()
 		return fmt.Errorf("SetPixelFormat failed")
 	}
 
 	w.hglrc, _, _ = procWglCreateContext.Call(w.hdc)
 	if w.hglrc == 0 {
+		w.Destroy()
 		return fmt.Errorf("wglCreateContext failed")
 	}
 
 	ret, _, _ = procWglMakeCurrent.Call(w.hdc, w.hglrc)
 	if ret == 0 {
+		w.Destroy()
 		return fmt.Errorf("wglMakeCurrent failed")
 	}
 
@@ -570,6 +578,13 @@ func wndProc(hwnd uintptr, umsg uint32, wParam, lParam uintptr) uintptr {
 			})
 		}
 		return 0
+
+	case wmSetCursor:
+		// When cursor is hidden, prevent Windows from resetting it on mouse move.
+		if w.cursorHidden && loWord(lParam) == 1 { // HTCLIENT = 1
+			procSetCursor.Call(0) // NULL cursor
+			return 1              // TRUE — we handled it
+		}
 
 	case wmDPIChanged:
 		// lParam points to a RECT with the suggested new window position/size.

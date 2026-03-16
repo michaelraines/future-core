@@ -58,6 +58,7 @@ var (
 	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	procSetFocus                 = user32.NewProc("SetFocus")
 	procTrackMouseEvent          = user32.NewProc("TrackMouseEvent")
+	procSetCursor                = user32.NewProc("SetCursor")
 )
 
 // kernel32 procedures.
@@ -172,6 +173,8 @@ const (
 	vkMenu    = 0x12 // Alt
 	vkLWin    = 0x5B
 	vkRWin    = 0x5C
+	vkCapital = 0x14 // Caps Lock
+	vkNumLock = 0x90
 
 	// Key state mask.
 	keyStateDown = 0x8000
@@ -296,13 +299,22 @@ func getKeyStateDown(vk int) bool {
 	return ret&keyStateDown != 0
 }
 
+// getKeyStateToggled returns true if the specified toggle key (Caps Lock,
+// Num Lock, Scroll Lock) is currently active. Toggle state is in bit 0.
+func getKeyStateToggled(vk int) bool {
+	ret, _, _ := procGetKeyState.Call(uintptr(vk))
+	return ret&0x0001 != 0
+}
+
 // makeIntResource converts an integer resource ID to a pointer.
 func makeIntResource(id uintptr) *uint16 {
 	return (*uint16)(unsafe.Pointer(id))
 }
 
 // negIndex converts a negative int constant to the uintptr representation
-// that Win32 SetWindowLongPtr/GetWindowLongPtr expect.
+// that Win32 SetWindowLongPtr/GetWindowLongPtr expect. The int32 → int
+// conversion sign-extends on 64-bit, then int → uintptr preserves the
+// sign-extended bit pattern.
 func negIndex(n int32) uintptr {
-	return uintptr(n)
+	return uintptr(int(n))
 }

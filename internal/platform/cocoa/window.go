@@ -20,6 +20,8 @@ type Window struct {
 	contentView objc.ID
 	delegate    objc.ID
 
+	trackingArea objc.ID
+
 	handler     platform.InputHandler
 	shouldClose bool
 	fullscreen  bool
@@ -104,14 +106,14 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 	// Add a tracking area for mouse moved events.
 	trackingOpts := uintptr(nsTrackingMouseMoved | nsTrackingActiveAlways | nsTrackingInVisibleRect | nsTrackingMouseEnteredAndExited)
 	trackingRect := CGRect{Size: CGSize{Width: float64(cfg.Width), Height: float64(cfg.Height)}}
-	trackingArea := cls(classNSTrackingArea).Send(selAlloc).Send(
+	w.trackingArea = cls(classNSTrackingArea).Send(selAlloc).Send(
 		selInitWithRect,
 		trackingRect,
 		trackingOpts,
 		w.contentView,
 		uintptr(0), // userInfo: nil
 	)
-	w.contentView.Send(selAddTrackingArea, trackingArea)
+	w.contentView.Send(selAddTrackingArea, w.trackingArea)
 
 	// Create OpenGL pixel format.
 	attrs := [...]int32{
@@ -171,6 +173,17 @@ func (w *Window) Destroy() {
 	if w.glContext != 0 {
 		w.glContext.Send(selRelease)
 		w.glContext = 0
+	}
+	if w.trackingArea != 0 {
+		if w.contentView != 0 {
+			w.contentView.Send(selRemoveTrackingArea, w.trackingArea)
+		}
+		w.trackingArea.Send(selRelease)
+		w.trackingArea = 0
+	}
+	if w.contentView != 0 {
+		w.contentView.Send(selRelease)
+		w.contentView = 0
 	}
 	if w.nsWindow != 0 {
 		w.nsWindow.Send(selClose)

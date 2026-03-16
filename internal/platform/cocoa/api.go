@@ -129,6 +129,7 @@ var (
 	selAcceptsFirstResponder      objc.SEL
 	selInitWithRect               objc.SEL
 	selAddTrackingArea            objc.SEL
+	selRemoveTrackingArea         objc.SEL
 	selStringWithUTF8String       objc.SEL
 	selSetLevel                   objc.SEL
 	selSetCollectionBehavior      objc.SEL
@@ -305,6 +306,7 @@ func initAPI() error {
 	selAcceptsFirstResponder = objc.RegisterName("acceptsFirstResponder")
 	selInitWithRect = objc.RegisterName("initWithRect:options:owner:userInfo:")
 	selAddTrackingArea = objc.RegisterName("addTrackingArea:")
+	selRemoveTrackingArea = objc.RegisterName("removeTrackingArea:")
 	selStringWithUTF8String = objc.RegisterName("stringWithUTF8String:")
 	selSetLevel = objc.RegisterName("setLevel:")
 	selSetCollectionBehavior = objc.RegisterName("setCollectionBehavior:")

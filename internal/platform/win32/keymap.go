@@ -143,5 +143,11 @@ func mapWin32Mods() platform.Modifier {
 	if getKeyStateDown(vkLWin) || getKeyStateDown(vkRWin) {
 		mods |= platform.ModSuper
 	}
+	if getKeyStateToggled(vkCapital) {
+		mods |= platform.ModCapsLock
+	}
+	if getKeyStateToggled(vkNumLock) {
+		mods |= platform.ModNumLock
+	}
 	return mods
 }
