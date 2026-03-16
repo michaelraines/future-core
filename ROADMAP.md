@@ -452,7 +452,100 @@ fields. CI expanded with `cross-platform` job testing on macOS and Windows.
 
 ---
 
-## Milestone 10 — 3D Rendering (Future)
+## Milestone 10 — Native Platform Backends (Planned)
+
+Goal: eliminate the system GLFW install requirement. `go run ./cmd/driver`
+must "just work" on a fresh machine with only Go installed — matching
+Ebitengine's zero-install developer experience.
+
+**Strategy** (mirrors Ebitengine's approach):
+- **Linux/BSD**: Vendor GLFW C source, compile via CGo. Static linking means
+  no `libglfw.so` needed at runtime.
+- **macOS**: Call Cocoa/AppKit directly via purego. System frameworks are
+  always present — no GLFW dependency at all.
+- **Windows**: Call Win32 APIs directly via `golang.org/x/sys/windows`
+  syscalls. Win32 is always present — no GLFW dependency at all.
+
+OpenGL loading (`internal/gl/`) is unaffected — `OpenGL.framework` (macOS),
+`opengl32.dll` (Windows), and `libGL.so` (Linux) are always system-provided.
+
+### 10a — Linux/BSD: Vendored GLFW via CGo (Planned)
+
+Vendor GLFW 3.4 C source into the repo and compile it directly via CGo,
+eliminating the runtime `libglfw.so` dependency. Follows Ebitengine's
+`internal/glfw/` pattern: GLFW `.c`/`.h` files with Go build constraints,
+thin Go wrappers via `import "C"`.
+
+| Task | Status | Notes |
+|---|---|---|
+| Vendor GLFW 3.4 source (`internal/platform/glfw/cglfw/`) | Planned | C source + headers, zlib/libpng license compatible |
+| CGo bridge (`internal/platform/glfw/glfw_linbsd.go`) | Planned | `#include` vendored headers, `import "C"`, wraps C functions |
+| Build constraints `//go:build freebsd \|\| linux \|\| netbsd \|\| openbsd` | Planned | CGo path only on Linux/BSD |
+| Remove purego GLFW loading on Linux (`procaddr_unix.go`) | Planned | Replace `Dlopen`/`Dlsym` with CGo calls |
+| X11 + Wayland support via vendored GLFW | Planned | GLFW handles both; verify Wayland build |
+| Gamepad input via vendored GLFW | Planned | Same joystick API, now compiled in |
+| Verify `make` passes with CGo GLFW | Planned | All existing tests + conformance must pass |
+
+### 10b — macOS: Cocoa/AppKit via purego (Planned)
+
+Native macOS windowing without GLFW. Uses purego to call Objective-C runtime
+(`objc_msgSend`) and AppKit/Cocoa classes directly. Follows Ebitengine's
+`api_darwin.go` + `cocoa_*.go` pattern.
+
+| Task | Status | Notes |
+|---|---|---|
+| Cocoa platform package (`internal/platform/cocoa/`) | Planned | Implements `platform.Window` interface |
+| NSApplication setup + run loop | Planned | `sharedApplication`, `activateIgnoringOtherApps`, event polling |
+| NSWindow creation with NSOpenGLView | Planned | `initWithContentRect:styleMask:backing:defer:` |
+| NSOpenGLContext for OpenGL rendering | Planned | `NSOpenGLPixelFormat` + `makeCurrentContext` |
+| Keyboard events via NSEvent | Planned | `keyDown`/`keyUp`/`flagsChanged` → `InputHandler.OnKeyEvent` |
+| Mouse events via NSEvent | Planned | Button, move, scroll → `InputHandler.OnMouse*Event` |
+| Character input via `insertText:` | Planned | NSTextInputClient for `InputHandler.OnCharEvent` |
+| Window resize + high-DPI (`backingScaleFactor`) | Planned | `NSWindowDelegate` notifications → `OnResizeEvent` |
+| Fullscreen toggle | Planned | `toggleFullScreen:` on NSWindow |
+| Cursor visibility + lock | Planned | `NSCursor hide`/`unhide`, `CGAssociateMouseAndMouseCursorPosition` |
+| Gamepad via IOKit/GCController | Planned | HID device enumeration or Game Controller framework |
+| Build constraint `//go:build darwin` | Planned | Replace GLFW path on macOS |
+| Verify `make` passes on macOS | Planned | All existing tests + conformance must pass |
+
+### 10c — Windows: Win32 via syscalls (Planned)
+
+Native Windows windowing without GLFW. Uses `golang.org/x/sys/windows` for
+Win32 API calls. Follows Ebitengine's `api_windows.go` + `win32_*.go` pattern.
+
+| Task | Status | Notes |
+|---|---|---|
+| Win32 platform package (`internal/platform/win32/`) | Planned | Implements `platform.Window` interface |
+| Window class registration + `CreateWindowExW` | Planned | WNDCLASS + message loop |
+| WGL context for OpenGL rendering | Planned | `wglCreateContext`, `wglMakeCurrent`, pixel format setup |
+| `WndProc` message dispatch | Planned | `WM_KEYDOWN`/`WM_KEYUP` → `InputHandler.OnKeyEvent` |
+| Mouse messages (`WM_MOUSEMOVE`, `WM_LBUTTONDOWN`, etc.) | Planned | → `InputHandler.OnMouse*Event` |
+| Character input (`WM_CHAR`) | Planned | → `InputHandler.OnCharEvent` |
+| Window resize (`WM_SIZE`) + DPI awareness | Planned | `SetProcessDpiAwarenessContext`, per-monitor DPI |
+| Fullscreen toggle | Planned | `SetWindowLongPtr` style change + `SetWindowPos` |
+| Cursor visibility + lock (`SetCursor`, `ClipCursor`) | Planned | Show/hide + confine to window rect |
+| Gamepad via XInput | Planned | `XInputGetState` from `xinput1_4.dll` |
+| SwapBuffers via `SwapBuffers` (GDI) | Planned | Standard WGL present |
+| Build constraint `//go:build windows` | Planned | Replace GLFW path on Windows |
+| Verify `make` passes on Windows | Planned | All existing tests + conformance must pass |
+
+### 10d — Integration + Cleanup (Planned)
+
+| Task | Status | Notes |
+|---|---|---|
+| Engine selects native platform per OS | Planned | `engine_desktop.go` uses `cocoa.New()` / `win32.New()` / `glfw.New()` per build tag |
+| Remove system GLFW requirement from docs | Planned | Update README, DESIGN.md |
+| Update CI: remove GLFW install steps (if any) | Planned | CGo on Linux needs only standard build tools |
+| `cmd/driver/main.go` works on fresh machine | Planned | `go run ./cmd/driver` — zero install beyond Go |
+| Cross-platform CI validation | Planned | GitHub Actions matrix: Linux (CGo GLFW), macOS (Cocoa), Windows (Win32) |
+
+**Exit criteria**: `go run ./cmd/driver` opens a window and runs on Linux,
+macOS, and Windows with no system library installs beyond Go and a C compiler
+(Linux only).
+
+---
+
+## Milestone 11 — 3D Rendering (Future)
 
 Goal: 3D mesh rendering, lighting, materials — as described in FUTURE_3D.md.
 
@@ -479,14 +572,20 @@ These guide every milestone:
    existing working code.
 2. **Tests before merge** — every milestone must pass `go test ./...` and
    `go vet ./...`.
-3. **No CGo anywhere** — the entire engine is pure Go. OpenGL and GLFW are
-   loaded at runtime via purego (`internal/gl/`, `internal/platform/glfw/`).
+3. **CGo only in platform packages** — CGo is permitted in
+   `internal/platform/<impl>/` and `internal/backend/<impl>/` for native
+   bindings. Core packages (`math/`, `internal/batch/`, `internal/pipeline/`,
+   `internal/input/`) remain pure Go. OpenGL is loaded via purego
+   (`internal/gl/`).
 4. **Ebitengine API compatibility** — public API names and signatures match
    Ebitengine where possible, enabling straightforward migration.
 5. **3D-ready from day one** — no 2D-only assumptions in internal layers. See
    FUTURE_3D.md for constraints.
 6. **Manual texture management** — no automatic atlas. Users control GPU memory
    explicitly, with optional atlas utilities.
+7. **Zero-install on macOS and Windows** — platform backends use only
+   system-provided frameworks (Cocoa, Win32, OpenGL). No shared library
+   installs required. Linux requires only a C compiler for CGo GLFW.
 
 ---
 
