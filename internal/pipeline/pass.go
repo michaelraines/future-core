@@ -25,16 +25,21 @@ type PassContext struct {
 	// DefaultTarget is the screen render target (nil for default framebuffer).
 	DefaultTarget backend.RenderTarget
 
+	// ScreenClearEnabled controls whether the screen target is cleared each
+	// frame. When false, the previous frame's content is preserved (LoadActionLoad).
+	ScreenClearEnabled bool
+
 	// Resources holds named resources shared between passes.
 	Resources map[string]any
 }
 
-// NewPassContext creates a new PassContext.
+// NewPassContext creates a new PassContext with screen clearing enabled.
 func NewPassContext(fbWidth, fbHeight int) *PassContext {
 	return &PassContext{
-		FramebufferWidth:  fbWidth,
-		FramebufferHeight: fbHeight,
-		Resources:         make(map[string]any),
+		FramebufferWidth:   fbWidth,
+		FramebufferHeight:  fbHeight,
+		ScreenClearEnabled: true,
+		Resources:          make(map[string]any),
 	}
 }
 

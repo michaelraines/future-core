@@ -368,6 +368,7 @@ func (e *engine) run() error {
 		// Execute the render pipeline (sprite pass manages its own render
 		// passes per target, including clearing the screen target).
 		ctx := pipeline.NewPassContext(fbW, fbH)
+		ctx.ScreenClearEnabled = IsScreenClearedEveryFrame()
 		e.renderPipeline.Execute(e.encoder, ctx)
 
 		win.SwapBuffers()

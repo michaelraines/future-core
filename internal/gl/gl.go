@@ -208,11 +208,12 @@ var (
 
 	fnGetTexImage func(target uint32, level int32, format, typ uint32, pixels uintptr)
 
-	fnGenVertexArrays         func(n int32, arrays *uint32)
-	fnDeleteVertexArrays      func(n int32, arrays *uint32)
-	fnBindVertexArray         func(array uint32)
-	fnEnableVertexAttribArray func(index uint32)
-	fnVertexAttribPointer     func(index uint32, size int32, typ uint32, normalized uint8, stride int32, pointer uintptr)
+	fnGenVertexArrays          func(n int32, arrays *uint32)
+	fnDeleteVertexArrays       func(n int32, arrays *uint32)
+	fnBindVertexArray          func(array uint32)
+	fnEnableVertexAttribArray  func(index uint32)
+	fnDisableVertexAttribArray func(index uint32)
+	fnVertexAttribPointer      func(index uint32, size int32, typ uint32, normalized uint8, stride int32, pointer uintptr)
 )
 
 // ---------------------------------------------------------------------------
@@ -366,6 +367,7 @@ func GenVertexArrays(n int32, arrays *uint32)    { fnGenVertexArrays(n, arrays) 
 func DeleteVertexArrays(n int32, arrays *uint32) { fnDeleteVertexArrays(n, arrays) }
 func BindVertexArray(array uint32)               { fnBindVertexArray(array) }
 func EnableVertexAttribArray(index uint32)       { fnEnableVertexAttribArray(index) }
+func DisableVertexAttribArray(index uint32)      { fnDisableVertexAttribArray(index) }
 
 func VertexAttribPointer(index uint32, size int32, typ uint32, normalized bool, stride int32, offset uintptr) {
 	n := uint8(0)
@@ -600,6 +602,7 @@ func Init() error {
 		{&fnDeleteVertexArrays, "glDeleteVertexArrays"},
 		{&fnBindVertexArray, "glBindVertexArray"},
 		{&fnEnableVertexAttribArray, "glEnableVertexAttribArray"},
+		{&fnDisableVertexAttribArray, "glDisableVertexAttribArray"},
 		{&fnVertexAttribPointer, "glVertexAttribPointer"},
 	} {
 		if ferr := must(e.fn, e.name); ferr != nil {
