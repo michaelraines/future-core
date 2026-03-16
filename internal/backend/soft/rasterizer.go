@@ -311,8 +311,12 @@ func sampleNearest(pixels []byte, w, h, bpp int, u, v float32) (cr, cg, cb, ca f
 	u = clampf(u)
 	v = clampf(v)
 
-	x := int(math.Floor(float64(u*float32(w-1)) + 0.5))
-	y := int(math.Floor(float64(v*float32(h-1)) + 0.5))
+	// Compute texel indices in float64 to avoid float32 precision loss,
+	// then use roundTexel which snaps near-boundary values for cross-platform
+	// determinism (ARM64 FMA vs x86_64 non-FMA produce slightly different
+	// UV values at texel boundaries).
+	x := roundTexel(float64(u) * float64(w-1))
+	y := roundTexel(float64(v) * float64(h-1))
 	if x >= w {
 		x = w - 1
 	}
@@ -383,6 +387,18 @@ func bilerp(v00, v10, v01, v11, dx, dy float32) float32 {
 }
 
 // --- Helpers ---
+
+// roundTexel rounds a texel coordinate to the nearest integer. Values within
+// epsilon of a half-integer rounding boundary are snapped to the boundary
+// before rounding. This prevents cross-platform divergence where ARM64 FMA
+// and x86_64 non-FMA produce UV values on opposite sides of the boundary.
+func roundTexel(f float64) int {
+	nearestHalf := math.Floor(f) + 0.5
+	if math.Abs(f-nearestHalf) < 1e-3 {
+		f = nearestHalf
+	}
+	return int(math.Round(f))
+}
 
 func edgeFunc(ax, ay, bx, by, cx, cy float32) float32 {
 	return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax)
