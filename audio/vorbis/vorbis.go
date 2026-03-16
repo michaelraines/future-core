@@ -13,6 +13,8 @@ import (
 	"math"
 
 	"github.com/jfreymuth/oggvorbis"
+
+	"github.com/michaelraines/future-render/audio/internal/pcm"
 )
 
 // Stream is a decoded OGG Vorbis audio stream. It provides signed 16-bit
@@ -108,7 +110,7 @@ func DecodeWithSampleRate(sampleRate int, src io.Reader) (*Stream, error) {
 	if s.sampleRate == sampleRate {
 		return s, nil
 	}
-	resampled := resample(s.raw, s.sampleRate, sampleRate)
+	resampled := pcm.Resample(s.raw, s.sampleRate, sampleRate)
 	return &Stream{
 		data:       bytes.NewReader(resampled),
 		raw:        resampled,
@@ -152,44 +154,4 @@ func clampFloat32(v float32) float32 {
 // floatToInt16 converts a float32 in [-1.0, 1.0] to int16.
 func floatToInt16(v float32) int16 {
 	return int16(v * float32(math.MaxInt16))
-}
-
-// resample performs linear interpolation resampling from srcRate to dstRate.
-// Input and output are stereo 16-bit signed LE PCM.
-func resample(data []byte, srcRate, dstRate int) []byte {
-	srcFrames := len(data) / 4
-	if srcFrames < 2 {
-		return data
-	}
-
-	ratio := float64(srcRate) / float64(dstRate)
-	dstFrames := int(float64(srcFrames) / ratio)
-	out := make([]byte, dstFrames*4)
-
-	for i := 0; i < dstFrames; i++ {
-		srcPos := float64(i) * ratio
-		srcIdx := int(srcPos)
-		frac := srcPos - float64(srcIdx)
-
-		if srcIdx >= srcFrames-1 {
-			srcIdx = srcFrames - 2
-			frac = 1.0
-		}
-		if srcIdx < 0 {
-			srcIdx = 0
-			frac = 0
-		}
-
-		l0 := int16(binary.LittleEndian.Uint16(data[srcIdx*4:]))
-		l1 := int16(binary.LittleEndian.Uint16(data[(srcIdx+1)*4:]))
-		left := int16(float64(l0) + frac*(float64(l1)-float64(l0)))
-
-		r0 := int16(binary.LittleEndian.Uint16(data[srcIdx*4+2:]))
-		r1 := int16(binary.LittleEndian.Uint16(data[(srcIdx+1)*4+2:]))
-		right := int16(float64(r0) + frac*(float64(r1)-float64(r0)))
-
-		binary.LittleEndian.PutUint16(out[i*4:], uint16(left))
-		binary.LittleEndian.PutUint16(out[i*4+2:], uint16(right))
-	}
-	return out
 }

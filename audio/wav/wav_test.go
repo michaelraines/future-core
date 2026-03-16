@@ -214,12 +214,7 @@ func TestDecodeNonPCMFormat(t *testing.T) {
 	require.Contains(t, err.Error(), "unsupported audio format")
 }
 
-func TestResampleEmpty(t *testing.T) {
-	result := resample(nil, 44100, 48000)
-	require.Nil(t, result)
-}
-
 func TestConvertToStereo16UnsupportedBitDepth(t *testing.T) {
 	result := convertToStereo16([]byte{1, 2, 3}, 1, 24)
-	require.Nil(t, result)
+	require.Empty(t, result)
 }

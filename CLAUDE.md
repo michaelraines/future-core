@@ -60,7 +60,7 @@ library). When platform backends are added, they will use build tags
 The `audio/` package depends on `github.com/ebitengine/oto/v3`, which uses
 CGo and requires ALSA development headers (`libasound2-dev` / `alsa.pc`) on
 Linux. These headers are not installed in the CI environment, so **all audio
-packages (`audio/`, `audio/vorbis/`, `audio/wav/`) are excluded** from the
+packages (`audio/`, `audio/mp3/`, `audio/vorbis/`, `audio/wav/`) are excluded** from the
 default `make` targets (vet, lint, test, build, coverage).
 
 The exclusion is implemented in the `Makefile` via the `PKGS` and `LINT_PATHS`

@@ -233,34 +233,3 @@ func TestFloatToStereo16Stereo(t *testing.T) {
 	require.Greater(t, l, int16(0))
 	require.Less(t, r, int16(0))
 }
-
-func TestResampleIdentity(t *testing.T) {
-	data := make([]byte, 8)
-	binary.LittleEndian.PutUint16(data[0:], 1000)
-	binary.LittleEndian.PutUint16(data[2:], 2000)
-	binary.LittleEndian.PutUint16(data[4:], 3000)
-	binary.LittleEndian.PutUint16(data[6:], 4000)
-
-	result := resample(data, 44100, 44100)
-	require.Equal(t, len(data), len(result))
-}
-
-func TestResampleTooShort(t *testing.T) {
-	data := make([]byte, 4)
-	result := resample(data, 44100, 48000)
-	require.Equal(t, data, result)
-}
-
-func TestResampleDownsample(t *testing.T) {
-	// 100 stereo frames at 44100, resample to 22050 (halve).
-	data := make([]byte, 100*4)
-	for i := 0; i < 100; i++ {
-		binary.LittleEndian.PutUint16(data[i*4:], uint16(i*100))
-		binary.LittleEndian.PutUint16(data[i*4+2:], uint16(i*100))
-	}
-	result := resample(data, 44100, 22050)
-	require.Greater(t, len(result), 0)
-	// Should be roughly half the frames.
-	resultFrames := len(result) / 4
-	require.InDelta(t, 50, resultFrames, 5)
-}
