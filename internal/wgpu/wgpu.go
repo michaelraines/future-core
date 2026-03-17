@@ -384,13 +384,13 @@ type BindGroupLayoutDescriptor struct {
 
 // BindGroupEntry is WGPUBindGroupEntry.
 type BindGroupEntry struct {
-	NextInChain uintptr
-	Binding     uint32
-	_           [4]byte
-	Buffer_     Buffer
-	Offset      uint64
-	Size        uint64
-	Sampler_    Sampler
+	NextInChain  uintptr
+	Binding      uint32
+	_            [4]byte
+	Buffer_      Buffer
+	Offset       uint64
+	Size         uint64
+	Sampler_     Sampler
 	TextureView_ TextureView
 }
 
@@ -554,9 +554,9 @@ var (
 	fnDeviceRelease                    func(Device)
 
 	// Pipeline / bind group / readback functions.
-	fnDeviceCreateBindGroupLayout func(Device, *BindGroupLayoutDescriptor) BindGroupLayout
-	fnDeviceCreateBindGroup       func(Device, *BindGroupDescriptor) BindGroup
-	fnDeviceCreatePipelineLayout  func(Device, *PipelineLayoutDescriptor) PipelineLayout
+	fnDeviceCreateBindGroupLayout       func(Device, *BindGroupLayoutDescriptor) BindGroupLayout
+	fnDeviceCreateBindGroup             func(Device, *BindGroupDescriptor) BindGroup
+	fnDeviceCreatePipelineLayout        func(Device, *PipelineLayoutDescriptor) PipelineLayout
 	fnCommandEncoderCopyTextureToBuffer func(CommandEncoder, *ImageCopyTexture, *ImageCopyBuffer, *Extent3D)
 	fnBufferMapAsync                    func(Buffer, uint32, uint64, uint64, uintptr, uintptr)
 	fnBufferGetMappedRange              func(Buffer, uint64, uint64) uintptr

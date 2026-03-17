@@ -86,7 +86,7 @@ const (
 	StructureTypeMemoryAllocateInfo                   = 5
 	StructureTypeSubmitInfo                           = 4
 	StructureTypeRenderPassBeginInfo                  = 43
-	StructureTypeImageMemoryBarrier                    = 46
+	StructureTypeImageMemoryBarrier                   = 46
 	StructureTypeMappedMemoryRange                    = 6
 	StructureTypeWriteDescriptorSet                   = 35
 	StructureTypeDescriptorSetLayoutCreateInfo        = 32
@@ -1019,10 +1019,10 @@ const (
 
 // VkColorComponentFlags.
 const (
-	ColorComponentR = 0x01
-	ColorComponentG = 0x02
-	ColorComponentB = 0x04
-	ColorComponentA = 0x08
+	ColorComponentR   = 0x01
+	ColorComponentG   = 0x02
+	ColorComponentB   = 0x04
+	ColorComponentA   = 0x08
 	ColorComponentAll = ColorComponentR | ColorComponentG | ColorComponentB | ColorComponentA
 )
 
@@ -1073,10 +1073,10 @@ const (
 
 // VkFormat constants for vertex attributes.
 const (
-	FormatR32G32SFloat    = 103
-	FormatR32G32B32SFloat = 106
+	FormatR32G32SFloat       = 103
+	FormatR32G32B32SFloat    = 106
 	FormatR32G32B32A32SFloat = 109
-	FormatR8G8B8A8UNorm   = 37
+	FormatR8G8B8A8UNorm      = 37
 )
 
 // VkFilter.

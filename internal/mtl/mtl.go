@@ -652,12 +652,12 @@ func initPipelineSelectors() {
 
 // MTLBlendFactor constants.
 const (
-	BlendFactorZero             = 0
-	BlendFactorOne              = 1
-	BlendFactorSourceAlpha      = 4
+	BlendFactorZero                = 0
+	BlendFactorOne                 = 1
+	BlendFactorSourceAlpha         = 4
 	BlendFactorOneMinusSourceAlpha = 5
-	BlendFactorDestinationColor = 8
-	BlendFactorDestinationAlpha = 10
+	BlendFactorDestinationColor    = 8
+	BlendFactorDestinationAlpha    = 10
 )
 
 // MTLBlendOperation constants.

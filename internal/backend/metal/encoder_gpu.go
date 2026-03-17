@@ -20,7 +20,7 @@ type Encoder struct {
 	currentPipeline *Pipeline
 	renderEncoder   mtl.RenderCommandEncoder
 	cmdBuffer       mtl.CommandBuffer
-	indexFormat      backend.IndexFormat
+	indexFormat     backend.IndexFormat
 	boundIndexBuf   *Buffer
 }
 

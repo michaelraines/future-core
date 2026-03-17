@@ -101,9 +101,9 @@ func (p *Pipeline) createPipeline() {
 			Buffers:     buffersPtr,
 		},
 		Primitive: wgpu.PrimitiveState{
-			Topology:    wgpuTopology(p.desc.Primitive),
-			FrontFace_:  wgpu.FrontFaceCCW,
-			CullMode_:   wgpuCullMode(p.desc.CullMode),
+			Topology:   wgpuTopology(p.desc.Primitive),
+			FrontFace_: wgpu.FrontFaceCCW,
+			CullMode_:  wgpuCullMode(p.desc.CullMode),
 		},
 		Multisample: wgpu.MultisampleState{
 			Count: 1,
