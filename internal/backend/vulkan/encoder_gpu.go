@@ -18,6 +18,11 @@ type Encoder struct {
 	// Current render pass state.
 	inRenderPass    bool
 	currentPipeline *Pipeline
+	boundTexture    *Texture
+	boundSampler    vk.Sampler
+	descriptorPool  vk.DescriptorPool
+	descriptorSet   vk.DescriptorSet
+	colorWriteOn    bool
 }
 
 // BeginRenderPass begins a Vulkan render pass.
@@ -49,10 +54,11 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		RenderAreaW:     w,
 		RenderAreaH:     h,
 		ClearValueCount: 1,
-		PClearValues:    uintptrOf(&clearColor),
+		PClearValues:    uintptr(unsafe.Pointer(&clearColor)),
 	}
 	vk.CmdBeginRenderPass(e.cmd, &rpBegin)
 	e.inRenderPass = true
+	e.colorWriteOn = true
 }
 
 // EndRenderPass ends the current render pass.
@@ -61,14 +67,24 @@ func (e *Encoder) EndRenderPass() {
 		vk.CmdEndRenderPass(e.cmd)
 		e.inRenderPass = false
 	}
+	e.cleanupDescriptors()
 }
 
 // SetPipeline binds a VkPipeline.
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
-	if p, ok := pipeline.(*Pipeline); ok {
-		e.currentPipeline = p
-		// In a full implementation, we'd bind the actual VkPipeline here:
-		// vk.CmdBindPipeline(e.cmd, p.vkPipeline)
+	p, ok := pipeline.(*Pipeline)
+	if !ok {
+		return
+	}
+	e.currentPipeline = p
+
+	// Attempt to create the VkPipeline lazily if not yet created.
+	if p.vkPipeline == 0 {
+		_ = p.createVkPipeline(e.dev.defaultRenderPass)
+	}
+
+	if p.vkPipeline != 0 {
+		vk.CmdBindPipeline(e.cmd, p.vkPipeline)
 	}
 }
 
@@ -90,24 +106,91 @@ func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat)
 	}
 }
 
-// SetTexture binds a texture to a slot.
-func (e *Encoder) SetTexture(_ backend.Texture, _ int) {
-	// In a full implementation, this would update descriptor sets.
+// SetTexture binds a texture to a slot via descriptor sets.
+func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
+	t, ok := tex.(*Texture)
+	if !ok || e.currentPipeline == nil {
+		return
+	}
+	e.boundTexture = t
+
+	// Create descriptor pool if needed.
+	if e.descriptorPool == 0 && e.currentPipeline.descSetLayout != 0 {
+		poolSize := vk.DescriptorPoolSize{
+			Type_:           vk.DescriptorTypeCombinedImageSampler,
+			DescriptorCount: 16,
+		}
+		poolCI := vk.DescriptorPoolCreateInfo{
+			SType:         vk.StructureTypeDescriptorPoolCreateInfo,
+			MaxSets:       16,
+			PoolSizeCount: 1,
+			PPoolSizes:    uintptr(unsafe.Pointer(&poolSize)),
+		}
+		pool, err := vk.CreateDescriptorPool(e.dev.device, &poolCI)
+		if err != nil {
+			return
+		}
+		e.descriptorPool = pool
+	}
+
+	if e.currentPipeline.descSetLayout == 0 || e.descriptorPool == 0 {
+		return
+	}
+
+	// Allocate descriptor set.
+	set, err := vk.AllocateDescriptorSet(e.dev.device, e.descriptorPool, e.currentPipeline.descSetLayout)
+	if err != nil {
+		return
+	}
+	e.descriptorSet = set
+
+	// Ensure we have a sampler.
+	if e.boundSampler == 0 {
+		e.boundSampler = e.dev.ensureDefaultSampler()
+	}
+
+	// Update the descriptor set with the texture's image view.
+	imgInfo := vk.DescriptorImageInfo{
+		Sampler:     e.boundSampler,
+		ImageView:   t.view,
+		ImageLayout: vk.ImageLayoutShaderReadOnlyOptimal,
+	}
+	write := vk.WriteDescriptorSet{
+		SType:           vk.StructureTypeWriteDescriptorSet,
+		DstSet:          set,
+		DstBinding:      0,
+		DescriptorCount: 1,
+		DescriptorType:  vk.DescriptorTypeCombinedImageSampler,
+		PImageInfo:      uintptr(unsafe.Pointer(&imgInfo)),
+	}
+	vk.UpdateDescriptorSets(e.dev.device, []vk.WriteDescriptorSet{write})
+
+	// Bind the descriptor set.
+	if e.currentPipeline.pipelineLayout != 0 {
+		vk.CmdBindDescriptorSets(e.cmd, e.currentPipeline.pipelineLayout, 0, []vk.DescriptorSet{set})
+	}
 }
 
 // SetTextureFilter overrides the texture filter for a slot.
-func (e *Encoder) SetTextureFilter(_ int, _ backend.TextureFilter) {
-	// Would create/bind a sampler with the specified filter.
+func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
+	// In Vulkan, filter state is part of the sampler. A full implementation
+	// would maintain a sampler cache keyed by filter settings and rebind.
+	// For now, use the default sampler.
+	_ = slot
+	_ = filter
 }
 
 // SetStencil configures stencil test state.
 func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {
 	// Stencil state is baked into the VkPipeline in Vulkan.
+	// A full implementation would require pipeline variants per stencil config.
 }
 
-// SetColorWrite enables or disables color writing.
-func (e *Encoder) SetColorWrite(_ bool) {
+// SetColorWrite enables or disables writing to the color buffer.
+func (e *Encoder) SetColorWrite(enabled bool) {
 	// Color write mask is baked into the VkPipeline in Vulkan.
+	// A full implementation would require pipeline variants.
+	e.colorWriteOn = enabled
 }
 
 // SetViewport sets the rendering viewport.
@@ -151,14 +234,11 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 // Flush is a no-op for Vulkan — submission happens in EndFrame.
 func (e *Encoder) Flush() {}
 
-// uintptrOf returns the uintptr of a pointer for use in Vulkan structs.
-func uintptrOf[T any](p *T) uintptr {
-	return uintptr(unsafePointer(p))
-}
-
-// unsafePointer converts a typed pointer to unsafe.Pointer.
-//
-//go:nosplit
-func unsafePointer[T any](p *T) unsafe.Pointer {
-	return unsafe.Pointer(p)
+// cleanupDescriptors releases per-frame descriptor resources.
+func (e *Encoder) cleanupDescriptors() {
+	if e.descriptorPool != 0 {
+		vk.DestroyDescriptorPool(e.dev.device, e.descriptorPool)
+		e.descriptorPool = 0
+		e.descriptorSet = 0
+	}
 }

@@ -19,7 +19,8 @@ type Encoder struct {
 	currentPipeline *Pipeline
 	renderEncoder   mtl.RenderCommandEncoder
 	cmdBuffer       mtl.CommandBuffer
-	indexFormat     backend.IndexFormat
+	indexFormat      backend.IndexFormat
+	boundIndexBuf   *Buffer
 }
 
 // BeginRenderPass begins a Metal render pass.
@@ -91,10 +92,36 @@ func (e *Encoder) EndRenderPass() {
 
 // SetPipeline binds a render pipeline state.
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
-	if p, ok := pipeline.(*Pipeline); ok {
-		e.currentPipeline = p
-		// In a full implementation, we'd bind the MTLRenderPipelineState:
-		// msgSend(uintptr(e.renderEncoder), sel("setRenderPipelineState:"), uintptr(p.pipelineState))
+	p, ok := pipeline.(*Pipeline)
+	if !ok {
+		return
+	}
+	e.currentPipeline = p
+
+	// Lazily create the MTLRenderPipelineState.
+	if p.pipelineState == 0 {
+		_ = p.createPipelineState()
+	}
+
+	if p.pipelineState != 0 && e.renderEncoder != 0 {
+		mtl.RenderCommandEncoderSetRenderPipelineState(e.renderEncoder, p.pipelineState)
+	}
+
+	// Apply cull mode.
+	if e.renderEncoder != 0 {
+		mtl.RenderCommandEncoderSetCullMode(e.renderEncoder, mtlCullMode(p.desc.CullMode))
+	}
+}
+
+// mtlCullMode maps backend cull mode to Metal cull mode.
+func mtlCullMode(mode backend.CullMode) int {
+	switch mode {
+	case backend.CullFront:
+		return mtl.CullModeFront
+	case backend.CullBack:
+		return mtl.CullModeBack
+	default:
+		return mtl.CullModeNone
 	}
 }
 
@@ -107,16 +134,17 @@ func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 
 // SetIndexBuffer binds an index buffer.
 func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat) {
-	if _, ok := buf.(*Buffer); ok {
+	if b, ok := buf.(*Buffer); ok {
 		e.indexFormat = format
-		// Metal doesn't have a separate "bind index buffer" — the index buffer
-		// is passed directly to drawIndexedPrimitives.
+		e.boundIndexBuf = b
 	}
 }
 
-// SetTexture binds a texture to a slot.
-func (e *Encoder) SetTexture(_ backend.Texture, _ int) {
-	// In a full implementation, this would call setFragmentTexture:atIndex:.
+// SetTexture binds a texture to a fragment shader slot.
+func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
+	if t, ok := tex.(*Texture); ok && e.renderEncoder != 0 {
+		mtl.RenderCommandEncoderSetFragmentTexture(e.renderEncoder, t.handle, uint64(slot))
+	}
 }
 
 // SetTextureFilter overrides the texture filter for a slot.
@@ -166,9 +194,12 @@ func (e *Encoder) SetScissor(rect *backend.ScissorRect) {
 
 // Draw issues a non-indexed draw call.
 func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
+	primType := uint64(mtl.PrimitiveTypeTriangle)
+	if e.currentPipeline != nil {
+		primType = uint64(mtlPrimitiveType(e.currentPipeline.desc.Primitive))
+	}
 	mtl.RenderCommandEncoderDrawPrimitives(e.renderEncoder,
-		3, // MTLPrimitiveTypeTriangle
-		uint64(firstVertex), uint64(vertexCount), uint64(instanceCount))
+		primType, uint64(firstVertex), uint64(vertexCount), uint64(instanceCount))
 }
 
 // DrawIndexed issues an indexed draw call.
@@ -179,11 +210,37 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 		idxType = uint64(mtl.IndexTypeUInt32)
 		byteOffset = uint64(firstIndex * 4)
 	}
-	// Note: in Metal, the index buffer must be passed here.
-	// In a full implementation, we'd track the bound index buffer.
+
+	primType := uint64(mtl.PrimitiveTypeTriangle)
+	if e.currentPipeline != nil {
+		primType = uint64(mtlPrimitiveType(e.currentPipeline.desc.Primitive))
+	}
+
+	var indexBuf mtl.Buffer
+	if e.boundIndexBuf != nil {
+		indexBuf = e.boundIndexBuf.handle
+	}
+
 	mtl.RenderCommandEncoderDrawIndexedPrimitives(e.renderEncoder,
-		3, // MTLPrimitiveTypeTriangle
-		uint64(indexCount), idxType, 0, byteOffset, uint64(instanceCount))
+		primType, uint64(indexCount), idxType, indexBuf, byteOffset, uint64(instanceCount))
+}
+
+// mtlPrimitiveType maps backend primitive type to Metal primitive type.
+func mtlPrimitiveType(p backend.PrimitiveType) int {
+	switch p {
+	case backend.PrimitiveTriangles:
+		return mtl.PrimitiveTypeTriangle
+	case backend.PrimitiveTriangleStrip:
+		return mtl.PrimitiveTypeTriangleStrip
+	case backend.PrimitiveLines:
+		return mtl.PrimitiveTypeLine
+	case backend.PrimitiveLineStrip:
+		return mtl.PrimitiveTypeLineStrip
+	case backend.PrimitivePoints:
+		return mtl.PrimitiveTypePoint
+	default:
+		return mtl.PrimitiveTypeTriangle
+	}
 }
 
 // Flush is a no-op — submission happens in EndRenderPass.

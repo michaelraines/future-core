@@ -48,11 +48,12 @@ func (e *Encoder) EndRenderPass() {
 	}
 }
 
-// SetPipeline applies pipeline state (blend mode, etc.).
+// SetPipeline applies pipeline state (blend mode, shader program, vertex attributes).
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	if p, ok := pipeline.(*Pipeline); ok {
 		e.currentPipeline = p
 		e.applyBlendMode(p.desc.BlendMode)
+		p.bind()
 	}
 }
 

@@ -86,6 +86,7 @@ const (
 	StructureTypeMemoryAllocateInfo                   = 5
 	StructureTypeSubmitInfo                           = 4
 	StructureTypeRenderPassBeginInfo                  = 43
+	StructureTypeImageMemoryBarrier                    = 46
 	StructureTypeMappedMemoryRange                    = 6
 	StructureTypeWriteDescriptorSet                   = 35
 	StructureTypeDescriptorSetLayoutCreateInfo        = 32
@@ -299,11 +300,19 @@ const (
 
 // VkPipelineStageFlags.
 const (
+	PipelineStageTopOfPipe             = 0x00000001
+	PipelineStageVertexInput           = 0x00000004
+	PipelineStageFragmentShader        = 0x00000080
 	PipelineStageColorAttachmentOutput = 0x00000400
+	PipelineStageTransfer              = 0x00001000
+	PipelineStageBottomOfPipe          = 0x00002000
 )
 
 // VkAccessFlags.
 const (
+	AccessTransferRead         = 0x00000800
+	AccessTransferWrite        = 0x00001000
+	AccessShaderRead           = 0x00000020
 	AccessColorAttachmentWrite = 0x00000100
 )
 
@@ -712,6 +721,382 @@ type BufferImageCopy struct {
 	ImageExtentH uint32
 	ImageExtentD uint32
 }
+
+// ---------------------------------------------------------------------------
+// Graphics pipeline state structs
+// ---------------------------------------------------------------------------
+
+// PipelineShaderStageCreateInfo mirrors VkPipelineShaderStageCreateInfo.
+type PipelineShaderStageCreateInfo struct {
+	SType               uint32
+	PNext               uintptr
+	Flags               uint32
+	Stage               uint32
+	Module              ShaderModule
+	PName               uintptr
+	PSpecializationInfo uintptr
+}
+
+// PipelineVertexInputStateCreateInfo mirrors VkPipelineVertexInputStateCreateInfo.
+type PipelineVertexInputStateCreateInfo struct {
+	SType                           uint32
+	PNext                           uintptr
+	Flags                           uint32
+	VertexBindingDescriptionCount   uint32
+	PVertexBindingDescriptions      uintptr
+	VertexAttributeDescriptionCount uint32
+	PVertexAttributeDescriptions    uintptr
+}
+
+// VertexInputBindingDescription mirrors VkVertexInputBindingDescription.
+type VertexInputBindingDescription struct {
+	Binding   uint32
+	Stride    uint32
+	InputRate uint32
+}
+
+// VertexInputAttributeDescription mirrors VkVertexInputAttributeDescription.
+type VertexInputAttributeDescription struct {
+	Location uint32
+	Binding  uint32
+	Format   uint32
+	Offset   uint32
+}
+
+// PipelineInputAssemblyStateCreateInfo mirrors VkPipelineInputAssemblyStateCreateInfo.
+type PipelineInputAssemblyStateCreateInfo struct {
+	SType                  uint32
+	PNext                  uintptr
+	Flags                  uint32
+	Topology               uint32
+	PrimitiveRestartEnable uint32
+}
+
+// PipelineViewportStateCreateInfo mirrors VkPipelineViewportStateCreateInfo.
+type PipelineViewportStateCreateInfo struct {
+	SType         uint32
+	PNext         uintptr
+	Flags         uint32
+	ViewportCount uint32
+	PViewports    uintptr
+	ScissorCount  uint32
+	PScissors     uintptr
+}
+
+// PipelineRasterizationStateCreateInfo mirrors VkPipelineRasterizationStateCreateInfo.
+type PipelineRasterizationStateCreateInfo struct {
+	SType                   uint32
+	PNext                   uintptr
+	Flags                   uint32
+	DepthClampEnable        uint32
+	RasterizerDiscardEnable uint32
+	PolygonMode             uint32
+	CullMode                uint32
+	FrontFace               uint32
+	DepthBiasEnable         uint32
+	DepthBiasConstantFactor float32
+	DepthBiasClamp          float32
+	DepthBiasSlopeFactor    float32
+	LineWidth               float32
+}
+
+// PipelineMultisampleStateCreateInfo mirrors VkPipelineMultisampleStateCreateInfo.
+type PipelineMultisampleStateCreateInfo struct {
+	SType                 uint32
+	PNext                 uintptr
+	Flags                 uint32
+	RasterizationSamples  uint32
+	SampleShadingEnable   uint32
+	MinSampleShading      float32
+	PSampleMask           uintptr
+	AlphaToCoverageEnable uint32
+	AlphaToOneEnable      uint32
+}
+
+// PipelineDepthStencilStateCreateInfo mirrors VkPipelineDepthStencilStateCreateInfo.
+type PipelineDepthStencilStateCreateInfo struct {
+	SType                 uint32
+	PNext                 uintptr
+	Flags                 uint32
+	DepthTestEnable       uint32
+	DepthWriteEnable      uint32
+	DepthCompareOp        uint32
+	DepthBoundsTestEnable uint32
+	StencilTestEnable     uint32
+	FrontFailOp           uint32
+	FrontPassOp           uint32
+	FrontDepthFailOp      uint32
+	FrontCompareOp        uint32
+	FrontCompareMask      uint32
+	FrontWriteMask        uint32
+	FrontReference        uint32
+	BackFailOp            uint32
+	BackPassOp            uint32
+	BackDepthFailOp       uint32
+	BackCompareOp         uint32
+	BackCompareMask       uint32
+	BackWriteMask         uint32
+	BackReference         uint32
+	MinDepthBounds        float32
+	MaxDepthBounds        float32
+}
+
+// PipelineColorBlendAttachmentState mirrors VkPipelineColorBlendAttachmentState.
+type PipelineColorBlendAttachmentState struct {
+	BlendEnable         uint32
+	SrcColorBlendFactor uint32
+	DstColorBlendFactor uint32
+	ColorBlendOp        uint32
+	SrcAlphaBlendFactor uint32
+	DstAlphaBlendFactor uint32
+	AlphaBlendOp        uint32
+	ColorWriteMask      uint32
+}
+
+// PipelineColorBlendStateCreateInfo mirrors VkPipelineColorBlendStateCreateInfo.
+type PipelineColorBlendStateCreateInfo struct {
+	SType           uint32
+	PNext           uintptr
+	Flags           uint32
+	LogicOpEnable   uint32
+	LogicOp         uint32
+	AttachmentCount uint32
+	PAttachments    uintptr
+	BlendConstants  [4]float32
+}
+
+// PipelineDynamicStateCreateInfo mirrors VkPipelineDynamicStateCreateInfo.
+type PipelineDynamicStateCreateInfo struct {
+	SType             uint32
+	PNext             uintptr
+	Flags             uint32
+	DynamicStateCount uint32
+	PDynamicStates    uintptr
+}
+
+// GraphicsPipelineCreateInfo mirrors VkGraphicsPipelineCreateInfo.
+type GraphicsPipelineCreateInfo struct {
+	SType               uint32
+	PNext               uintptr
+	Flags               uint32
+	StageCount          uint32
+	PStages             uintptr
+	PVertexInputState   uintptr
+	PInputAssemblyState uintptr
+	PTessellationState  uintptr
+	PViewportState      uintptr
+	PRasterizationState uintptr
+	PMultisampleState   uintptr
+	PDepthStencilState  uintptr
+	PColorBlendState    uintptr
+	PDynamicState       uintptr
+	Layout              PipelineLayout
+	RenderPass_         RenderPass
+	Subpass             uint32
+	BasePipeline        Pipeline
+	BasePipelineIndex   int32
+}
+
+// PipelineLayoutCreateInfo mirrors VkPipelineLayoutCreateInfo.
+type PipelineLayoutCreateInfo struct {
+	SType                  uint32
+	PNext                  uintptr
+	Flags                  uint32
+	SetLayoutCount         uint32
+	PSetLayouts            uintptr
+	PushConstantRangeCount uint32
+	PPushConstantRanges    uintptr
+}
+
+// DescriptorSetLayoutBinding mirrors VkDescriptorSetLayoutBinding.
+type DescriptorSetLayoutBinding struct {
+	Binding            uint32
+	DescriptorType     uint32
+	DescriptorCount    uint32
+	StageFlags         uint32
+	PImmutableSamplers uintptr
+}
+
+// DescriptorSetLayoutCreateInfo mirrors VkDescriptorSetLayoutCreateInfo.
+type DescriptorSetLayoutCreateInfo struct {
+	SType        uint32
+	PNext        uintptr
+	Flags        uint32
+	BindingCount uint32
+	PBindings    uintptr
+}
+
+// DescriptorPoolSize mirrors VkDescriptorPoolSize.
+type DescriptorPoolSize struct {
+	Type_           uint32
+	DescriptorCount uint32
+}
+
+// DescriptorPoolCreateInfo mirrors VkDescriptorPoolCreateInfo.
+type DescriptorPoolCreateInfo struct {
+	SType         uint32
+	PNext         uintptr
+	Flags         uint32
+	MaxSets       uint32
+	PoolSizeCount uint32
+	PPoolSizes    uintptr
+}
+
+// DescriptorSetAllocateInfo mirrors VkDescriptorSetAllocateInfo.
+type DescriptorSetAllocateInfo struct {
+	SType              uint32
+	PNext              uintptr
+	DescriptorPool_    DescriptorPool
+	DescriptorSetCount uint32
+	PSetLayouts        uintptr
+}
+
+// WriteDescriptorSet mirrors VkWriteDescriptorSet.
+type WriteDescriptorSet struct {
+	SType            uint32
+	PNext            uintptr
+	DstSet           DescriptorSet
+	DstBinding       uint32
+	DstArrayElement  uint32
+	DescriptorCount  uint32
+	DescriptorType   uint32
+	PImageInfo       uintptr
+	PBufferInfo      uintptr
+	PTexelBufferView uintptr
+}
+
+// DescriptorImageInfo mirrors VkDescriptorImageInfo.
+type DescriptorImageInfo struct {
+	Sampler     Sampler
+	ImageView   ImageView
+	ImageLayout uint32
+}
+
+// ImageMemoryBarrier mirrors VkImageMemoryBarrier.
+type ImageMemoryBarrier struct {
+	SType               uint32
+	PNext               uintptr
+	SrcAccessMask       uint32
+	DstAccessMask       uint32
+	OldLayout           uint32
+	NewLayout           uint32
+	SrcQueueFamilyIndex uint32
+	DstQueueFamilyIndex uint32
+	Image_              Image
+	SubresAspectMask    uint32
+	SubresBaseMip       uint32
+	SubresLevelCount    uint32
+	SubresBaseLayer     uint32
+	SubresLayerCount    uint32
+}
+
+// Pipeline topology constants (VkPrimitiveTopology).
+const (
+	PrimitiveTopologyTriangleList  = 3
+	PrimitiveTopologyTriangleStrip = 4
+	PrimitiveTopologyLineList      = 1
+	PrimitiveTopologyLineStrip     = 2
+	PrimitiveTopologyPointList     = 0
+)
+
+// VkPolygonMode.
+const (
+	PolygonModeFill = 0
+)
+
+// VkFrontFace.
+const (
+	FrontFaceCounterClockwise = 0
+	FrontFaceCW               = 1
+)
+
+// VkCullModeFlags.
+const (
+	CullModeNone  = 0
+	CullModeFront = 1
+	CullModeBack  = 2
+)
+
+// VkColorComponentFlags.
+const (
+	ColorComponentR = 0x01
+	ColorComponentG = 0x02
+	ColorComponentB = 0x04
+	ColorComponentA = 0x08
+	ColorComponentAll = ColorComponentR | ColorComponentG | ColorComponentB | ColorComponentA
+)
+
+// VkBlendFactor.
+const (
+	BlendFactorZero             = 0
+	BlendFactorOne              = 1
+	BlendFactorSrcAlpha         = 6
+	BlendFactorOneMinusSrcAlpha = 7
+	BlendFactorDstAlpha         = 8
+	BlendFactorDstColor         = 4
+)
+
+// VkBlendOp.
+const (
+	BlendOpAdd = 0
+)
+
+// VkCompareOp.
+const (
+	CompareOpNever          = 0
+	CompareOpLess           = 1
+	CompareOpEqual          = 2
+	CompareOpLessOrEqual    = 3
+	CompareOpGreater        = 4
+	CompareOpNotEqual       = 5
+	CompareOpGreaterOrEqual = 6
+	CompareOpAlways         = 7
+)
+
+// VkDynamicState.
+const (
+	DynamicStateViewport = 0
+	DynamicStateScissor  = 1
+)
+
+// VkShaderStageFlags.
+const (
+	ShaderStageVertex   = 0x01
+	ShaderStageFragment = 0x10
+	ShaderStageAllGfx   = 0x1F
+)
+
+// VkVertexInputRate.
+const (
+	VertexInputRateVertex = 0
+)
+
+// VkFormat constants for vertex attributes.
+const (
+	FormatR32G32SFloat    = 103
+	FormatR32G32B32SFloat = 106
+	FormatR32G32B32A32SFloat = 109
+	FormatR8G8B8A8UNorm   = 37
+)
+
+// VkFilter.
+const (
+	FilterNearest = 0
+	FilterLinear  = 1
+)
+
+// VkSamplerMipmapMode.
+const (
+	SamplerMipmapModeNearest = 0
+)
+
+// VkSamplerAddressMode.
+const (
+	SamplerAddressModeClampToEdge = 2
+)
+
+// QueueFamilyIgnored is VK_QUEUE_FAMILY_IGNORED.
+const QueueFamilyIgnored = 0xFFFFFFFF
 
 // ---------------------------------------------------------------------------
 // Internal function variables — populated by Init()
@@ -1224,6 +1609,83 @@ func CmdSetScissor(cmd CommandBuffer, rect Rect2D) {
 // CmdCopyBufferToImage wraps vkCmdCopyBufferToImage.
 func CmdCopyBufferToImage(cmd CommandBuffer, srcBuffer Buffer, dstImage Image, dstLayout uint32, region BufferImageCopy) {
 	fnCmdCopyBufferToImage(cmd, srcBuffer, dstImage, dstLayout, 1, uintptr(unsafe.Pointer(&region)))
+}
+
+// CmdCopyImageToBuffer wraps vkCmdCopyImageToBuffer.
+func CmdCopyImageToBuffer(cmd CommandBuffer, srcImage Image, srcLayout uint32, dstBuffer Buffer, region BufferImageCopy) {
+	fnCmdCopyImageToBuffer(cmd, srcImage, srcLayout, dstBuffer, 1, uintptr(unsafe.Pointer(&region)))
+}
+
+// CmdPipelineBarrier wraps vkCmdPipelineBarrier for image memory barriers.
+func CmdPipelineBarrier(cmd CommandBuffer, srcStage, dstStage uint32, barriers []ImageMemoryBarrier) {
+	var ptr uintptr
+	if len(barriers) > 0 {
+		ptr = uintptr(unsafe.Pointer(&barriers[0]))
+	}
+	fnCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, 0, 0, 0, uint32(len(barriers)), ptr)
+}
+
+// CmdBindDescriptorSets wraps vkCmdBindDescriptorSets.
+func CmdBindDescriptorSets(cmd CommandBuffer, layout PipelineLayout, firstSet uint32, sets []DescriptorSet) {
+	if len(sets) == 0 {
+		return
+	}
+	fnCmdBindDescriptorSets(cmd, PipelineBindPointGraphics, layout, firstSet, uint32(len(sets)),
+		uintptr(unsafe.Pointer(&sets[0])), 0, 0)
+}
+
+// CreateDescriptorSetLayout wraps vkCreateDescriptorSetLayout.
+func CreateDescriptorSetLayout(dev Device, info *DescriptorSetLayoutCreateInfo) (DescriptorSetLayout, error) {
+	var layout DescriptorSetLayout
+	r := fnCreateDescriptorSetLayout(dev, uintptr(unsafe.Pointer(info)), 0, &layout)
+	if r != Success {
+		return 0, fmt.Errorf("vkCreateDescriptorSetLayout: %w", r)
+	}
+	return layout, nil
+}
+
+// DestroyDescriptorSetLayout wraps vkDestroyDescriptorSetLayout.
+func DestroyDescriptorSetLayout(dev Device, layout DescriptorSetLayout) {
+	fnDestroyDescriptorSetLayout(dev, layout, 0)
+}
+
+// CreateDescriptorPool wraps vkCreateDescriptorPool.
+func CreateDescriptorPool(dev Device, info *DescriptorPoolCreateInfo) (DescriptorPool, error) {
+	var pool DescriptorPool
+	r := fnCreateDescriptorPool(dev, uintptr(unsafe.Pointer(info)), 0, &pool)
+	if r != Success {
+		return 0, fmt.Errorf("vkCreateDescriptorPool: %w", r)
+	}
+	return pool, nil
+}
+
+// DestroyDescriptorPool wraps vkDestroyDescriptorPool.
+func DestroyDescriptorPool(dev Device, pool DescriptorPool) {
+	fnDestroyDescriptorPool(dev, pool, 0)
+}
+
+// AllocateDescriptorSet wraps vkAllocateDescriptorSets for a single set.
+func AllocateDescriptorSet(dev Device, pool DescriptorPool, layout DescriptorSetLayout) (DescriptorSet, error) {
+	info := DescriptorSetAllocateInfo{
+		SType:              StructureTypeDescriptorSetAllocateInfo,
+		DescriptorPool_:    pool,
+		DescriptorSetCount: 1,
+		PSetLayouts:        uintptr(unsafe.Pointer(&layout)),
+	}
+	var set DescriptorSet
+	r := fnAllocateDescriptorSets(dev, uintptr(unsafe.Pointer(&info)), &set)
+	if r != Success {
+		return 0, fmt.Errorf("vkAllocateDescriptorSets: %w", r)
+	}
+	return set, nil
+}
+
+// UpdateDescriptorSets wraps vkUpdateDescriptorSets.
+func UpdateDescriptorSets(dev Device, writes []WriteDescriptorSet) {
+	if len(writes) == 0 {
+		return
+	}
+	fnUpdateDescriptorSets(dev, uint32(len(writes)), uintptr(unsafe.Pointer(&writes[0])), 0, 0)
 }
 
 // FreeCommandBuffers wraps vkFreeCommandBuffers for a single command buffer.
