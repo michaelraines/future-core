@@ -2,16 +2,39 @@
 
 package webgpu
 
-import "github.com/michaelraines/future-render/internal/backend"
+import (
+	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-render/internal/wgpu"
+)
 
 // Shader implements backend.Shader for WebGPU.
-// Stores shader source for WGSL compilation when a pipeline is created.
+// Stores WGSL source and compiled WGPUShaderModule handle.
 type Shader struct {
 	dev            *Device
 	vertexSource   string
 	fragmentSource string
 	attributes     []backend.VertexAttribute
 	uniforms       map[string]interface{}
+
+	// Compiled shader modules (lazily created).
+	vertexModule   wgpu.ShaderModule
+	fragmentModule wgpu.ShaderModule
+	compiled       bool
+}
+
+// compile compiles the WGSL source into shader modules.
+func (s *Shader) compile() {
+	if s.compiled || s.dev.device == 0 {
+		return
+	}
+	s.compiled = true
+
+	if s.vertexSource != "" {
+		s.vertexModule = wgpu.DeviceCreateShaderModuleWGSL(s.dev.device, s.vertexSource)
+	}
+	if s.fragmentSource != "" {
+		s.fragmentModule = wgpu.DeviceCreateShaderModuleWGSL(s.dev.device, s.fragmentSource)
+	}
 }
 
 // SetUniformFloat records a float uniform.
@@ -35,4 +58,12 @@ func (s *Shader) SetUniformBlock(name string, data []byte) { s.uniforms[name] = 
 // Dispose releases shader resources.
 func (s *Shader) Dispose() {
 	s.uniforms = nil
+	if s.vertexModule != 0 {
+		wgpu.ShaderModuleRelease(s.vertexModule)
+		s.vertexModule = 0
+	}
+	if s.fragmentModule != 0 {
+		wgpu.ShaderModuleRelease(s.fragmentModule)
+		s.fragmentModule = 0
+	}
 }

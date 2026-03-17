@@ -24,8 +24,9 @@ type Device struct {
 	defaultColorTex  wgpu.Texture
 	defaultColorView wgpu.TextureView
 
-	adapterInfo AdapterInfo
-	limits      Limits
+	adapterInfo    AdapterInfo
+	limits         Limits
+	defaultSampler wgpu.Sampler
 }
 
 // New creates a new WebGPU device.
@@ -112,8 +113,20 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	return nil
 }
 
+// ensureDefaultSampler creates a default nearest-filter sampler if needed.
+func (d *Device) ensureDefaultSampler() wgpu.Sampler {
+	if d.defaultSampler == 0 && d.device != 0 {
+		d.defaultSampler = wgpu.DeviceCreateSampler(d.device)
+	}
+	return d.defaultSampler
+}
+
 // Dispose releases all WebGPU resources.
 func (d *Device) Dispose() {
+	if d.defaultSampler != 0 {
+		wgpu.SamplerRelease(d.defaultSampler)
+		d.defaultSampler = 0
+	}
 	if d.defaultColorView != 0 {
 		wgpu.TextureViewRelease(d.defaultColorView)
 		d.defaultColorView = 0

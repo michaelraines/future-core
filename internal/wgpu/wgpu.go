@@ -104,6 +104,8 @@ type BlendFactor uint32
 const (
 	BlendFactorZero             BlendFactor = 0
 	BlendFactorOne              BlendFactor = 1
+	BlendFactorDst              BlendFactor = 4
+	BlendFactorDstAlpha         BlendFactor = 8
 	BlendFactorSrcAlpha         BlendFactor = 6
 	BlendFactorOneMinusSrcAlpha BlendFactor = 7
 )
@@ -127,7 +129,293 @@ const (
 type PrimitiveTopology uint32
 
 const (
-	PrimitiveTopologyTriangleList PrimitiveTopology = 3
+	PrimitiveTopologyPointList     PrimitiveTopology = 0
+	PrimitiveTopologyLineList      PrimitiveTopology = 1
+	PrimitiveTopologyLineStrip     PrimitiveTopology = 2
+	PrimitiveTopologyTriangleList  PrimitiveTopology = 3
+	PrimitiveTopologyTriangleStrip PrimitiveTopology = 4
+)
+
+// VertexFormat mirrors WGPUVertexFormat.
+type VertexFormat uint32
+
+const (
+	VertexFormatFloat32x2 VertexFormat = 9
+	VertexFormatFloat32x3 VertexFormat = 11
+	VertexFormatFloat32x4 VertexFormat = 12
+	VertexFormatUint8x4   VertexFormat = 3
+	VertexFormatUnorm8x4  VertexFormat = 19
+)
+
+// VertexStepMode mirrors WGPUVertexStepMode.
+type VertexStepMode uint32
+
+const (
+	VertexStepModeVertex   VertexStepMode = 0
+	VertexStepModeInstance VertexStepMode = 1
+)
+
+// CullMode mirrors WGPUCullMode.
+type CullMode uint32
+
+const (
+	CullModeNone  CullMode = 0
+	CullModeFront CullMode = 1
+	CullModeBack  CullMode = 2
+)
+
+// FrontFace mirrors WGPUFrontFace.
+type FrontFace uint32
+
+const (
+	FrontFaceCCW FrontFace = 0
+	FrontFaceCW  FrontFace = 1
+)
+
+// ColorWriteMask mirrors WGPUColorWriteMask.
+type ColorWriteMask uint32
+
+const (
+	ColorWriteMaskAll ColorWriteMask = 0xF
+)
+
+// CompareFunction mirrors WGPUCompareFunction.
+type CompareFunction uint32
+
+const (
+	CompareFunctionAlways CompareFunction = 8
+)
+
+// ---------------------------------------------------------------------------
+// Pipeline creation structs (C-compatible layout)
+// ---------------------------------------------------------------------------
+
+// ShaderModuleWGSLDescriptor is the WGSL chained struct for shader creation.
+type ShaderModuleWGSLDescriptor struct {
+	Chain SChainedStruct
+	Code  uintptr // *C.char
+}
+
+// SChainedStruct is the chained struct header.
+type SChainedStruct struct {
+	Next  uintptr
+	SType uint32
+	_     [4]byte // padding
+}
+
+// ShaderModuleDescriptor is WGPUShaderModuleDescriptor.
+type ShaderModuleDescriptor struct {
+	NextInChain uintptr
+	Label       uintptr
+}
+
+// VertexAttribute is WGPUVertexAttribute.
+type VertexAttribute struct {
+	Format         VertexFormat
+	_              [4]byte // padding
+	Offset         uint64
+	ShaderLocation uint32
+	_              [4]byte // padding
+}
+
+// VertexBufferLayout is WGPUVertexBufferLayout.
+type VertexBufferLayout struct {
+	ArrayStride    uint64
+	StepMode       VertexStepMode
+	AttributeCount uint32
+	Attributes     uintptr
+}
+
+// VertexState is WGPUVertexState.
+type VertexState struct {
+	NextInChain   uintptr
+	Module        ShaderModule
+	EntryPoint    uintptr // *C.char
+	ConstantCount uint32
+	_             [4]byte
+	Constants     uintptr
+	BufferCount   uint32
+	_             [4]byte
+	Buffers       uintptr
+}
+
+// FragmentState is WGPUFragmentState.
+type FragmentState struct {
+	NextInChain   uintptr
+	Module        ShaderModule
+	EntryPoint    uintptr
+	ConstantCount uint32
+	_             [4]byte
+	Constants     uintptr
+	TargetCount   uint32
+	_             [4]byte
+	Targets       uintptr
+}
+
+// ColorTargetState is WGPUColorTargetState.
+type ColorTargetState struct {
+	NextInChain uintptr
+	Format      TextureFormat
+	_           [4]byte
+	Blend       uintptr // *BlendState, 0 for no blending
+	WriteMask   ColorWriteMask
+	_           [4]byte
+}
+
+// BlendState is WGPUBlendState.
+type BlendState struct {
+	Color BlendComponent
+	Alpha BlendComponent
+}
+
+// BlendComponent is WGPUBlendComponent.
+type BlendComponent struct {
+	Operation BlendOperation
+	SrcFactor BlendFactor
+	DstFactor BlendFactor
+}
+
+// PrimitiveState is WGPUPrimitiveState.
+type PrimitiveState struct {
+	NextInChain      uintptr
+	Topology         PrimitiveTopology
+	StripIndexFormat IndexFormat
+	FrontFace_       FrontFace
+	CullMode_        CullMode
+}
+
+// MultisampleState is WGPUMultisampleState.
+type MultisampleState struct {
+	NextInChain            uintptr
+	Count                  uint32
+	Mask                   uint32
+	AlphaToCoverageEnabled uint32
+	_                      [4]byte
+}
+
+// DepthStencilState is WGPUDepthStencilState.
+type DepthStencilState struct {
+	NextInChain         uintptr
+	Format              TextureFormat
+	DepthWriteEnabled   uint32
+	DepthCompare        CompareFunction
+	StencilFront        StencilFaceState
+	StencilBack         StencilFaceState
+	StencilReadMask     uint32
+	StencilWriteMask    uint32
+	DepthBias           int32
+	DepthBiasSlopeScale float32
+	DepthBiasClamp      float32
+	_                   [4]byte
+}
+
+// StencilFaceState is WGPUStencilFaceState.
+type StencilFaceState struct {
+	Compare     CompareFunction
+	FailOp      uint32
+	DepthFailOp uint32
+	PassOp      uint32
+}
+
+// RenderPipelineDescriptor is WGPURenderPipelineDescriptor.
+type RenderPipelineDescriptor struct {
+	NextInChain  uintptr
+	Label        uintptr
+	Layout       PipelineLayout
+	Vertex       VertexState
+	Primitive    PrimitiveState
+	DepthStencil uintptr // *DepthStencilState
+	Multisample  MultisampleState
+	Fragment     uintptr // *FragmentState
+}
+
+// BindGroupLayoutEntry is WGPUBindGroupLayoutEntry.
+type BindGroupLayoutEntry struct {
+	NextInChain    uintptr
+	Binding        uint32
+	Visibility     uint32
+	Buffer_        BindGroupLayoutEntryBuffer
+	Sampler_       BindGroupLayoutEntrySampler
+	Texture_       BindGroupLayoutEntryTexture
+	StorageTexture BindGroupLayoutEntryStorageTexture
+}
+
+// BindGroupLayoutEntryBuffer is the buffer part of a layout entry.
+type BindGroupLayoutEntryBuffer struct {
+	NextInChain      uintptr
+	Type             uint32
+	HasDynamicOffset uint32
+	MinBindingSize   uint64
+}
+
+// BindGroupLayoutEntrySampler is the sampler part of a layout entry.
+type BindGroupLayoutEntrySampler struct {
+	NextInChain uintptr
+	Type        uint32
+	_           [4]byte
+}
+
+// BindGroupLayoutEntryTexture is the texture part of a layout entry.
+type BindGroupLayoutEntryTexture struct {
+	NextInChain   uintptr
+	SampleType    uint32
+	ViewDimension uint32
+	Multisampled  uint32
+	_             [4]byte
+}
+
+// BindGroupLayoutEntryStorageTexture is the storage texture part of a layout entry.
+type BindGroupLayoutEntryStorageTexture struct {
+	NextInChain   uintptr
+	Access        uint32
+	Format        TextureFormat
+	ViewDimension uint32
+	_             [4]byte
+}
+
+// BindGroupLayoutDescriptor is WGPUBindGroupLayoutDescriptor.
+type BindGroupLayoutDescriptor struct {
+	NextInChain uintptr
+	Label       uintptr
+	EntryCount  uint32
+	_           [4]byte
+	Entries     uintptr
+}
+
+// BindGroupEntry is WGPUBindGroupEntry.
+type BindGroupEntry struct {
+	NextInChain  uintptr
+	Binding      uint32
+	_            [4]byte
+	Buffer_      Buffer
+	Offset       uint64
+	Size         uint64
+	Sampler_     Sampler
+	TextureView_ TextureView
+}
+
+// BindGroupDescriptor is WGPUBindGroupDescriptor.
+type BindGroupDescriptor struct {
+	NextInChain uintptr
+	Label       uintptr
+	Layout      BindGroupLayout
+	EntryCount  uint32
+	_           [4]byte
+	Entries     uintptr
+}
+
+// PipelineLayoutDescriptor is WGPUPipelineLayoutDescriptor.
+type PipelineLayoutDescriptor struct {
+	NextInChain          uintptr
+	Label                uintptr
+	BindGroupLayoutCount uint32
+	_                    [4]byte
+	BindGroupLayouts     uintptr
+}
+
+// SType constants for chained structs.
+const (
+	STypeShaderModuleWGSLDescriptor uint32 = 6
 )
 
 // ---------------------------------------------------------------------------
@@ -264,6 +552,22 @@ var (
 	fnInstanceRelease                  func(Instance)
 	fnAdapterRelease                   func(Adapter)
 	fnDeviceRelease                    func(Device)
+
+	// Pipeline / bind group / readback functions.
+	fnDeviceCreateBindGroupLayout       func(Device, *BindGroupLayoutDescriptor) BindGroupLayout
+	fnDeviceCreateBindGroup             func(Device, *BindGroupDescriptor) BindGroup
+	fnDeviceCreatePipelineLayout        func(Device, *PipelineLayoutDescriptor) PipelineLayout
+	fnCommandEncoderCopyTextureToBuffer func(CommandEncoder, *ImageCopyTexture, *ImageCopyBuffer, *Extent3D)
+	fnBufferMapAsync                    func(Buffer, uint32, uint64, uint64, uintptr, uintptr)
+	fnBufferGetMappedRange              func(Buffer, uint64, uint64) uintptr
+	fnBufferUnmap                       func(Buffer)
+	fnBindGroupLayoutRelease            func(BindGroupLayout)
+	fnBindGroupRelease                  func(BindGroup)
+	fnPipelineLayoutRelease             func(PipelineLayout)
+	fnRenderPassEncoderSetBindGroup     func(RenderPassEncoder, uint32, BindGroup, uint32, uintptr)
+	fnDevicePoll                        func(Device, uint32, uintptr) uint32
+	fnDeviceCreateSampler               func(Device, uintptr) Sampler
+	fnSamplerRelease                    func(Sampler)
 )
 
 // ---------------------------------------------------------------------------
@@ -433,6 +737,104 @@ func RenderPassRelease(rpe RenderPassEncoder) {
 	fnRenderPassEncoderRelease(rpe)
 }
 
+// DeviceCreateShaderModuleWGSL creates a shader module from WGSL source.
+func DeviceCreateShaderModuleWGSL(dev Device, code string) ShaderModule {
+	codeBytes := cstr(code)
+	wgslDesc := ShaderModuleWGSLDescriptor{
+		Chain: SChainedStruct{SType: STypeShaderModuleWGSLDescriptor},
+		Code:  uintptr(unsafe.Pointer(codeBytes)),
+	}
+	desc := ShaderModuleDescriptor{
+		NextInChain: uintptr(unsafe.Pointer(&wgslDesc)),
+	}
+	ret := fnDeviceCreateShaderModule(dev, uintptr(unsafe.Pointer(&desc)))
+	runtime.KeepAlive(codeBytes)
+	runtime.KeepAlive(wgslDesc)
+	return ret
+}
+
+// DeviceCreateRenderPipelineTyped creates a render pipeline from a typed descriptor.
+func DeviceCreateRenderPipelineTyped(dev Device, desc *RenderPipelineDescriptor) RenderPipeline {
+	return fnDeviceCreateRenderPipeline(dev, uintptr(unsafe.Pointer(desc)))
+}
+
+// DeviceCreateBindGroupLayout creates a bind group layout.
+func DeviceCreateBindGroupLayout(dev Device, desc *BindGroupLayoutDescriptor) BindGroupLayout {
+	return fnDeviceCreateBindGroupLayout(dev, desc)
+}
+
+// DeviceCreateBindGroup creates a bind group.
+func DeviceCreateBindGroup(dev Device, desc *BindGroupDescriptor) BindGroup {
+	return fnDeviceCreateBindGroup(dev, desc)
+}
+
+// DeviceCreatePipelineLayout creates a pipeline layout.
+func DeviceCreatePipelineLayout(dev Device, desc *PipelineLayoutDescriptor) PipelineLayout {
+	return fnDeviceCreatePipelineLayout(dev, desc)
+}
+
+// CommandEncoderCopyTextureToBuffer copies texture data to a buffer.
+func CommandEncoderCopyTextureToBuffer(enc CommandEncoder, src *ImageCopyTexture, dst *ImageCopyBuffer, size *Extent3D) {
+	fnCommandEncoderCopyTextureToBuffer(enc, src, dst, size)
+}
+
+// BufferMapAsync maps a buffer for reading.
+func BufferMapAsync(buf Buffer, mode uint32, offset, size uint64) {
+	fnBufferMapAsync(buf, mode, offset, size, 0, 0)
+}
+
+// BufferGetMappedRange returns the mapped pointer.
+func BufferGetMappedRange(buf Buffer, offset, size uint64) uintptr {
+	return fnBufferGetMappedRange(buf, offset, size)
+}
+
+// BufferUnmap unmaps a buffer.
+func BufferUnmap(buf Buffer) {
+	fnBufferUnmap(buf)
+}
+
+// BindGroupLayoutRelease releases a bind group layout.
+func BindGroupLayoutRelease(layout BindGroupLayout) {
+	fnBindGroupLayoutRelease(layout)
+}
+
+// BindGroupRelease releases a bind group.
+func BindGroupRelease(bg BindGroup) {
+	fnBindGroupRelease(bg)
+}
+
+// PipelineLayoutRelease releases a pipeline layout.
+func PipelineLayoutRelease(layout PipelineLayout) {
+	fnPipelineLayoutRelease(layout)
+}
+
+// RenderPassSetBindGroup binds a bind group to a slot.
+func RenderPassSetBindGroup(rpe RenderPassEncoder, groupIndex uint32, group BindGroup) {
+	fnRenderPassEncoderSetBindGroup(rpe, groupIndex, group, 0, 0)
+}
+
+// DevicePoll polls the device for completed work.
+func DevicePoll(dev Device, wait bool) {
+	w := uint32(0)
+	if wait {
+		w = 1
+	}
+	fnDevicePoll(dev, w, 0)
+}
+
+// DeviceCreateSampler creates a sampler with default settings (nearest filter).
+func DeviceCreateSampler(dev Device) Sampler {
+	return fnDeviceCreateSampler(dev, 0)
+}
+
+// SamplerRelease releases a sampler.
+func SamplerRelease(s Sampler) {
+	fnSamplerRelease(s)
+}
+
+// MapModeRead is the read mode for buffer mapping.
+const MapModeRead uint32 = 1
+
 // InstanceRelease releases an instance.
 func InstanceRelease(inst Instance) {
 	fnInstanceRelease(inst)
@@ -522,6 +924,27 @@ func Init() error {
 	reg(&fnInstanceRelease, "wgpuInstanceRelease")
 	reg(&fnAdapterRelease, "wgpuAdapterRelease")
 	reg(&fnDeviceRelease, "wgpuDeviceRelease")
+	reg(&fnDeviceCreateBindGroupLayout, "wgpuDeviceCreateBindGroupLayout")
+	reg(&fnDeviceCreateBindGroup, "wgpuDeviceCreateBindGroup")
+	reg(&fnDeviceCreatePipelineLayout, "wgpuDeviceCreatePipelineLayout")
+	reg(&fnCommandEncoderCopyTextureToBuffer, "wgpuCommandEncoderCopyTextureToBuffer")
+	reg(&fnBufferMapAsync, "wgpuBufferMapAsync")
+	reg(&fnBufferGetMappedRange, "wgpuBufferGetMappedRange")
+	reg(&fnBufferUnmap, "wgpuBufferUnmap")
+	reg(&fnBindGroupLayoutRelease, "wgpuBindGroupLayoutRelease")
+	reg(&fnBindGroupRelease, "wgpuBindGroupRelease")
+	reg(&fnPipelineLayoutRelease, "wgpuPipelineLayoutRelease")
+	reg(&fnRenderPassEncoderSetBindGroup, "wgpuRenderPassEncoderSetBindGroup")
+	reg(&fnDevicePoll, "wgpuDevicePoll")
+	reg(&fnDeviceCreateSampler, "wgpuDeviceCreateSampler")
+	reg(&fnSamplerRelease, "wgpuSamplerRelease")
 
 	return err
+}
+
+// cstr converts a Go string to a null-terminated C string.
+func cstr(s string) *byte {
+	b := make([]byte, len(s)+1)
+	copy(b, s)
+	return &b[0]
 }

@@ -3,6 +3,7 @@
 package webgpu
 
 import (
+	"runtime"
 	"unsafe"
 
 	"github.com/michaelraines/future-render/internal/backend"
@@ -26,6 +27,7 @@ func (b *Buffer) Upload(data []byte) {
 	}
 	wgpu.QueueWriteBuffer(b.dev.queue, b.handle, 0,
 		unsafe.Pointer(&data[0]), uint64(len(data)))
+	runtime.KeepAlive(data)
 }
 
 // UploadRegion uploads a sub-region of buffer data.
@@ -35,6 +37,7 @@ func (b *Buffer) UploadRegion(data []byte, offset int) {
 	}
 	wgpu.QueueWriteBuffer(b.dev.queue, b.handle, uint64(offset),
 		unsafe.Pointer(&data[0]), uint64(len(data)))
+	runtime.KeepAlive(data)
 }
 
 // Size returns the buffer size in bytes.

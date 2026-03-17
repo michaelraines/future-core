@@ -48,11 +48,12 @@ func (e *Encoder) EndRenderPass() {
 	}
 }
 
-// SetPipeline applies pipeline state (blend mode, etc.).
+// SetPipeline applies pipeline state (blend mode, shader program, vertex attributes).
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	if p, ok := pipeline.(*Pipeline); ok {
 		e.currentPipeline = p
 		e.applyBlendMode(p.desc.BlendMode)
+		p.bind()
 	}
 }
 
@@ -69,6 +70,16 @@ func (e *Encoder) applyBlendMode(mode backend.BlendMode) {
 		e.gl.Call("blendFunc",
 			e.gl.Get("SRC_ALPHA").Int(),
 			e.gl.Get("ONE").Int())
+	case backend.BlendMultiplicative:
+		e.gl.Call("enable", e.gl.Get("BLEND").Int())
+		e.gl.Call("blendFunc",
+			e.gl.Get("DST_COLOR").Int(),
+			e.gl.Get("ZERO").Int())
+	case backend.BlendPremultiplied:
+		e.gl.Call("enable", e.gl.Get("BLEND").Int())
+		e.gl.Call("blendFunc",
+			e.gl.Get("ONE").Int(),
+			e.gl.Get("ONE_MINUS_SRC_ALPHA").Int())
 	default:
 		e.gl.Call("disable", e.gl.Get("BLEND").Int())
 	}

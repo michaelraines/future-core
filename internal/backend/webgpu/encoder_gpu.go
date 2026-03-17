@@ -3,6 +3,7 @@
 package webgpu
 
 import (
+	"runtime"
 	"unsafe"
 
 	"github.com/michaelraines/future-render/internal/backend"
@@ -19,6 +20,7 @@ type Encoder struct {
 	currentPipeline *Pipeline
 	passEncoder     wgpu.RenderPassEncoder
 	cmdEncoder      wgpu.CommandEncoder
+	boundTexture    *Texture
 }
 
 // BeginRenderPass begins a WebGPU render pass.
@@ -58,6 +60,7 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	}
 
 	e.passEncoder = wgpu.CommandEncoderBeginRenderPass(e.cmdEncoder, &rpDesc)
+	runtime.KeepAlive(colorAttachment)
 	e.inRenderPass = true
 
 	// Set default viewport.
@@ -83,10 +86,19 @@ func (e *Encoder) EndRenderPass() {
 
 // SetPipeline binds a render pipeline.
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
-	if p, ok := pipeline.(*Pipeline); ok {
-		e.currentPipeline = p
-		// In a full implementation, we'd bind the WGPURenderPipeline:
-		// wgpu.RenderPassSetPipeline(e.passEncoder, p.handle)
+	p, ok := pipeline.(*Pipeline)
+	if !ok {
+		return
+	}
+	e.currentPipeline = p
+
+	// Lazily create the WGPURenderPipeline.
+	if p.handle == 0 {
+		p.createPipeline()
+	}
+
+	if p.handle != 0 && e.passEncoder != 0 {
+		wgpu.RenderPassSetPipeline(e.passEncoder, p.handle)
 	}
 }
 
@@ -109,9 +121,79 @@ func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat)
 	}
 }
 
-// SetTexture binds a texture to a slot.
-func (e *Encoder) SetTexture(_ backend.Texture, _ int) {
-	// In a full implementation, this would update bind groups.
+// SetTexture binds a texture to a slot via bind groups.
+func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
+	t, ok := tex.(*Texture)
+	if !ok || e.dev.device == 0 || e.passEncoder == 0 {
+		return
+	}
+	e.boundTexture = t
+
+	// Create a bind group with the texture view and a default sampler.
+	// This requires a bind group layout matching the pipeline's expectations.
+	// For now, create a simple texture-only bind group.
+	if t.view == 0 {
+		return
+	}
+
+	// Create sampler.
+	sampler := e.dev.ensureDefaultSampler()
+	if sampler == 0 {
+		return
+	}
+
+	// Create bind group layout for texture + sampler.
+	entries := []wgpu.BindGroupLayoutEntry{
+		{
+			Binding:    0,
+			Visibility: 2, // Fragment
+			Sampler_: wgpu.BindGroupLayoutEntrySampler{
+				Type: 1, // Filtering
+			},
+		},
+		{
+			Binding:    1,
+			Visibility: 2, // Fragment
+			Texture_: wgpu.BindGroupLayoutEntryTexture{
+				SampleType:    1, // Float
+				ViewDimension: 2, // 2D
+			},
+		},
+	}
+
+	bglDesc := wgpu.BindGroupLayoutDescriptor{
+		EntryCount: uint32(len(entries)),
+		Entries:    uintptr(unsafe.Pointer(&entries[0])),
+	}
+	bgl := wgpu.DeviceCreateBindGroupLayout(e.dev.device, &bglDesc)
+	runtime.KeepAlive(entries)
+	if bgl == 0 {
+		return
+	}
+
+	bgEntries := []wgpu.BindGroupEntry{
+		{
+			Binding:  0,
+			Sampler_: sampler,
+		},
+		{
+			Binding:      1,
+			TextureView_: t.view,
+		},
+	}
+
+	bgDesc := wgpu.BindGroupDescriptor{
+		Layout:     bgl,
+		EntryCount: uint32(len(bgEntries)),
+		Entries:    uintptr(unsafe.Pointer(&bgEntries[0])),
+	}
+	bg := wgpu.DeviceCreateBindGroup(e.dev.device, &bgDesc)
+	runtime.KeepAlive(bgEntries)
+	if bg != 0 {
+		wgpu.RenderPassSetBindGroup(e.passEncoder, uint32(slot), bg)
+		wgpu.BindGroupRelease(bg)
+	}
+	wgpu.BindGroupLayoutRelease(bgl)
 }
 
 // SetTextureFilter overrides the texture filter for a slot.

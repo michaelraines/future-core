@@ -603,5 +603,182 @@ func resolveSymbol(handle uintptr, name string, fn interface{}) error {
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Render pipeline state creation
+// ---------------------------------------------------------------------------
+
+// selectors for pipeline creation (cached lazily).
+var (
+	selNewRenderPipelineStateWithDescriptor Selector
+	selSetVertexFunction                    Selector
+	selSetFragmentFunction                  Selector
+	selSetPixelFormat                       Selector
+	selSetBlendingEnabled                   Selector
+	selSetSourceRGBBlendFactor              Selector
+	selSetDestinationRGBBlendFactor         Selector
+	selSetSourceAlphaBlendFactor            Selector
+	selSetDestinationAlphaBlendFactor       Selector
+	selSetRGBBlendOperation                 Selector
+	selSetAlphaBlendOperation               Selector
+	selSetRenderPipelineState               Selector
+	selSetFragmentTexture                   Selector
+	selSetDepthStencilState                 Selector
+	selSetCullMode                          Selector
+
+	pipelineSelectorsOnce bool
+)
+
+func initPipelineSelectors() {
+	if pipelineSelectorsOnce {
+		return
+	}
+	pipelineSelectorsOnce = true
+	selNewRenderPipelineStateWithDescriptor = sel("newRenderPipelineStateWithDescriptor:error:")
+	selSetVertexFunction = sel("setVertexFunction:")
+	selSetFragmentFunction = sel("setFragmentFunction:")
+	selSetPixelFormat = sel("setPixelFormat:")
+	selSetBlendingEnabled = sel("setBlendingEnabled:")
+	selSetSourceRGBBlendFactor = sel("setSourceRGBBlendFactor:")
+	selSetDestinationRGBBlendFactor = sel("setDestinationRGBBlendFactor:")
+	selSetSourceAlphaBlendFactor = sel("setSourceAlphaBlendFactor:")
+	selSetDestinationAlphaBlendFactor = sel("setDestinationAlphaBlendFactor:")
+	selSetRGBBlendOperation = sel("setRgbBlendOperation:")
+	selSetAlphaBlendOperation = sel("setAlphaBlendOperation:")
+	selSetRenderPipelineState = sel("setRenderPipelineState:")
+	selSetFragmentTexture = sel("setFragmentTexture:atIndex:")
+	selSetDepthStencilState = sel("setDepthStencilState:")
+	selSetCullMode = sel("setCullMode:")
+}
+
+// MTLBlendFactor constants.
+const (
+	BlendFactorZero                = 0
+	BlendFactorOne                 = 1
+	BlendFactorSourceAlpha         = 4
+	BlendFactorOneMinusSourceAlpha = 5
+	BlendFactorDestinationColor    = 8
+	BlendFactorDestinationAlpha    = 10
+)
+
+// MTLBlendOperation constants.
+const (
+	BlendOperationAdd = 0
+)
+
+// MTLCullMode constants.
+const (
+	CullModeNone  = 0
+	CullModeFront = 1
+	CullModeBack  = 2
+)
+
+// MTLPrimitiveType constants.
+const (
+	PrimitiveTypeTriangle      = 3
+	PrimitiveTypeTriangleStrip = 4
+	PrimitiveTypeLine          = 1
+	PrimitiveTypeLineStrip     = 2
+	PrimitiveTypePoint         = 0
+)
+
+// DeviceNewLibraryWithSource compiles Metal Shading Language source to a library.
+func DeviceNewLibraryWithSource(dev Device, source string) (Library, error) {
+	initPipelineSelectors()
+	src := nsString(source)
+	var errObj uintptr
+	lib := Library(msgSend(uintptr(dev), selNewLibraryWithSource, src, 0, uintptr(unsafe.Pointer(&errObj))))
+	if lib == 0 {
+		return 0, fmt.Errorf("mtl: shader compilation failed")
+	}
+	return lib, nil
+}
+
+// LibraryNewFunctionWithName gets a function from a library.
+func LibraryNewFunctionWithName(lib Library, name string) Function {
+	initPipelineSelectors()
+	nsName := nsString(name)
+	return Function(msgSend(uintptr(lib), selNewFunctionWithName, nsName))
+}
+
+// CreateRenderPipelineState creates a render pipeline state from vertex/fragment functions.
+func CreateRenderPipelineState(dev Device, vertexFn, fragmentFn Function, pixelFormat int, blendEnabled bool, srcRGB, dstRGB, srcAlpha, dstAlpha int) (RenderPipelineState, error) {
+	initPipelineSelectors()
+
+	// Create MTLRenderPipelineDescriptor.
+	cls := getClass("MTLRenderPipelineDescriptor")
+	alloc := msgSend(uintptr(cls), sel("alloc"))
+	desc := msgSend(alloc, sel("init"))
+
+	// Set functions.
+	msgSend(desc, selSetVertexFunction, uintptr(vertexFn))
+	msgSend(desc, selSetFragmentFunction, uintptr(fragmentFn))
+
+	// Configure color attachment 0.
+	colorAttachments := msgSend(desc, sel("colorAttachments"))
+	ca0 := msgSend(colorAttachments, sel("objectAtIndexedSubscript:"), 0)
+	msgSend(ca0, selSetPixelFormat, uintptr(pixelFormat))
+
+	if blendEnabled {
+		msgSend(ca0, selSetBlendingEnabled, 1)
+		msgSend(ca0, selSetSourceRGBBlendFactor, uintptr(srcRGB))
+		msgSend(ca0, selSetDestinationRGBBlendFactor, uintptr(dstRGB))
+		msgSend(ca0, selSetSourceAlphaBlendFactor, uintptr(srcAlpha))
+		msgSend(ca0, selSetDestinationAlphaBlendFactor, uintptr(dstAlpha))
+		msgSend(ca0, selSetRGBBlendOperation, uintptr(BlendOperationAdd))
+		msgSend(ca0, selSetAlphaBlendOperation, uintptr(BlendOperationAdd))
+	}
+
+	// Create pipeline state.
+	var errObj uintptr
+	pso := RenderPipelineState(msgSend(uintptr(dev), selNewRenderPipelineStateWithDescriptor, desc, uintptr(unsafe.Pointer(&errObj))))
+
+	// Release descriptor.
+	msgSend(desc, selRelease)
+
+	if pso == 0 {
+		return 0, fmt.Errorf("mtl: failed to create render pipeline state")
+	}
+	return pso, nil
+}
+
+// RenderCommandEncoderSetRenderPipelineState binds a pipeline state.
+func RenderCommandEncoderSetRenderPipelineState(enc RenderCommandEncoder, pso RenderPipelineState) {
+	initPipelineSelectors()
+	msgSend(uintptr(enc), selSetRenderPipelineState, uintptr(pso))
+}
+
+// RenderCommandEncoderSetFragmentTexture binds a texture to a fragment shader slot.
+func RenderCommandEncoderSetFragmentTexture(enc RenderCommandEncoder, tex Texture, index uint64) {
+	initPipelineSelectors()
+	msgSend(uintptr(enc), selSetFragmentTexture, uintptr(tex), uintptr(index))
+}
+
+// RenderCommandEncoderSetCullMode sets the cull mode.
+func RenderCommandEncoderSetCullMode(enc RenderCommandEncoder, mode int) {
+	initPipelineSelectors()
+	msgSend(uintptr(enc), selSetCullMode, uintptr(mode))
+}
+
+// nsString creates an NSString from a Go string.
+func nsString(s string) uintptr {
+	cls := getClass("NSString")
+	cstr_ := cstr(s)
+	return msgSend(uintptr(cls), sel("stringWithUTF8String:"), uintptr(unsafe.Pointer(cstr_)))
+}
+
+// RenderPipelineStateRelease releases a render pipeline state.
+func RenderPipelineStateRelease(pso RenderPipelineState) {
+	if pso != 0 {
+		msgSend(uintptr(pso), selRelease)
+	}
+}
+
+// LibraryRelease releases a library.
+func LibraryRelease(lib Library) {
+	if lib != 0 {
+		msgSend(uintptr(lib), selRelease)
+	}
+}
+
 // Keep compiler happy.
 var _ = unsafe.Pointer(nil)

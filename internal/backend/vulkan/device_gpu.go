@@ -39,10 +39,36 @@ type Device struct {
 	stagingSize   int
 	stagingMapped unsafe.Pointer
 
+	// Default sampler for texture binding.
+	defaultSampler vk.Sampler
+
 	// Vulkan-specific state for public API compatibility.
 	instanceInfo       InstanceCreateInfo
 	physicalDeviceInfo PhysicalDeviceInfo
 	debugEnabled       bool
+}
+
+// ensureDefaultSampler creates a default nearest-filter sampler if needed.
+func (d *Device) ensureDefaultSampler() vk.Sampler {
+	if d.defaultSampler != 0 {
+		return d.defaultSampler
+	}
+	ci := vk.SamplerCreateInfo{
+		SType:        vk.StructureTypeSamplerCreateInfo,
+		MagFilter:    vk.FilterNearest,
+		MinFilter:    vk.FilterNearest,
+		MipmapMode:   vk.SamplerMipmapModeNearest,
+		AddressModeU: vk.SamplerAddressModeClampToEdge,
+		AddressModeV: vk.SamplerAddressModeClampToEdge,
+		AddressModeW: vk.SamplerAddressModeClampToEdge,
+		MaxLod:       1.0,
+	}
+	s, err := vk.CreateSampler(d.device, &ci)
+	if err != nil {
+		return 0
+	}
+	d.defaultSampler = s
+	return s
 }
 
 // InstanceCreateInfo mirrors VkInstanceCreateInfo fields.
@@ -434,6 +460,9 @@ func (d *Device) Dispose() {
 	}
 	_ = vk.DeviceWaitIdle(d.device)
 
+	if d.defaultSampler != 0 {
+		vk.DestroySampler(d.device, d.defaultSampler)
+	}
 	if d.stagingBuffer != 0 {
 		vk.UnmapMemory(d.device, d.stagingMemory)
 		vk.DestroyBuffer(d.device, d.stagingBuffer)

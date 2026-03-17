@@ -16,6 +16,69 @@ type Shader struct {
 	fragmentSource string
 	attributes     []backend.VertexAttribute
 	uniforms       map[string]interface{}
+
+	// Compiled GL program (lazily created).
+	program  js.Value
+	compiled bool
+}
+
+// compile compiles and links the vertex/fragment shaders into a GL program.
+func (s *Shader) compile() bool {
+	if s.compiled {
+		return !s.program.IsNull() && !s.program.IsUndefined()
+	}
+	s.compiled = true
+
+	if s.vertexSource == "" || s.fragmentSource == "" {
+		return false
+	}
+
+	vertShader := s.compileShader(s.gl.Get("VERTEX_SHADER").Int(), s.vertexSource)
+	if vertShader.IsNull() || vertShader.IsUndefined() {
+		return false
+	}
+
+	fragShader := s.compileShader(s.gl.Get("FRAGMENT_SHADER").Int(), s.fragmentSource)
+	if fragShader.IsNull() || fragShader.IsUndefined() {
+		s.gl.Call("deleteShader", vertShader)
+		return false
+	}
+
+	prog := s.gl.Call("createProgram")
+	s.gl.Call("attachShader", prog, vertShader)
+	s.gl.Call("attachShader", prog, fragShader)
+	s.gl.Call("linkProgram", prog)
+
+	// Shaders can be detached after linking.
+	s.gl.Call("detachShader", prog, vertShader)
+	s.gl.Call("detachShader", prog, fragShader)
+	s.gl.Call("deleteShader", vertShader)
+	s.gl.Call("deleteShader", fragShader)
+
+	linkStatus := s.gl.Call("getProgramParameter", prog,
+		s.gl.Get("LINK_STATUS").Int())
+	if !linkStatus.Bool() {
+		s.gl.Call("deleteProgram", prog)
+		return false
+	}
+
+	s.program = prog
+	return true
+}
+
+// compileShader compiles a single shader stage.
+func (s *Shader) compileShader(shaderType int, source string) js.Value {
+	shader := s.gl.Call("createShader", shaderType)
+	s.gl.Call("shaderSource", shader, source)
+	s.gl.Call("compileShader", shader)
+
+	compileStatus := s.gl.Call("getShaderParameter", shader,
+		s.gl.Get("COMPILE_STATUS").Int())
+	if !compileStatus.Bool() {
+		s.gl.Call("deleteShader", shader)
+		return js.Null()
+	}
+	return shader
 }
 
 // SetUniformFloat records a float uniform.
@@ -39,4 +102,8 @@ func (s *Shader) SetUniformBlock(name string, data []byte) { s.uniforms[name] = 
 // Dispose releases shader resources.
 func (s *Shader) Dispose() {
 	s.uniforms = nil
+	if !s.program.IsNull() && !s.program.IsUndefined() {
+		s.gl.Call("deleteProgram", s.program)
+		s.program = js.Null()
+	}
 }
