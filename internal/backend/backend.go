@@ -38,6 +38,12 @@ type Device interface {
 
 	// Encoder returns the command encoder for recording rendering commands.
 	Encoder() CommandEncoder
+
+	// ReadScreen copies the rendered screen pixels (RGBA, width*height*4 bytes)
+	// into dst. Returns true if pixels were copied. Returns false if the
+	// backend renders directly to the display surface (e.g. OpenGL) and no
+	// copy is needed.
+	ReadScreen(dst []byte) bool
 }
 
 // DeviceConfig holds configuration for device initialization.
@@ -56,6 +62,12 @@ type DeviceConfig struct {
 
 	// Debug enables GPU debug/validation layers.
 	Debug bool
+
+	// SurfaceFactory creates a presentation surface for the given graphics
+	// API instance handle. For Vulkan, the parameter is a VkInstance and the
+	// return value is a VkSurfaceKHR. If nil, the backend renders to an
+	// offscreen target and relies on ReadScreen + GL presenter.
+	SurfaceFactory func(instance uintptr) (surface uintptr, err error)
 }
 
 // DeviceCapabilities reports what the device supports.

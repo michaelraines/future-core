@@ -12,6 +12,7 @@ type dummyDevice struct{}
 
 func (d *dummyDevice) Init(_ DeviceConfig) error                       { return nil }
 func (d *dummyDevice) Dispose()                                        {}
+func (d *dummyDevice) ReadScreen(_ []byte) bool                        { return false }
 func (d *dummyDevice) BeginFrame()                                     {}
 func (d *dummyDevice) EndFrame()                                       {}
 func (d *dummyDevice) NewTexture(_ TextureDescriptor) (Texture, error) { return nil, nil }

@@ -1,4 +1,4 @@
-//go:build vulkan
+//go:build (darwin || linux || freebsd || windows) && !soft
 
 // Package vk provides pure Go Vulkan 1.2 bindings loaded at runtime via purego.
 // No CGo is required. The shared library (libvulkan.so on Linux,
@@ -40,6 +40,8 @@ type (
 	DescriptorSetLayout uintptr
 	DescriptorPool      uintptr
 	DescriptorSet       uintptr
+	SurfaceKHR          uintptr
+	SwapchainKHR        uintptr
 )
 
 // Result is VkResult.
@@ -57,6 +59,8 @@ const (
 	ErrorMemoryMapFailed      Result = -5
 	ErrorLayerNotPresent      Result = -6
 	ErrorExtensionNotPresent  Result = -7
+	ErrorOutOfDateKHR         Result = -1000001004
+	SuboptimalKHR             Result = 1000001003
 )
 
 func (r Result) Error() string { return fmt.Sprintf("VkResult(%d)", int32(r)) }
@@ -101,6 +105,14 @@ const (
 	StructureTypePipelineColorBlendStateCreateInfo    = 26
 	StructureTypePipelineDynamicStateCreateInfo       = 27
 	StructureTypeApplicationInfo                      = 0
+	StructureTypePipelineShaderStageCreateInfo        = 18
+
+	// KHR extension structure types.
+	StructureTypeSwapchainCreateInfoKHR    = 1000001000
+	StructureTypePresentInfoKHR            = 1000001001
+	StructureTypeMetalSurfaceCreateInfoEXT = 1000217000
+	StructureTypeWin32SurfaceCreateInfoKHR = 1000009000
+	StructureTypeXlibSurfaceCreateInfoKHR  = 1000004000
 )
 
 // VkFormat constants.
@@ -111,6 +123,8 @@ const (
 	FormatR8G8B8A8UNorm      = 37
 	FormatB8G8R8A8UNorm      = 44
 	FormatR16G16B16A16SFloat = 97
+	FormatR32G32SFloat       = 103
+	FormatR32G32B32SFloat    = 106
 	FormatR32G32B32A32SFloat = 109
 	FormatD16UNorm           = 124
 	FormatD32SFloat          = 126
@@ -205,9 +219,10 @@ const (
 const (
 	BlendFactorZero             = 0
 	BlendFactorOne              = 1
+	BlendFactorDstColor         = 4
 	BlendFactorSrcAlpha         = 6
 	BlendFactorOneMinusSrcAlpha = 7
-	BlendFactorDstColor         = 8
+	BlendFactorDstAlpha         = 8
 )
 
 // VkBlendOp.
@@ -243,6 +258,7 @@ const (
 	CullModeBack  = 0x00000002
 
 	FrontFaceCounterClockwise = 0
+	FrontFaceCW               = 1
 )
 
 // VkPrimitiveTopology.
@@ -271,6 +287,14 @@ const (
 	ShaderStageFragment    = 0x00000010
 	ShaderStageAllGraphics = ShaderStageVertex | ShaderStageFragment
 )
+
+// VkVertexInputRate.
+const (
+	VertexInputRateVertex = 0
+)
+
+// QueueFamilyIgnored is VK_QUEUE_FAMILY_IGNORED.
+const QueueFamilyIgnored = 0xFFFFFFFF
 
 // VkDescriptorType.
 const (
@@ -345,6 +369,28 @@ const (
 // VkQueueFlags.
 const (
 	QueueGraphics = 0x00000001
+)
+
+// VkPresentModeKHR.
+const (
+	PresentModeImmediateKHR = 0
+	PresentModeMailboxKHR   = 1
+	PresentModeFifoKHR      = 2
+)
+
+// VkColorSpaceKHR.
+const (
+	ColorSpaceSRGBNonLinearKHR = 0
+)
+
+// VkCompositeAlphaFlagBitsKHR.
+const (
+	CompositeAlphaOpaqueKHR = 0x00000001
+)
+
+// VkSurfaceTransformFlagBitsKHR.
+const (
+	SurfaceTransformIdentityKHR = 0x00000001
 )
 
 // Null handle.
@@ -972,6 +1018,20 @@ type DescriptorImageInfo struct {
 	ImageLayout uint32
 }
 
+// PushConstantRange mirrors VkPushConstantRange.
+type PushConstantRange struct {
+	StageFlags uint32
+	Offset     uint32
+	Size       uint32
+}
+
+// DescriptorBufferInfo mirrors VkDescriptorBufferInfo.
+type DescriptorBufferInfo struct {
+	Buffer_ Buffer
+	Offset  uint64
+	Range_  uint64
+}
+
 // ImageMemoryBarrier mirrors VkImageMemoryBarrier.
 type ImageMemoryBarrier struct {
 	SType               uint32
@@ -990,113 +1050,93 @@ type ImageMemoryBarrier struct {
 	SubresLayerCount    uint32
 }
 
-// Pipeline topology constants (VkPrimitiveTopology).
-const (
-	PrimitiveTopologyTriangleList  = 3
-	PrimitiveTopologyTriangleStrip = 4
-	PrimitiveTopologyLineList      = 1
-	PrimitiveTopologyLineStrip     = 2
-	PrimitiveTopologyPointList     = 0
-)
+// ---------------------------------------------------------------------------
+// KHR extension structs (surface + swapchain)
+// ---------------------------------------------------------------------------
 
-// VkPolygonMode.
-const (
-	PolygonModeFill = 0
-)
+// SurfaceCapabilitiesKHR mirrors VkSurfaceCapabilitiesKHR.
+type SurfaceCapabilitiesKHR struct {
+	MinImageCount           uint32
+	MaxImageCount           uint32
+	CurrentExtentWidth      uint32
+	CurrentExtentHeight     uint32
+	MinImageExtentWidth     uint32
+	MinImageExtentHeight    uint32
+	MaxImageExtentWidth     uint32
+	MaxImageExtentHeight    uint32
+	MaxImageArrayLayers     uint32
+	SupportedTransforms     uint32
+	CurrentTransform        uint32
+	SupportedCompositeAlpha uint32
+	SupportedUsageFlags     uint32
+}
 
-// VkFrontFace.
-const (
-	FrontFaceCounterClockwise = 0
-	FrontFaceCW               = 1
-)
+// SurfaceFormatKHR mirrors VkSurfaceFormatKHR.
+type SurfaceFormatKHR struct {
+	Format     uint32
+	ColorSpace uint32
+}
 
-// VkCullModeFlags.
-const (
-	CullModeNone  = 0
-	CullModeFront = 1
-	CullModeBack  = 2
-)
+// SwapchainCreateInfoKHR mirrors VkSwapchainCreateInfoKHR.
+type SwapchainCreateInfoKHR struct {
+	SType                 uint32
+	PNext                 uintptr
+	Flags                 uint32
+	Surface               SurfaceKHR
+	MinImageCount         uint32
+	ImageFormat           uint32
+	ImageColorSpace       uint32
+	ImageExtentWidth      uint32
+	ImageExtentHeight     uint32
+	ImageArrayLayers      uint32
+	ImageUsage            uint32
+	ImageSharingMode      uint32
+	QueueFamilyIndexCount uint32
+	PQueueFamilyIndices   uintptr
+	PreTransform          uint32
+	CompositeAlpha        uint32
+	PresentMode           uint32
+	Clipped               uint32
+	OldSwapchain          SwapchainKHR
+}
 
-// VkColorComponentFlags.
-const (
-	ColorComponentR   = 0x01
-	ColorComponentG   = 0x02
-	ColorComponentB   = 0x04
-	ColorComponentA   = 0x08
-	ColorComponentAll = ColorComponentR | ColorComponentG | ColorComponentB | ColorComponentA
-)
+// PresentInfoKHR mirrors VkPresentInfoKHR.
+type PresentInfoKHR struct {
+	SType              uint32
+	PNext              uintptr
+	WaitSemaphoreCount uint32
+	PWaitSemaphores    uintptr
+	SwapchainCount     uint32
+	PSwapchains        uintptr
+	PImageIndices      uintptr
+	PResults           uintptr
+}
 
-// VkBlendFactor.
-const (
-	BlendFactorZero             = 0
-	BlendFactorOne              = 1
-	BlendFactorSrcAlpha         = 6
-	BlendFactorOneMinusSrcAlpha = 7
-	BlendFactorDstAlpha         = 8
-	BlendFactorDstColor         = 4
-)
+// MetalSurfaceCreateInfoEXT mirrors VkMetalSurfaceCreateInfoEXT.
+type MetalSurfaceCreateInfoEXT struct {
+	SType  uint32
+	PNext  uintptr
+	Flags  uint32
+	PLayer uintptr // CAMetalLayer*
+}
 
-// VkBlendOp.
-const (
-	BlendOpAdd = 0
-)
+// Win32SurfaceCreateInfoKHR mirrors VkWin32SurfaceCreateInfoKHR.
+type Win32SurfaceCreateInfoKHR struct {
+	SType     uint32
+	PNext     uintptr
+	Flags     uint32
+	Hinstance uintptr
+	Hwnd      uintptr
+}
 
-// VkCompareOp.
-const (
-	CompareOpNever          = 0
-	CompareOpLess           = 1
-	CompareOpEqual          = 2
-	CompareOpLessOrEqual    = 3
-	CompareOpGreater        = 4
-	CompareOpNotEqual       = 5
-	CompareOpGreaterOrEqual = 6
-	CompareOpAlways         = 7
-)
-
-// VkDynamicState.
-const (
-	DynamicStateViewport = 0
-	DynamicStateScissor  = 1
-)
-
-// VkShaderStageFlags.
-const (
-	ShaderStageVertex   = 0x01
-	ShaderStageFragment = 0x10
-	ShaderStageAllGfx   = 0x1F
-)
-
-// VkVertexInputRate.
-const (
-	VertexInputRateVertex = 0
-)
-
-// VkFormat constants for vertex attributes.
-const (
-	FormatR32G32SFloat       = 103
-	FormatR32G32B32SFloat    = 106
-	FormatR32G32B32A32SFloat = 109
-	FormatR8G8B8A8UNorm      = 37
-)
-
-// VkFilter.
-const (
-	FilterNearest = 0
-	FilterLinear  = 1
-)
-
-// VkSamplerMipmapMode.
-const (
-	SamplerMipmapModeNearest = 0
-)
-
-// VkSamplerAddressMode.
-const (
-	SamplerAddressModeClampToEdge = 2
-)
-
-// QueueFamilyIgnored is VK_QUEUE_FAMILY_IGNORED.
-const QueueFamilyIgnored = 0xFFFFFFFF
+// XlibSurfaceCreateInfoKHR mirrors VkXlibSurfaceCreateInfoKHR.
+type XlibSurfaceCreateInfoKHR struct {
+	SType   uint32
+	PNext   uintptr
+	Flags   uint32
+	Display uintptr // Display*
+	Window  uintptr // Window (X11)
+}
 
 // ---------------------------------------------------------------------------
 // Internal function variables — populated by Init()
@@ -1104,6 +1144,7 @@ const QueueFamilyIgnored = 0xFFFFFFFF
 
 //nolint:unused // populated dynamically
 var (
+	fnEnumerateInstanceExtensionProperties   func(pLayerName uintptr, pPropertyCount *uint32, pProperties uintptr) Result
 	fnCreateInstance                         func(pCreateInfo uintptr, pAllocator uintptr, pInstance *Instance) Result
 	fnDestroyInstance                        func(instance Instance, pAllocator uintptr)
 	fnEnumeratePhysicalDevices               func(instance Instance, pCount *uint32, pDevices uintptr) Result
@@ -1187,6 +1228,30 @@ var (
 	fnCmdCopyBufferToImage  func(cmd CommandBuffer, srcBuffer Buffer, dstImage Image, dstImageLayout uint32, regionCount uint32, pRegions uintptr)
 	fnCmdCopyImageToBuffer  func(cmd CommandBuffer, srcImage Image, srcImageLayout uint32, dstBuffer Buffer, regionCount uint32, pRegions uintptr)
 	fnCmdPipelineBarrier    func(cmd CommandBuffer, srcStageMask, dstStageMask, dependencyFlags uint32, memBarrierCount uint32, pMemBarriers uintptr, bufBarrierCount uint32, pBufBarriers uintptr, imgBarrierCount uint32, pImgBarriers uintptr)
+	fnCmdPushConstants      func(cmd CommandBuffer, layout PipelineLayout, stageFlags, offset, size uint32, pValues uintptr)
+
+	// vkGetInstanceProcAddr — loaded from the Vulkan library directly.
+	fnGetInstanceProcAddr func(instance Instance, pName uintptr) uintptr
+)
+
+// KHR extension function pointers — loaded via InitSwapchainFunctions after
+// instance creation. These are nil until that call.
+//
+//nolint:unused // populated dynamically
+var (
+	fnDestroySurfaceKHR                       func(instance Instance, surface SurfaceKHR, pAllocator uintptr)
+	fnGetPhysicalDeviceSurfaceSupportKHR      func(physicalDevice PhysicalDevice, queueFamilyIndex uint32, surface SurfaceKHR, pSupported *uint32) Result
+	fnGetPhysicalDeviceSurfaceCapabilitiesKHR func(physicalDevice PhysicalDevice, surface SurfaceKHR, pCapabilities uintptr) Result
+	fnGetPhysicalDeviceSurfaceFormatsKHR      func(physicalDevice PhysicalDevice, surface SurfaceKHR, pFormatCount *uint32, pFormats uintptr) Result
+	fnGetPhysicalDeviceSurfacePresentModesKHR func(physicalDevice PhysicalDevice, surface SurfaceKHR, pModeCount *uint32, pModes uintptr) Result
+	fnCreateSwapchainKHR                      func(device Device, pCreateInfo uintptr, pAllocator uintptr, pSwapchain *SwapchainKHR) Result
+	fnDestroySwapchainKHR                     func(device Device, swapchain SwapchainKHR, pAllocator uintptr)
+	fnGetSwapchainImagesKHR                   func(device Device, swapchain SwapchainKHR, pCount *uint32, pImages uintptr) Result
+	fnAcquireNextImageKHR                     func(device Device, swapchain SwapchainKHR, timeout uint64, semaphore Semaphore, fence Fence, pImageIndex *uint32) Result
+	fnQueuePresentKHR                         func(queue Queue, pPresentInfo uintptr) Result
+	fnCreateMetalSurfaceEXT                   func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
+	fnCreateWin32SurfaceKHR                   func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
+	fnCreateXlibSurfaceKHR                    func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
 )
 
 // lib holds the loaded Vulkan library handle.
@@ -1195,6 +1260,38 @@ var lib uintptr
 // ---------------------------------------------------------------------------
 // Public wrappers
 // ---------------------------------------------------------------------------
+
+// ExtensionProperties mirrors VkExtensionProperties (partial).
+type ExtensionProperties struct {
+	ExtensionName [256]byte
+	SpecVersion   uint32
+}
+
+// EnumerateInstanceExtensionProperties returns available instance extensions.
+func EnumerateInstanceExtensionProperties() ([]string, error) {
+	var count uint32
+	r := fnEnumerateInstanceExtensionProperties(0, &count, 0)
+	if r != Success {
+		return nil, fmt.Errorf("vkEnumerateInstanceExtensionProperties (count): %w", r)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	props := make([]ExtensionProperties, count)
+	r = fnEnumerateInstanceExtensionProperties(0, &count, uintptr(unsafe.Pointer(&props[0])))
+	if r != Success {
+		return nil, fmt.Errorf("vkEnumerateInstanceExtensionProperties: %w", r)
+	}
+	names := make([]string, count)
+	for i, p := range props[:count] {
+		n := 0
+		for n < len(p.ExtensionName) && p.ExtensionName[n] != 0 {
+			n++
+		}
+		names[i] = string(p.ExtensionName[:n])
+	}
+	return names, nil
+}
 
 // CreateInstance wraps vkCreateInstance.
 func CreateInstance(info *InstanceCreateInfo) (Instance, error) {
@@ -1358,6 +1455,24 @@ func CreateFence(dev Device, signaled bool) (Fence, error) {
 
 // DestroyFence wraps vkDestroyFence.
 func DestroyFence(dev Device, fence Fence) { fnDestroyFence(dev, fence, 0) }
+
+// CreateSemaphore wraps vkCreateSemaphore.
+func CreateSemaphore(dev Device) (Semaphore, error) {
+	info := struct {
+		SType uint32
+		PNext uintptr
+		Flags uint32
+	}{SType: StructureTypeSemaphoreCreateInfo}
+	var sem Semaphore
+	r := fnCreateSemaphore(dev, uintptr(unsafe.Pointer(&info)), 0, &sem)
+	if r != Success {
+		return 0, fmt.Errorf("vkCreateSemaphore: %w", r)
+	}
+	return sem, nil
+}
+
+// DestroySemaphore wraps vkDestroySemaphore.
+func DestroySemaphore(dev Device, sem Semaphore) { fnDestroySemaphore(dev, sem, 0) }
 
 // WaitForFence wraps vkWaitForFences for a single fence.
 func WaitForFence(dev Device, fence Fence, timeout uint64) error {
@@ -1634,6 +1749,11 @@ func CmdBindDescriptorSets(cmd CommandBuffer, layout PipelineLayout, firstSet ui
 		uintptr(unsafe.Pointer(&sets[0])), 0, 0)
 }
 
+// CmdPushConstants wraps vkCmdPushConstants.
+func CmdPushConstants(cmd CommandBuffer, layout PipelineLayout, stageFlags, offset, size uint32, data unsafe.Pointer) {
+	fnCmdPushConstants(cmd, layout, stageFlags, offset, size, uintptr(data))
+}
+
 // CreateDescriptorSetLayout wraps vkCreateDescriptorSetLayout.
 func CreateDescriptorSetLayout(dev Device, info *DescriptorSetLayoutCreateInfo) (DescriptorSetLayout, error) {
 	var layout DescriptorSetLayout
@@ -1744,11 +1864,17 @@ func Init() error {
 		return nil
 	}
 
+	// Load vkGetInstanceProcAddr first (needed for KHR extensions later).
+	if ferr := must(&fnGetInstanceProcAddr, "vkGetInstanceProcAddr"); ferr != nil {
+		return ferr
+	}
+
 	// Instance-level functions.
 	for _, e := range []struct {
 		fn   interface{}
 		name string
 	}{
+		{&fnEnumerateInstanceExtensionProperties, "vkEnumerateInstanceExtensionProperties"},
 		{&fnCreateInstance, "vkCreateInstance"},
 		{&fnDestroyInstance, "vkDestroyInstance"},
 		{&fnEnumeratePhysicalDevices, "vkEnumeratePhysicalDevices"},
@@ -1873,6 +1999,7 @@ func Init() error {
 		{&fnCmdCopyBufferToImage, "vkCmdCopyBufferToImage"},
 		{&fnCmdCopyImageToBuffer, "vkCmdCopyImageToBuffer"},
 		{&fnCmdPipelineBarrier, "vkCmdPipelineBarrier"},
+		{&fnCmdPushConstants, "vkCmdPushConstants"},
 	} {
 		if ferr := must(e.fn, e.name); ferr != nil {
 			return ferr
@@ -1882,12 +2009,215 @@ func Init() error {
 	return nil
 }
 
+// InitSwapchainFunctions loads KHR surface and swapchain extension functions
+// via vkGetInstanceProcAddr. Call after vkCreateInstance. Functions that are
+// not available (e.g. platform-specific surface creators) are silently skipped.
+func InitSwapchainFunctions(instance Instance) error {
+	if fnGetInstanceProcAddr == nil {
+		return fmt.Errorf("vk: vkGetInstanceProcAddr not loaded")
+	}
+
+	resolve := func(fn interface{}, name string) error {
+		cname := CStr(name)
+		addr := fnGetInstanceProcAddr(instance, uintptr(unsafe.Pointer(cname)))
+		runtime.KeepAlive(cname)
+		if addr == 0 {
+			return fmt.Errorf("vk: %s not available", name)
+		}
+		purego.RegisterFunc(fn, addr)
+		return nil
+	}
+
+	// Required surface + swapchain functions.
+	for _, e := range []struct {
+		fn   interface{}
+		name string
+	}{
+		{&fnDestroySurfaceKHR, "vkDestroySurfaceKHR"},
+		{&fnGetPhysicalDeviceSurfaceSupportKHR, "vkGetPhysicalDeviceSurfaceSupportKHR"},
+		{&fnGetPhysicalDeviceSurfaceCapabilitiesKHR, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"},
+		{&fnGetPhysicalDeviceSurfaceFormatsKHR, "vkGetPhysicalDeviceSurfaceFormatsKHR"},
+		{&fnGetPhysicalDeviceSurfacePresentModesKHR, "vkGetPhysicalDeviceSurfacePresentModesKHR"},
+		{&fnCreateSwapchainKHR, "vkCreateSwapchainKHR"},
+		{&fnDestroySwapchainKHR, "vkDestroySwapchainKHR"},
+		{&fnGetSwapchainImagesKHR, "vkGetSwapchainImagesKHR"},
+		{&fnAcquireNextImageKHR, "vkAcquireNextImageKHR"},
+		{&fnQueuePresentKHR, "vkQueuePresentKHR"},
+	} {
+		if err := resolve(e.fn, e.name); err != nil {
+			return err
+		}
+	}
+
+	// Platform surface creators — optional, only one will succeed per platform.
+	_ = resolve(&fnCreateMetalSurfaceEXT, "vkCreateMetalSurfaceEXT")
+	_ = resolve(&fnCreateWin32SurfaceKHR, "vkCreateWin32SurfaceKHR")
+	_ = resolve(&fnCreateXlibSurfaceKHR, "vkCreateXlibSurfaceKHR")
+
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// KHR public wrappers
+// ---------------------------------------------------------------------------
+
+// DestroySurfaceKHR wraps vkDestroySurfaceKHR.
+func DestroySurfaceKHR(instance Instance, surface SurfaceKHR) {
+	fnDestroySurfaceKHR(instance, surface, 0)
+}
+
+// GetPhysicalDeviceSurfaceSupportKHR checks if a queue family supports presentation.
+func GetPhysicalDeviceSurfaceSupportKHR(physDev PhysicalDevice, queueFamily uint32, surface SurfaceKHR) (bool, error) {
+	var supported uint32
+	r := fnGetPhysicalDeviceSurfaceSupportKHR(physDev, queueFamily, surface, &supported)
+	if r != Success {
+		return false, fmt.Errorf("vkGetPhysicalDeviceSurfaceSupportKHR: %w", r)
+	}
+	return supported != 0, nil
+}
+
+// GetPhysicalDeviceSurfaceCapabilitiesKHR queries surface capabilities.
+func GetPhysicalDeviceSurfaceCapabilitiesKHR(physDev PhysicalDevice, surface SurfaceKHR) (SurfaceCapabilitiesKHR, error) {
+	var caps SurfaceCapabilitiesKHR
+	r := fnGetPhysicalDeviceSurfaceCapabilitiesKHR(physDev, surface, uintptr(unsafe.Pointer(&caps)))
+	if r != Success {
+		return caps, fmt.Errorf("vkGetPhysicalDeviceSurfaceCapabilitiesKHR: %w", r)
+	}
+	return caps, nil
+}
+
+// GetPhysicalDeviceSurfaceFormatsKHR queries supported surface formats.
+func GetPhysicalDeviceSurfaceFormatsKHR(physDev PhysicalDevice, surface SurfaceKHR) ([]SurfaceFormatKHR, error) {
+	var count uint32
+	r := fnGetPhysicalDeviceSurfaceFormatsKHR(physDev, surface, &count, 0)
+	if r != Success {
+		return nil, fmt.Errorf("vkGetPhysicalDeviceSurfaceFormatsKHR (count): %w", r)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	formats := make([]SurfaceFormatKHR, count)
+	r = fnGetPhysicalDeviceSurfaceFormatsKHR(physDev, surface, &count, uintptr(unsafe.Pointer(&formats[0])))
+	if r != Success {
+		return nil, fmt.Errorf("vkGetPhysicalDeviceSurfaceFormatsKHR: %w", r)
+	}
+	return formats[:count], nil
+}
+
+// GetPhysicalDeviceSurfacePresentModesKHR queries supported present modes.
+func GetPhysicalDeviceSurfacePresentModesKHR(physDev PhysicalDevice, surface SurfaceKHR) ([]uint32, error) {
+	var count uint32
+	r := fnGetPhysicalDeviceSurfacePresentModesKHR(physDev, surface, &count, 0)
+	if r != Success {
+		return nil, fmt.Errorf("vkGetPhysicalDeviceSurfacePresentModesKHR (count): %w", r)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	modes := make([]uint32, count)
+	r = fnGetPhysicalDeviceSurfacePresentModesKHR(physDev, surface, &count, uintptr(unsafe.Pointer(&modes[0])))
+	if r != Success {
+		return nil, fmt.Errorf("vkGetPhysicalDeviceSurfacePresentModesKHR: %w", r)
+	}
+	return modes[:count], nil
+}
+
+// CreateSwapchainKHR wraps vkCreateSwapchainKHR.
+func CreateSwapchainKHR(device Device, info *SwapchainCreateInfoKHR) (SwapchainKHR, error) {
+	var sc SwapchainKHR
+	r := fnCreateSwapchainKHR(device, uintptr(unsafe.Pointer(info)), 0, &sc)
+	if r != Success {
+		return 0, fmt.Errorf("vkCreateSwapchainKHR: %w", r)
+	}
+	return sc, nil
+}
+
+// DestroySwapchainKHR wraps vkDestroySwapchainKHR.
+func DestroySwapchainKHR(device Device, swapchain SwapchainKHR) {
+	fnDestroySwapchainKHR(device, swapchain, 0)
+}
+
+// GetSwapchainImagesKHR retrieves swapchain images.
+func GetSwapchainImagesKHR(device Device, swapchain SwapchainKHR) ([]Image, error) {
+	var count uint32
+	r := fnGetSwapchainImagesKHR(device, swapchain, &count, 0)
+	if r != Success {
+		return nil, fmt.Errorf("vkGetSwapchainImagesKHR (count): %w", r)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	images := make([]Image, count)
+	r = fnGetSwapchainImagesKHR(device, swapchain, &count, uintptr(unsafe.Pointer(&images[0])))
+	if r != Success {
+		return nil, fmt.Errorf("vkGetSwapchainImagesKHR: %w", r)
+	}
+	return images[:count], nil
+}
+
+// AcquireNextImageKHR acquires the next swapchain image.
+func AcquireNextImageKHR(device Device, swapchain SwapchainKHR, timeout uint64, semaphore Semaphore, fence Fence) (uint32, Result) {
+	var idx uint32
+	r := fnAcquireNextImageKHR(device, swapchain, timeout, semaphore, fence, &idx)
+	return idx, r
+}
+
+// QueuePresentKHR presents a rendered image to the swapchain.
+func QueuePresentKHR(queue Queue, info *PresentInfoKHR) Result {
+	return fnQueuePresentKHR(queue, uintptr(unsafe.Pointer(info)))
+}
+
+// CreateMetalSurfaceEXT creates a Vulkan surface from a CAMetalLayer (macOS).
+func CreateMetalSurfaceEXT(instance Instance, info *MetalSurfaceCreateInfoEXT) (SurfaceKHR, error) {
+	if fnCreateMetalSurfaceEXT == nil {
+		return 0, fmt.Errorf("vk: vkCreateMetalSurfaceEXT not available")
+	}
+	var surface SurfaceKHR
+	r := fnCreateMetalSurfaceEXT(instance, uintptr(unsafe.Pointer(info)), 0, &surface)
+	if r != Success {
+		return 0, fmt.Errorf("vkCreateMetalSurfaceEXT: %w", r)
+	}
+	return surface, nil
+}
+
+// CreateWin32SurfaceKHR creates a Vulkan surface from a Win32 window.
+func CreateWin32SurfaceKHR(instance Instance, info *Win32SurfaceCreateInfoKHR) (SurfaceKHR, error) {
+	if fnCreateWin32SurfaceKHR == nil {
+		return 0, fmt.Errorf("vk: vkCreateWin32SurfaceKHR not available")
+	}
+	var surface SurfaceKHR
+	r := fnCreateWin32SurfaceKHR(instance, uintptr(unsafe.Pointer(info)), 0, &surface)
+	if r != Success {
+		return 0, fmt.Errorf("vkCreateWin32SurfaceKHR: %w", r)
+	}
+	return surface, nil
+}
+
+// CreateXlibSurfaceKHR creates a Vulkan surface from an X11 window.
+func CreateXlibSurfaceKHR(instance Instance, info *XlibSurfaceCreateInfoKHR) (SurfaceKHR, error) {
+	if fnCreateXlibSurfaceKHR == nil {
+		return 0, fmt.Errorf("vk: vkCreateXlibSurfaceKHR not available")
+	}
+	var surface SurfaceKHR
+	r := fnCreateXlibSurfaceKHR(instance, uintptr(unsafe.Pointer(info)), 0, &surface)
+	if r != Success {
+		return 0, fmt.Errorf("vkCreateXlibSurfaceKHR: %w", r)
+	}
+	return surface, nil
+}
+
 // openVulkanLib opens the platform-specific Vulkan shared library.
 func openVulkanLib() (uintptr, error) {
 	var names []string
 	switch runtime.GOOS {
 	case "darwin":
-		names = []string{"libMoltenVK.dylib", "libvulkan.1.dylib", "libvulkan.dylib"}
+		names = []string{
+			"/opt/homebrew/lib/libMoltenVK.dylib",
+			"/usr/local/lib/libMoltenVK.dylib",
+			"libMoltenVK.dylib",
+			"libvulkan.1.dylib",
+			"libvulkan.dylib",
+		}
 	case "windows":
 		names = []string{"vulkan-1.dll"}
 	default: // linux, freebsd, android

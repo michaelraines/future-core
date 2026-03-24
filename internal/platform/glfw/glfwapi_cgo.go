@@ -11,6 +11,14 @@ package glfw
 
 #define GLFW_INCLUDE_NONE
 #include "glfw3.h"
+
+// Forward-declare Vulkan types for glfwCreateWindowSurface without
+// requiring the Vulkan SDK headers. The function is compiled in vulkan.c.
+typedef struct VkInstance_T* VkInstance;
+typedef uint64_t VkSurfaceKHR;
+typedef void VkAllocationCallbacks;
+typedef int VkResult;
+VkResult glfwCreateWindowSurface(VkInstance, GLFWwindow*, const VkAllocationCallbacks*, VkSurfaceKHR*);
 */
 import "C"
 
@@ -105,6 +113,16 @@ func initGLFWAPI() error {
 	}
 	fnGlfwGetJoystickButtons = func(jid int32, count *int32) uintptr {
 		return uintptr(unsafe.Pointer(C.glfwGetJoystickButtons(C.int(jid), (*C.int)(unsafe.Pointer(count))))) //nolint:govet // CGo interop
+	}
+
+	// Vulkan surface creation via GLFW.
+	fnGlfwCreateWindowSurface = func(instance uintptr, window uintptr, allocator uintptr, surface *uintptr) int32 {
+		return int32(C.glfwCreateWindowSurface(
+			(C.VkInstance)(instance),                              //nolint:govet // CGo interop
+			(*C.GLFWwindow)(unsafe.Pointer(window)),               //nolint:govet // CGo interop
+			(*C.VkAllocationCallbacks)(unsafe.Pointer(allocator)), //nolint:govet // CGo interop
+			(*C.VkSurfaceKHR)(unsafe.Pointer(surface)),            //nolint:govet // CGo interop
+		))
 	}
 
 	return nil

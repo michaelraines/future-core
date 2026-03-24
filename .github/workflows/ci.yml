@@ -35,7 +35,7 @@ jobs:
         run: make fmt
 
       - name: Vet
-        run: make vet
+        run: make TAGS=soft vet
 
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9
@@ -44,19 +44,19 @@ jobs:
           install-only: true
 
       - name: Lint
-        run: make lint
+        run: make TAGS=soft lint
 
       - name: Test
-        run: make test
+        run: make TAGS=soft test
 
       - name: Coverage check (80% minimum)
-        run: make cover-check
+        run: make TAGS=soft cover-check
 
       - name: Test (race detector)
-        run: make test-race
+        run: make TAGS=soft test-race
 
       - name: Build
-        run: make build
+        run: make TAGS=soft build
 
   # Cross-platform build and test on macOS and Windows
   cross-platform:
@@ -79,7 +79,7 @@ jobs:
           go-version: ${{ matrix.go-version }}
 
       - name: Test
-        run: make test
+        run: make TAGS=soft test
 
       - name: Build
-        run: make build
+        run: make TAGS=soft build

@@ -5,11 +5,13 @@ package futurerender
 import (
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"time"
 
 	"github.com/michaelraines/future-render/internal/backend"
 	"github.com/michaelraines/future-render/internal/batch"
+	"github.com/michaelraines/future-render/internal/gl"
 	"github.com/michaelraines/future-render/internal/input"
 	"github.com/michaelraines/future-render/internal/pipeline"
 	"github.com/michaelraines/future-render/internal/platform"
@@ -90,6 +92,9 @@ type engine struct {
 
 	// Render target registry: maps target IDs to backend render targets.
 	renderTargets map[uint32]backend.RenderTarget
+
+	// Screen presenter: blits non-GL backend output to the GL framebuffer.
+	presenter *gl.Presenter
 
 	// Window config state.
 	windowTitle string
@@ -215,6 +220,12 @@ func (e *engine) initRenderResources() error {
 	e.renderPipeline = pipeline.New()
 	e.renderPipeline.AddPass(sp)
 
+	// Check if the backend needs a screen presenter (non-GL backends).
+	// Pass nil to probe without reading pixels.
+	if dev.ReadScreen(nil) {
+		e.presenter = &gl.Presenter{}
+	}
+
 	return nil
 }
 
@@ -232,35 +243,61 @@ func (e *engine) disposeRenderResources() {
 	if e.whiteTexture != nil {
 		e.whiteTexture.Dispose()
 	}
+	if e.presenter != nil {
+		e.presenter.Dispose()
+	}
 }
 
 func (e *engine) run() error {
+	// Check for headless screenshot-and-exit mode.
+	headless := getHeadlessConfig()
+
+	// Resolve backend name BEFORE creating the window so we can determine
+	// whether the window needs an OpenGL context.
+	preferred := preferredBackends()
+	resolvedName := resolveBackendName(backendName(), preferred)
+	needsNoGL := resolvedName == "vulkan" || resolvedName == "metal" || resolvedName == "dx12"
+
 	// Create platform window (selected per OS via build tags).
 	win := newPlatformWindow()
 	e.window = win
 
 	winCfg := e.windowConfig()
+	winCfg.NoGL = needsNoGL
 	if err := win.Create(winCfg); err != nil {
 		return err
 	}
 	defer win.Destroy()
 
-	// Select rendering backend via FUTURE_RENDER_BACKEND env var or auto-detect.
-	// Platform-aware preferred order: try the native GPU API first, then
-	// OpenGL as a portable fallback, then the software rasterizer.
-	preferred := preferredBackends()
+	// Initialize GL functions only if we have an OpenGL context.
+	if !needsNoGL {
+		if err := gl.Init(); err != nil {
+			return fmt.Errorf("gl init: %w", err)
+		}
+	}
+
+	// Create the backend device.
 	dev, resolved, err := backend.Resolve(backendName(), preferred)
 	if err != nil {
 		return fmt.Errorf("backend selection: %w", err)
 	}
 	resolvedBackend.Store(resolved)
 
+	// Build DeviceConfig with SurfaceFactory if the window supports Vulkan surfaces.
 	fbW, fbH := win.FramebufferSize()
-	if err := dev.Init(backend.DeviceConfig{
+	devCfg := backend.DeviceConfig{
 		Width:  fbW,
 		Height: fbH,
 		VSync:  true,
-	}); err != nil {
+	}
+	if needsNoGL {
+		if creator, ok := win.(platform.VulkanSurfaceCreator); ok {
+			devCfg.SurfaceFactory = func(instance uintptr) (uintptr, error) {
+				return creator.CreateVulkanSurface(instance)
+			}
+		}
+	}
+	if err := dev.Init(devCfg); err != nil {
 		return err
 	}
 
@@ -365,14 +402,46 @@ func (e *engine) run() error {
 		proj := fmath.Mat4Ortho(0, float64(screenW), float64(screenH), 0, -1, 1)
 		e.spritePass.Projection = proj.Float32()
 
+		// Begin frame: prepare the backend for command recording.
+		e.device.BeginFrame()
+
 		// Execute the render pipeline (sprite pass manages its own render
 		// passes per target, including clearing the screen target).
 		ctx := pipeline.NewPassContext(fbW, fbH)
 		ctx.ScreenClearEnabled = IsScreenClearedEveryFrame()
 		e.renderPipeline.Execute(e.encoder, ctx)
 
-		win.SwapBuffers()
+		// End frame: submit recorded commands to the GPU.
+		e.device.EndFrame()
+
+		// For non-GL backends: read rendered pixels and blit to the
+		// window's GL framebuffer.
+		if e.presenter != nil {
+			if e.presenter.Tex == 0 {
+				e.presenter = gl.InitPresenter(fbW, fbH)
+			}
+			e.presenter.Resize(fbW, fbH)
+			if e.device.ReadScreen(e.presenter.Buf) {
+				e.presenter.Present(e.presenter.Buf, fbW, fbH, fbW, fbH)
+			}
+		}
+
+		// Headless screenshot-and-exit: capture after N frames (before
+		// SwapBuffers so the back buffer still contains rendered content).
 		frameCount++
+		if headless != nil && frameCount >= headless.frames {
+			if err := e.saveScreenshot(fbW, fbH, headless.output); err != nil {
+				fmt.Fprintf(os.Stderr, "headless: %v\n", err)
+				os.Exit(1) //nolint:gocritic // intentional force-exit; defers are expendable in headless capture mode
+			}
+			fmt.Printf("headless: captured frame %d → %s (%dx%d, backend=%s)\n",
+				frameCount, headless.output, fbW, fbH, resolved)
+			// Force exit — on macOS the Cocoa event loop may keep the
+			// process alive even after window destruction.
+			os.Exit(0)
+		}
+
+		win.SwapBuffers()
 
 		// Update FPS/TPS counters every second.
 		if time.Since(fpsTimer) >= time.Second {
@@ -448,16 +517,39 @@ func (e *engine) deviceScaleFactor() float64 {
 	return 1.0
 }
 
+// resolveBackendName determines the backend name that will be used, without
+// actually creating the device. Used to decide window configuration (e.g. NoGL)
+// before the window is created.
+func resolveBackendName(name string, preferred []string) string {
+	if name != "auto" {
+		return name
+	}
+	for _, p := range preferred {
+		if backend.IsRegistered(p) {
+			return p
+		}
+	}
+	return "soft" // fallback
+}
+
 // preferredBackends returns the platform-specific preferred backend order.
-// The first registered backend in the list wins during auto-detection.
+// OpenGL is currently preferred on all platforms because it is the only
+// backend with a working GLSL shader pipeline. The GPU backends (Metal,
+// Vulkan, DX12) compile by default and have presentation layers, but need
+// a GLSL→MSL/SPIR-V translation step before they can render. Once shader
+// cross-compilation is added, restore the native API preferences:
+//
+//	darwin:  metal, opengl, soft
+//	windows: dx12, vulkan, opengl, soft
+//	linux:   vulkan, opengl, soft
 func preferredBackends() []string {
 	switch runtime.GOOS {
 	case "darwin":
-		return []string{"metal", "vulkan", "opengl", "soft"}
+		return []string{"opengl", "metal", "soft"}
 	case "windows":
-		return []string{"dx12", "vulkan", "opengl", "soft"}
+		return []string{"opengl", "dx12", "vulkan", "soft"}
 	case "linux", "freebsd":
-		return []string{"vulkan", "opengl", "soft"}
+		return []string{"opengl", "vulkan", "soft"}
 	default:
 		return []string{"opengl", "soft"}
 	}

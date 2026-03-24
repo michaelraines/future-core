@@ -360,15 +360,15 @@ Vulkan surface creation via `glfwCreateWindowSurface`.
 | Vulkan type mapping | Done | VkFormat, VkBufferUsageFlags, VkImageUsageFlags, API version constants; InstanceCreateInfo, PhysicalDeviceInfo |
 | Validation layers (debug mode) | Done | `VK_LAYER_KHRONOS_validation` added to InstanceCreateInfo when `DeviceConfig.Debug` is true |
 | Backend registry integration | Done | Auto-registers as "vulkan" via `init()` |
-| Vulkan loader (`internal/vk/`) | Planned | purego dynamic loader for `vkCreateInstance`, `vkCreateDevice`, etc. |
-| Swapchain management | Planned | Acquire/present cycle, resize handling, VSync via present mode |
-| Vulkan memory allocator | Planned | Simple sub-allocator for buffers/images; host-visible + device-local pools |
-| SPIR-V shader compilation | Planned | Embed `glslang` or use offline SPIR-V; ShaderDescriptor accepts SPIR-V blobs alongside GLSL |
-| Vulkan render pass + framebuffer | Planned | Map `RenderPassDescriptor` → `VkRenderPass` + `VkFramebuffer` |
-| Vulkan pipeline state objects | Planned | Map `PipelineDescriptor` → `VkGraphicsPipeline`; pipeline cache |
-| Vulkan command buffers | Planned | `CommandEncoder` wraps `VkCommandBuffer` recording |
-| GLFW Vulkan surface integration | Planned | `glfwCreateWindowSurface` via purego; surface passed to swapchain |
-| Build tag `//go:build vulkan` | Planned | Separate from `glfw` tag; `engine_vulkan.go` |
+| Vulkan loader (`internal/vk/`) | Done | purego dynamic loader, 91 Vulkan functions bound |
+| Swapchain management | Done | Acquire/present cycle via `VkSwapchainKHR`, MoltenVK on macOS |
+| Vulkan memory allocator | Done | Per-resource allocation; host-visible staging + device-local pools |
+| SPIR-V shader compilation | Done | GLSL→SPIR-V via `internal/shaderc/` (purego libshaderc bindings) |
+| Vulkan render pass + framebuffer | Done | `VkRenderPass` + `VkFramebuffer` for default and off-screen targets |
+| Vulkan pipeline state objects | In Progress | `VkGraphicsPipeline` creation implemented but SIGSEGVs — descriptor set layout or struct alignment issue |
+| Vulkan command buffers | Done | `CommandEncoder` wraps `VkCommandBuffer` recording with full draw API |
+| Vulkan surface integration | Done | `vkCreateMetalSurfaceEXT` (macOS), `vkCreateWin32SurfaceKHR` (Windows), Cocoa/Win32 surface factories |
+| Build tag `//go:build !soft` | Done | GPU files compiled on desktop by default; `soft` tag forces soft-delegation |
 
 ### 9d — Metal Backend (Done)
 
@@ -380,13 +380,13 @@ for zero-CGo Metal access.
 | Metal device (`internal/backend/metal/`) | Done | Device/Texture/Buffer/Shader/Pipeline/RenderTarget/Encoder; delegates to soft rasterizer; 90% coverage; 10/10 conformance |
 | Metal type mapping | Done | MTLPixelFormat, MTLTextureUsage, MTLStorageMode, FeatureSet constants |
 | Backend registry integration | Done | Auto-registers as "metal" via `init()` |
-| Metal loader (`internal/mtl/`) | Planned | purego bindings to Metal framework via `objc_msgSend` |
-| CAMetalLayer + drawable management | Planned | Present via `nextDrawable`, resize via layer bounds |
-| Metal shader compilation | Planned | MSL source compiled via `newLibraryWithSource:`; GLSL → MSL cross-compilation via SPIRV-Cross or source rewriter |
-| Metal render pipeline state | Planned | Map `PipelineDescriptor` → `MTLRenderPipelineState` |
-| Metal command encoder | Planned | `CommandEncoder` wraps `MTLRenderCommandEncoder` |
-| macOS platform integration (`internal/platform/cocoa/`) | Planned | NSWindow + NSView via purego; alternative to GLFW on macOS |
-| Build tag `//go:build darwin` | Planned | Metal available only on Apple platforms |
+| Metal loader (`internal/mtl/`) | Done | purego bindings to Metal framework via `objc_msgSend`, 56 functions |
+| CAMetalLayer + drawable management | Done | Present via `nextDrawable`, resize via layer bounds |
+| Metal shader compilation | Done | GLSL→MSL via pure-Go translator (`internal/shadertranslate/msl.go`), then `newLibraryWithSource:` at runtime |
+| Metal render pipeline state | Done | `PipelineDescriptor` → `MTLRenderPipelineState` |
+| Metal command encoder | Done | `CommandEncoder` wraps `MTLRenderCommandEncoder` |
+| macOS platform integration (`internal/platform/cocoa/`) | Done | NSWindow + NSView via purego (M10) |
+| Build tag `//go:build darwin && !soft` | Done | GPU files on macOS; soft fallback elsewhere |
 
 ### 9e — WebGPU Backend (Done)
 
@@ -399,14 +399,14 @@ both desktop and web targets.
 | WebGPU device (`internal/backend/webgpu/`) | Done | Device/Texture/Buffer/Shader/Pipeline/RenderTarget/Encoder; delegates to soft rasterizer; 91% coverage; 10/10 conformance |
 | WebGPU type mapping | Done | WGPUTextureFormat, WGPUTextureUsage, WGPUBufferUsage; AdapterInfo, BackendType, Limits |
 | Backend registry integration | Done | Auto-registers as "webgpu" via `init()` |
-| wgpu-native loader (`internal/wgpu/`) | Planned | purego bindings to `wgpu-native` (Rust wgpu C API), no CGo |
+| wgpu-native loader (`internal/wgpu/`) | Done | purego bindings to wgpu-native, 53 functions bound |
 | WebGPU swapchain / surface | Planned | `wgpu::Surface` for native; `GPUCanvasContext` for browser |
-| WGSL shader compilation | Planned | GLSL → WGSL transpilation via Naga or Tint; `ShaderDescriptor` extended with `WGSLSource` field |
-| WebGPU render pipeline | Planned | Map `PipelineDescriptor` → `GPURenderPipeline`; vertex buffer layouts from `VertexFormat` |
-| WebGPU bind groups + uniforms | Planned | Map uniform setters to bind group entries; layout auto-derived from shader reflection |
-| Browser WebGPU path (`//go:build js`) | Planned | `syscall/js` bindings to `navigator.gpu`; shares `webgpu` package logic via interfaces |
-| Native WebGPU path (`//go:build !js`) | Planned | Links `wgpu-native` via purego; desktop Linux/Windows/macOS |
-| Build tag `//go:build webgpu` | Planned | Gates wgpu-native dependency on desktop; browser path auto-selected with `GOOS=js` |
+| WGSL shader compilation | Planned | GLSL → WGSL transpilation via Naga or Tint |
+| WebGPU render pipeline | In Progress | GPU files exist but shader compilation path incomplete |
+| WebGPU bind groups + uniforms | In Progress | Bind group layout exists, async adapter/device callbacks incomplete |
+| Browser WebGPU path (`//go:build js`) | Planned | `syscall/js` bindings to `navigator.gpu` |
+| Native WebGPU path (`//go:build !js`) | In Progress | `_gpu.go` files compile, basic init works |
+| Build tag `//go:build !soft` | Done | GPU files on desktop; soft fallback with `-tags soft` |
 
 ### 9f — DirectX 12 Backend (Done)
 
@@ -418,15 +418,15 @@ Windows-only backend using DirectX 12 for best native performance on Windows.
 | DX12 type mapping | Done | DXGI_FORMAT, D3D12_HEAP_TYPE, FeatureLevel, AdapterDesc |
 | Debug layer support | Done | `debugLayer` flag set when `DeviceConfig.Debug` is true |
 | Backend registry integration | Done | Auto-registers as "dx12" via `init()` |
-| D3D12 loader (`internal/dx12/`) | Planned | purego bindings to `d3d12.dll`, `dxgi.dll` via COM vtable calls |
+| D3D12 loader (`internal/d3d12/`) | Done | purego bindings to `d3d12.dll`, `dxgi.dll` via COM vtable calls, 39 functions |
 | DXGI swap chain | Planned | `IDXGISwapChain4`, resize handling, present with VSync |
-| HLSL shader compilation | Planned | GLSL → HLSL cross-compilation (SPIRV-Cross or DXC); `ShaderDescriptor` extended with `HLSLSource` |
-| D3D12 root signature + PSO | Planned | Map `PipelineDescriptor` → `ID3D12PipelineState`; root signature from shader reflection |
-| D3D12 command list | Planned | `CommandEncoder` wraps `ID3D12GraphicsCommandList` |
+| HLSL shader compilation | Planned | GLSL → HLSL cross-compilation (SPIRV-Cross or DXC) |
+| D3D12 root signature + PSO | Planned | Map `PipelineDescriptor` → `ID3D12PipelineState`; minimal `pipeline_gpu.go` exists |
+| D3D12 command list | In Progress | GPU files exist with basic structure |
 | D3D12 descriptor heaps | Planned | CBV/SRV/UAV and sampler heaps for texture/uniform binding |
 | D3D12 resource management | Planned | Committed resources + upload heaps; fence-based lifetime tracking |
-| Win32 platform integration (`internal/platform/win32/`) | Planned | HWND creation via purego; alternative to GLFW on Windows |
-| Build tag `//go:build windows && dx12` | Planned | Windows-only |
+| Win32 platform integration (`internal/platform/win32/`) | Done | HWND creation via syscalls (M10) |
+| Build tag `//go:build windows && !soft` | Done | GPU files on Windows; soft fallback elsewhere |
 
 ### 9g — Integration + Polish (Done)
 

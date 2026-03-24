@@ -25,6 +25,7 @@ func genID() uint64 {
 type Device struct {
 	width, height int
 	encoder       *Encoder
+	screenRT      *RenderTarget
 	inited        bool
 }
 
@@ -40,7 +41,20 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	}
 	d.width = cfg.Width
 	d.height = cfg.Height
-	d.encoder = &Encoder{}
+
+	// Create an internal screen render target so the encoder can rasterize
+	// into it when BeginRenderPass is called with Target == nil.
+	rt, err := d.NewRenderTarget(backend.RenderTargetDescriptor{
+		Width:       cfg.Width,
+		Height:      cfg.Height,
+		ColorFormat: backend.TextureFormatRGBA8,
+	})
+	if err != nil {
+		return fmt.Errorf("soft: screen render target: %w", err)
+	}
+	d.screenRT = rt.(*RenderTarget)
+
+	d.encoder = &Encoder{dev: d}
 	d.inited = true
 	return nil
 }
@@ -49,6 +63,22 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 func (d *Device) Dispose() {
 	d.inited = false
 }
+
+// ReadScreen copies the rendered screen pixels into dst. Returns true if
+// the screen render target has been initialized.
+func (d *Device) ReadScreen(dst []byte) bool {
+	if d.screenRT == nil {
+		return false
+	}
+	if len(dst) > 0 {
+		d.screenRT.color.ReadPixels(dst)
+	}
+	return true
+}
+
+// ScreenRenderTarget returns the internal render target used for screen
+// rendering, or nil if Init has not been called.
+func (d *Device) ScreenRenderTarget() *RenderTarget { return d.screenRT }
 
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {}

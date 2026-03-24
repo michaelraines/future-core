@@ -1,4 +1,4 @@
-//go:build !dx12native
+//go:build !windows || soft
 
 // Package dx12 implements backend.Device targeting DirectX 12.
 //
@@ -71,6 +71,9 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 func (d *Device) Dispose() {
 	d.inner.Dispose()
 }
+
+// ReadScreen copies the rendered screen pixels into dst.
+func (d *Device) ReadScreen(dst []byte) bool { return d.inner.ReadScreen(dst) }
 
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {

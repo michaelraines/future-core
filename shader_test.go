@@ -179,11 +179,12 @@ func TestShaderApplyUniforms(t *testing.T) {
 	require.NoError(t, err)
 
 	uniforms := map[string]any{
-		"time":   float32(2.5),
-		"scale":  float64(3.0),
-		"count":  int(7),
-		"offset": []float32{1.0, 2.0},
-		"color":  []float32{1, 0, 0, 1},
+		"time":    float32(2.5),
+		"scale":   float64(3.0),
+		"count":   int(7),
+		"count32": int32(42),
+		"offset":  []float32{1.0, 2.0},
+		"color":   []float32{1, 0, 0, 1},
 	}
 	shader.applyUniforms(uniforms)
 

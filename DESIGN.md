@@ -130,16 +130,17 @@ registry (`internal/backend/registry.go`):
 | Backend | Package | Status | Platform |
 |---|---|---|---|
 | Software | `soft/` | Production — CPU rasterizer, headless CI reference | All |
-| OpenGL 3.3 | `opengl/` | Production — purego, no CGo | Desktop (darwin/linux/freebsd) |
+| OpenGL 3.3 | `opengl/` | Production — purego, no CGo | Desktop (darwin/linux/freebsd/windows) |
 | WebGL2 | `webgl/` | Soft-delegating — ready for syscall/js | Browser (WASM) |
-| Vulkan | `vulkan/` | Soft-delegating — ready for purego libvulkan | Linux/Windows/Android |
-| Metal | `metal/` | Soft-delegating — ready for purego objc_msgSend | macOS/iOS |
-| WebGPU | `webgpu/` | Soft-delegating — ready for wgpu-native | Cross-platform |
-| DirectX 12 | `dx12/` | Soft-delegating — ready for purego d3d12.dll | Windows |
+| Vulkan | `vulkan/` | Dual-mode — GPU bindings via `internal/vk/` (91 functions), GLSL→SPIR-V via shaderc; pipeline creation incomplete | Linux/Windows/macOS (MoltenVK) |
+| Metal | `metal/` | Dual-mode — GPU bindings via `internal/mtl/` (56 functions), GLSL→MSL pure-Go translator | macOS/iOS |
+| WebGPU | `webgpu/` | Dual-mode — GPU bindings via `internal/wgpu/` (53 functions); shader compilation incomplete | Cross-platform |
+| DirectX 12 | `dx12/` | Dual-mode — GPU bindings via `internal/d3d12/` (39 functions); minimal GPU impl | Windows |
 
-"Soft-delegating" backends wrap the software rasterizer so conformance tests
-pass in any environment. When real GPU bindings are added, only the delegation
-layer needs replacement — the type structure and API surface are already in place.
+**Dual-mode** backends have two compilation paths controlled by build tags:
+GPU bindings (`_gpu.go` files, compiled on desktop without `-tags soft`) and
+soft-delegation fallback (compiled in CI or with `-tags soft`). See
+`BACKENDS.md` for per-backend status and roadmap.
 
 Selection is compile-time via OS-based build constraints and runtime via
 environment variable:
@@ -172,12 +173,12 @@ availability, GPU API binding status, and shader language.
 | Backend | Platform | GPU Binding | Shader Language | Conformance |
 |---|---|---|---|---|
 | Software | All | N/A (CPU) | N/A | 10/10 |
-| OpenGL 3.3 | Desktop (Linux, Windows, macOS) | purego (Unix) / x/sys/windows — production | GLSL 330 core | N/A (GPU) |
+| OpenGL 3.3 | Desktop (Linux, Windows, macOS) | purego — production | GLSL 330 core | N/A (GPU) |
 | WebGL2 | Browser (WASM) | Soft-delegating | GLSL ES 3.00 | 10/10 |
-| Vulkan | Linux, Windows, Android | Soft-delegating | SPIR-V (planned) | 10/10 |
-| Metal | macOS, iOS | Soft-delegating | MSL (planned) | 10/10 |
-| WebGPU | Cross-platform, Browser | Soft-delegating | WGSL (planned) | 10/10 |
-| DirectX 12 | Windows | Soft-delegating | HLSL (planned) | 10/10 |
+| Vulkan | Linux, Windows, macOS (MoltenVK) | purego via `internal/vk/` — GPU bindings in progress | SPIR-V (via libshaderc) | 10/10 (soft) |
+| Metal | macOS, iOS | purego via `internal/mtl/` — GPU bindings in progress | MSL (pure-Go translator) | 10/10 (soft) |
+| WebGPU | Cross-platform, Browser | purego via `internal/wgpu/` — GPU bindings early | WGSL (planned) | 10/10 (soft) |
+| DirectX 12 | Windows | purego via `internal/d3d12/` — GPU bindings early | HLSL (planned) | 10/10 (soft) |
 
 **Capability matrix** (reported by `DeviceCapabilities`):
 

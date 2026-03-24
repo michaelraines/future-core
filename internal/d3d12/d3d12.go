@@ -1,4 +1,4 @@
-//go:build dx12native
+//go:build windows && !soft
 
 // Package d3d12 provides pure-Go bindings to DirectX 12 and DXGI via purego.
 // All COM interface calls go through vtable dispatch — no CGo required.

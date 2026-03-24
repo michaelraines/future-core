@@ -1,4 +1,4 @@
-//go:build !vulkan
+//go:build !(darwin || linux || freebsd || windows) || soft
 
 package vulkan
 

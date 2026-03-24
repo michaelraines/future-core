@@ -1,5 +1,5 @@
 ---
-name: review
+name: review-loop
 description: Review branch diff against main for bugs, correctness issues, and testing gaps, then fix found issues
 argument-hint:
 disable-model-invocation: false

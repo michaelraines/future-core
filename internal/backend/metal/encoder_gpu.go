@@ -1,9 +1,8 @@
-//go:build metal
+//go:build darwin && !soft
 
 package metal
 
 import (
-	"runtime"
 	"unsafe"
 
 	"github.com/michaelraines/future-render/internal/backend"
@@ -22,6 +21,7 @@ type Encoder struct {
 	cmdBuffer       mtl.CommandBuffer
 	indexFormat     backend.IndexFormat
 	boundIndexBuf   *Buffer
+	boundShader     *Shader
 }
 
 // BeginRenderPass begins a Metal render pass.
@@ -54,15 +54,13 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	msgSend(ca0, sel("setLoadAction:"), uintptr(loadAction))
 	msgSend(ca0, sel("setStoreAction:"), uintptr(mtl.StoreActionStore))
 	if loadAction == mtl.LoadActionClear {
-		// Set clear color — pass as MTLClearColor struct.
 		clearColor := mtl.ClearColor{
 			Red:   float64(desc.ClearColor[0]),
 			Green: float64(desc.ClearColor[1]),
 			Blue:  float64(desc.ClearColor[2]),
 			Alpha: float64(desc.ClearColor[3]),
 		}
-		msgSend(ca0, sel("setClearColor:"), *(*uintptr)(unsafe.Pointer(&clearColor)))
-		runtime.KeepAlive(clearColor)
+		mtl.SetClearColor(ca0, clearColor)
 	}
 
 	e.renderEncoder = mtl.CommandBufferRenderCommandEncoder(e.cmdBuffer, rpDesc)
@@ -76,6 +74,11 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		ZFar:   1,
 	}
 	mtl.RenderCommandEncoderSetViewport(e.renderEncoder, vp)
+
+	// Bind default sampler.
+	if e.dev.defaultSampler != 0 {
+		mtl.RenderCommandEncoderSetFragmentSamplerState(e.renderEncoder, e.dev.defaultSampler, 0)
+	}
 }
 
 // EndRenderPass ends the current render pass.
@@ -99,6 +102,11 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 		return
 	}
 	e.currentPipeline = p
+
+	// Track the shader for uniform binding.
+	if s, ok := p.desc.Shader.(*Shader); ok {
+		e.boundShader = s
+	}
 
 	// Lazily create the MTLRenderPipelineState.
 	if p.pipelineState == 0 {
@@ -150,19 +158,27 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 }
 
 // SetTextureFilter overrides the texture filter for a slot.
-func (e *Encoder) SetTextureFilter(_ int, _ backend.TextureFilter) {
-	// Would create/bind an MTLSamplerState.
+func (e *Encoder) SetTextureFilter(_ int, filter backend.TextureFilter) {
+	if e.renderEncoder == 0 {
+		return
+	}
+	switch filter {
+	case backend.FilterLinear:
+		if e.dev.linearSampler != 0 {
+			mtl.RenderCommandEncoderSetFragmentSamplerState(e.renderEncoder, e.dev.linearSampler, 0)
+		}
+	default:
+		if e.dev.defaultSampler != 0 {
+			mtl.RenderCommandEncoderSetFragmentSamplerState(e.renderEncoder, e.dev.defaultSampler, 0)
+		}
+	}
 }
 
 // SetStencil configures stencil test state.
-func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {
-	// Stencil state is baked into the MTLDepthStencilState.
-}
+func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {}
 
 // SetColorWrite enables or disables color writing.
-func (e *Encoder) SetColorWrite(_ bool) {
-	// Color write mask is baked into the MTLRenderPipelineState.
-}
+func (e *Encoder) SetColorWrite(_ bool) {}
 
 // SetViewport sets the rendering viewport.
 func (e *Encoder) SetViewport(vp backend.Viewport) {
@@ -196,6 +212,7 @@ func (e *Encoder) SetScissor(rect *backend.ScissorRect) {
 
 // Draw issues a non-indexed draw call.
 func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
+	e.bindUniforms()
 	primType := uint64(mtl.PrimitiveTypeTriangle)
 	if e.currentPipeline != nil {
 		primType = uint64(mtlPrimitiveType(e.currentPipeline.desc.Primitive))
@@ -206,6 +223,8 @@ func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
 
 // DrawIndexed issues an indexed draw call.
 func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
+	e.bindUniforms()
+
 	idxType := uint64(mtl.IndexTypeUInt16)
 	byteOffset := uint64(firstIndex * 2)
 	if e.indexFormat == backend.IndexUint32 {
@@ -225,6 +244,23 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 
 	mtl.RenderCommandEncoderDrawIndexedPrimitives(e.renderEncoder,
 		primType, uint64(indexCount), idxType, indexBuf, byteOffset, uint64(instanceCount))
+}
+
+// bindUniforms packs shader uniforms into Metal buffers and binds them.
+func (e *Encoder) bindUniforms() {
+	if e.boundShader == nil || e.renderEncoder == 0 {
+		return
+	}
+
+	// Vertex uniforms → buffer slot 1.
+	if vBuf := e.boundShader.packUniformBuffer(e.boundShader.vertexUniformLayout); len(vBuf) > 0 {
+		mtl.RenderCommandEncoderSetVertexBytes(e.renderEncoder, unsafe.Pointer(&vBuf[0]), uint64(len(vBuf)), 1)
+	}
+
+	// Fragment uniforms → buffer slot 0.
+	if fBuf := e.boundShader.packUniformBuffer(e.boundShader.fragmentUniformLayout); len(fBuf) > 0 {
+		mtl.RenderCommandEncoderSetFragmentBytes(e.renderEncoder, unsafe.Pointer(&fBuf[0]), uint64(len(fBuf)), 0)
+	}
 }
 
 // mtlPrimitiveType maps backend primitive type to Metal primitive type.

@@ -11,6 +11,7 @@ Key documents:
 - `RESEARCH.md` — survey of Ebitengine, Raylib, bgfx, wgpu, Godot, Bevy, Three.js
 - `FUTURE_3D.md` — 3D integration plan and Phase 1 constraints
 - `ROADMAP.md` — phased implementation plan (update as work progresses)
+- `BACKENDS.md` — per-backend GPU implementation status, features, and roadmap
 
 ## Build & Test
 
@@ -35,6 +36,34 @@ make build        # Build all packages
 make fix          # Auto-fix formatting and lint issues
 make clean        # Remove build artifacts
 ```
+
+### Visual Testing
+
+Use `scripts/visual-test.sh` to visually validate rendering. Two modes:
+
+- **soft** — Uses the software rasterizer. Works everywhere, no GPU needed.
+- **gpu** — Uses the platform's preferred GPU backend (auto-detected).
+  Requires GPU hardware. Falls back to soft if no GPU is available.
+
+```bash
+./scripts/visual-test.sh -m soft -e sprite      # Soft rasterizer sprite test
+./scripts/visual-test.sh -m gpu -e sprite       # GPU sprite test (auto backend)
+./scripts/visual-test.sh -m gpu -b vulkan       # Force Vulkan backend
+./scripts/visual-test.sh -m soft -e triangles   # Soft triangles test
+```
+
+Both modes render through the **full engine pipeline** (window creation,
+backend init, render loop, frame capture). On headless Linux environments
+(CI, cloud), the script auto-starts Xvfb as a virtual display.
+
+Screenshots are saved to `testdata/visual/<mode>_<example>.png` (gitignored).
+
+**How it works**: the engine supports headless capture via environment variables:
+- `FUTURE_RENDER_HEADLESS=N` — capture after N frames and exit
+- `FUTURE_RENDER_HEADLESS_OUTPUT=path.png` — output file path
+
+GPU mode needs ~60 frames for macOS OpenGL context initialization;
+soft mode works with fewer frames. The script defaults to 60.
 
 ### Prerequisites
 
@@ -104,9 +133,12 @@ These are non-negotiable. Violating them creates technical debt that compounds.
    Phase 1 Must NOT Do" before changing internal packages.
 
 4. **No CGo in core packages.** `math/`, `internal/batch/`,
-   `internal/pipeline/`, `internal/input/` must remain pure Go. CGo is
-   permitted in `internal/backend/<impl>/` and `internal/platform/<impl>/`
-   (e.g., vendored GLFW on Linux, native Cocoa/Win32 bindings).
+   `internal/pipeline/`, `internal/input/` must remain pure Go. All native
+   API bindings (Vulkan, Metal, DX12, WebGPU, OpenGL, Cocoa, Win32) use
+   **purego** for dynamic symbol loading — no CGo. The only CGo usage is
+   GLFW on Linux/FreeBSD (`internal/platform/glfw/glfwapi_cgo.go`,
+   `callbacks_cgo.go`, build-tagged `linux || freebsd`). macOS and Windows
+   builds are fully CGo-free.
 
 5. **Interfaces are defined by consumers, not implementors.** Follow Go
    interface design conventions. Keep interfaces small and focused.
@@ -292,6 +324,14 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
 - **Don't merge pipeline and backend layers** — their separation is essential
   for 3D
 - **Don't add Ebitengine as a dependency** — this is a clean-room implementation
+- **Don't request Vulkan extensions without checking availability** — on macOS
+  (MoltenVK), `VK_KHR_portability_enumeration` may not be present. Always use
+  `vk.EnumerateInstanceExtensionProperties()` to check before requesting.
+- **Known test failures**: Vulkan GPU conformance tests SIGSEGV in
+  `CreateGraphicsPipelines` (struct layout issue), and WebGPU tests fail
+  without `libwgpu_native.dylib` installed. These are pre-existing.
+- **Use `make build` not `go build ./...`** — the repo has CGo GLFW source
+  files that require build tag filtering handled by the Makefile.
 
 ## Test Coverage Requirements
 

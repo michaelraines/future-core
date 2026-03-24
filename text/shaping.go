@@ -98,7 +98,7 @@ func (f *ShaperFace) Shape(text string) []ShapedGlyph {
 // each run, returning glyphs in visual order.
 func (f *ShaperFace) ShapeBidi(text string) []ShapedGlyph {
 	runs := splitBidiRuns(text)
-	var result []ShapedGlyph
+	result := make([]ShapedGlyph, 0, len(runs))
 	for _, run := range runs {
 		runes := []rune(run.text)
 		input := shaping.Input{

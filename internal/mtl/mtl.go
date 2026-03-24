@@ -1,4 +1,4 @@
-//go:build metal
+//go:build darwin && !soft
 
 // Package mtl provides pure-Go bindings to Apple's Metal framework via
 // purego and the Objective-C runtime. All calls go through objc_msgSend
@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+	"github.com/ebitengine/purego/objc"
 )
 
 // ---------------------------------------------------------------------------
@@ -106,6 +107,25 @@ const (
 )
 
 // ---------------------------------------------------------------------------
+// Sampler filter — MTLSamplerMinMagFilter
+// ---------------------------------------------------------------------------
+
+const (
+	SamplerMinMagFilterNearest = 0
+	SamplerMinMagFilterLinear  = 1
+)
+
+// ---------------------------------------------------------------------------
+// Vertex format — MTLVertexFormat
+// ---------------------------------------------------------------------------
+
+const (
+	VertexFormatFloat2 = 29
+	VertexFormatFloat3 = 30
+	VertexFormatFloat4 = 31
+)
+
+// ---------------------------------------------------------------------------
 // Resource options — MTLResourceOptions
 // ---------------------------------------------------------------------------
 
@@ -179,7 +199,7 @@ type RenderPassColorAttachmentDescriptor struct {
 var (
 	lib uintptr
 
-	fnObjcMsgSend     func(obj uintptr, sel Selector, args ...uintptr) uintptr
+	fnObjcMsgSendAddr uintptr // raw address of objc_msgSend
 	fnObjcGetClass    func(name *byte) Class
 	fnSelRegisterName func(name *byte) Selector
 
@@ -243,8 +263,9 @@ func Init() error {
 		return fmt.Errorf("mtl: failed to load libobjc: %w", err)
 	}
 
-	if err := resolveSymbol(objcLib, "objc_msgSend", &fnObjcMsgSend); err != nil {
-		return err
+	fnObjcMsgSendAddr, err = purego.Dlsym(objcLib, "objc_msgSend")
+	if err != nil {
+		return fmt.Errorf("mtl: failed to resolve objc_msgSend: %w", err)
 	}
 	if err := resolveSymbol(objcLib, "objc_getClass", &fnObjcGetClass); err != nil {
 		return err
@@ -318,18 +339,21 @@ func DeviceNewCommandQueue(dev Device) CommandQueue {
 }
 
 // DeviceNewTexture creates a new texture from a descriptor.
-// The caller must create an MTLTextureDescriptor ObjC object — for simplicity
-// we use the raw struct approach with replaceRegion for data upload.
+// Uses alloc/init + individual setters instead of the multi-argument
+// texture2DDescriptorWithPixelFormat:width:height:mipmapped: convenience
+// method, because purego's variadic msgSend can misalign arguments on arm64.
 func DeviceNewTexture(dev Device, desc *TextureDescriptor) Texture {
-	// Create an MTLTextureDescriptor via the ObjC runtime.
 	cls := getClass("MTLTextureDescriptor")
-	tdesc := msgSend(uintptr(cls), sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
-		uintptr(desc.PixelFormat), uintptr(desc.Width), uintptr(desc.Height), 0)
-	// Set usage.
+	tdesc := msgSend(msgSend(uintptr(cls), sel("alloc")), sel("init"))
+	msgSend(tdesc, sel("setTextureType:"), 2) // MTLTextureType2D
+	msgSend(tdesc, sel("setPixelFormat:"), uintptr(desc.PixelFormat))
+	msgSend(tdesc, sel("setWidth:"), uintptr(desc.Width))
+	msgSend(tdesc, sel("setHeight:"), uintptr(desc.Height))
+	msgSend(tdesc, sel("setDepth:"), 1)
+	msgSend(tdesc, sel("setMipmapLevelCount:"), 1)
+	msgSend(tdesc, sel("setSampleCount:"), 1)
 	msgSend(tdesc, sel("setUsage:"), uintptr(desc.Usage))
-	// Set storage mode.
 	msgSend(tdesc, sel("setStorageMode:"), uintptr(desc.StorageMode))
-	// Create texture.
 	return Texture(msgSend(uintptr(dev), selNewTextureWithDescriptor, tdesc))
 }
 
@@ -390,14 +414,41 @@ func RenderCommandEncoderEndEncoding(enc RenderCommandEncoder) {
 	msgSend(uintptr(enc), selEndEncoding)
 }
 
+// Typed function pointers for encoder methods with struct parameters.
+var (
+	fnSetViewport   func(enc uintptr, sel Selector, vp Viewport)
+	fnSetScissor    func(enc uintptr, sel Selector, rect ScissorRect)
+	encStructFnInit bool
+)
+
+var fnSetClearColor func(obj uintptr, sel Selector, color ClearColor)
+
+func initEncStructFns() {
+	if encStructFnInit {
+		return
+	}
+	purego.RegisterFunc(&fnSetViewport, fnObjcMsgSendAddr)
+	purego.RegisterFunc(&fnSetScissor, fnObjcMsgSendAddr)
+	purego.RegisterFunc(&fnSetClearColor, fnObjcMsgSendAddr)
+	encStructFnInit = true
+}
+
+// SetClearColor sets the clear color on a color attachment descriptor.
+func SetClearColor(obj uintptr, color ClearColor) {
+	initEncStructFns()
+	fnSetClearColor(obj, sel("setClearColor:"), color)
+}
+
 // RenderCommandEncoderSetViewport sets the viewport.
 func RenderCommandEncoderSetViewport(enc RenderCommandEncoder, vp Viewport) {
-	msgSend(uintptr(enc), selSetViewport, *(*uintptr)(unsafe.Pointer(&vp)))
+	initEncStructFns()
+	fnSetViewport(uintptr(enc), selSetViewport, vp)
 }
 
 // RenderCommandEncoderSetScissorRect sets the scissor rectangle.
 func RenderCommandEncoderSetScissorRect(enc RenderCommandEncoder, rect ScissorRect) {
-	msgSend(uintptr(enc), selSetScissorRect, *(*uintptr)(unsafe.Pointer(&rect)))
+	initEncStructFns()
+	fnSetScissor(uintptr(enc), selSetScissorRect, rect)
 }
 
 // RenderCommandEncoderSetVertexBuffer binds a vertex buffer.
@@ -431,33 +482,44 @@ func BlitCommandEncoderSynchronizeResource(enc BlitCommandEncoder, resource uint
 
 // BlitCommandEncoderCopyFromBufferToTexture copies data from a buffer to a texture.
 func BlitCommandEncoderCopyFromBufferToTexture(enc BlitCommandEncoder, srcBuffer Buffer, srcOffset, srcBytesPerRow, srcBytesPerImage uint64, srcSize Size, dstTexture Texture, dstSlice, dstLevel uint64, dstOrigin Origin) {
-	msgSend(uintptr(enc), selCopyFromBuffer,
-		uintptr(srcBuffer), uintptr(srcOffset), uintptr(srcBytesPerRow), uintptr(srcBytesPerImage),
-		*(*uintptr)(unsafe.Pointer(&srcSize)),
-		uintptr(dstTexture), uintptr(dstSlice), uintptr(dstLevel),
-		*(*uintptr)(unsafe.Pointer(&dstOrigin)))
+	objc.ID(enc).Send(objc.SEL(selCopyFromBuffer),
+		uintptr(srcBuffer), srcOffset, srcBytesPerRow, srcBytesPerImage,
+		srcSize,
+		uintptr(dstTexture), dstSlice, dstLevel,
+		dstOrigin)
 }
 
 // ---------------------------------------------------------------------------
 // Texture functions
 // ---------------------------------------------------------------------------
 
+// Typed function pointers for ObjC methods with struct parameters.
+// purego.RegisterFunc handles arm64 ABI correctly when it can see the full type.
+var (
+	fnTexReplaceRegion func(tex uintptr, sel Selector, region Region, level uint64, data uintptr, bytesPerRow uint64)
+	fnTexGetBytes      func(tex uintptr, sel Selector, dst uintptr, bytesPerRow uint64, region Region, level uint64)
+	structFnsReady     bool
+)
+
+func initStructFns() {
+	if structFnsReady {
+		return
+	}
+	purego.RegisterFunc(&fnTexReplaceRegion, fnObjcMsgSendAddr)
+	purego.RegisterFunc(&fnTexGetBytes, fnObjcMsgSendAddr)
+	structFnsReady = true
+}
+
 // TextureReplaceRegion uploads pixel data directly to a texture (shared/managed storage).
 func TextureReplaceRegion(tex Texture, region Region, level uint64, data unsafe.Pointer, bytesPerRow uint64) {
-	msgSend(uintptr(tex), selReplaceRegion,
-		*(*uintptr)(unsafe.Pointer(&region)),
-		uintptr(level),
-		uintptr(data),
-		uintptr(bytesPerRow))
+	initStructFns()
+	fnTexReplaceRegion(uintptr(tex), selReplaceRegion, region, level, uintptr(data), bytesPerRow)
 }
 
 // TextureGetBytes reads pixel data from a texture.
 func TextureGetBytes(tex Texture, dst unsafe.Pointer, bytesPerRow uint64, region Region, level uint64) {
-	msgSend(uintptr(tex), selGetBytes,
-		uintptr(dst),
-		uintptr(bytesPerRow),
-		*(*uintptr)(unsafe.Pointer(&region)),
-		uintptr(level))
+	initStructFns()
+	fnTexGetBytes(uintptr(tex), selGetBytes, uintptr(dst), bytesPerRow, region, level)
 }
 
 // TextureWidth returns the texture width.
@@ -492,6 +554,31 @@ func BufferLength(buf Buffer) uint64 {
 // BufferRelease releases a buffer.
 func BufferRelease(buf Buffer) {
 	msgSend(uintptr(buf), selRelease)
+}
+
+// BufferNewTexture creates a texture backed by a buffer's storage.
+// This avoids needing getBytes: (which has arm64 struct ABI issues) —
+// the CPU can read pixels directly from the buffer's contents pointer.
+func BufferNewTexture(buf Buffer, dev Device, pixelFormat int, width, height, bytesPerRow uint64, usage int) Texture {
+	// Create a texture descriptor.
+	cls := getClass("MTLTextureDescriptor")
+	desc := msgSend(msgSend(uintptr(cls), sel("alloc")), sel("init"))
+	msgSend(desc, sel("setTextureType:"), 2) // MTLTextureType2D
+	msgSend(desc, sel("setPixelFormat:"), uintptr(pixelFormat))
+	msgSend(desc, sel("setWidth:"), uintptr(width))
+	msgSend(desc, sel("setHeight:"), uintptr(height))
+	msgSend(desc, sel("setDepth:"), 1)
+	msgSend(desc, sel("setMipmapLevelCount:"), 1)
+	msgSend(desc, sel("setSampleCount:"), 1)
+	msgSend(desc, sel("setUsage:"), uintptr(usage))
+	msgSend(desc, sel("setStorageMode:"), uintptr(StorageModeShared))
+
+	// newTextureWithDescriptor:offset:bytesPerRow:
+	tex := Texture(msgSend(uintptr(buf),
+		sel("newTextureWithDescriptor:offset:bytesPerRow:"),
+		desc, 0, uintptr(bytesPerRow)))
+	msgSend(desc, sel("release"))
+	return tex
 }
 
 // ---------------------------------------------------------------------------
@@ -529,26 +616,15 @@ func GetClass(name string) Class {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// msgSend wraps objc_msgSend.
+// msgSend calls objc_msgSend via purego.SyscallN, which correctly maps
+// each argument to an arm64 register. Using purego.RegisterFunc with a
+// variadic Go function misaligns arguments on arm64.
 func msgSend(obj uintptr, sel Selector, args ...uintptr) uintptr {
-	switch len(args) {
-	case 0:
-		return fnObjcMsgSend(obj, sel)
-	case 1:
-		return fnObjcMsgSend(obj, sel, args[0])
-	case 2:
-		return fnObjcMsgSend(obj, sel, args[0], args[1])
-	case 3:
-		return fnObjcMsgSend(obj, sel, args[0], args[1], args[2])
-	case 4:
-		return fnObjcMsgSend(obj, sel, args[0], args[1], args[2], args[3])
-	case 5:
-		return fnObjcMsgSend(obj, sel, args[0], args[1], args[2], args[3], args[4])
-	case 6:
-		return fnObjcMsgSend(obj, sel, args[0], args[1], args[2], args[3], args[4], args[5])
-	default:
-		return fnObjcMsgSend(obj, sel, args...)
-	}
+	callArgs := make([]uintptr, 0, 2+len(args))
+	callArgs = append(callArgs, obj, uintptr(sel))
+	callArgs = append(callArgs, args...)
+	ret, _, _ := purego.SyscallN(fnObjcMsgSendAddr, callArgs...)
+	return ret
 }
 
 // sel creates a selector from a Go string.
@@ -700,8 +776,17 @@ func LibraryNewFunctionWithName(lib Library, name string) Function {
 	return Function(msgSend(uintptr(lib), selNewFunctionWithName, nsName))
 }
 
+// VertexAttr describes a vertex attribute for the vertex descriptor.
+type VertexAttr struct {
+	Format int // MTLVertexFormat (e.g. VertexFormatFloat2)
+	Offset int
+	Index  int // attribute index
+}
+
 // CreateRenderPipelineState creates a render pipeline state from vertex/fragment functions.
-func CreateRenderPipelineState(dev Device, vertexFn, fragmentFn Function, pixelFormat int, blendEnabled bool, srcRGB, dstRGB, srcAlpha, dstAlpha int) (RenderPipelineState, error) {
+// If vertexAttrs is non-empty, a vertex descriptor is configured with the given
+// attributes at buffer index 0 with the given stride.
+func CreateRenderPipelineState(dev Device, vertexFn, fragmentFn Function, pixelFormat int, blendEnabled bool, srcRGB, dstRGB, srcAlpha, dstAlpha int, vertexAttrs []VertexAttr, vertexStride int) (RenderPipelineState, error) {
 	initPipelineSelectors()
 
 	// Create MTLRenderPipelineDescriptor.
@@ -712,6 +797,27 @@ func CreateRenderPipelineState(dev Device, vertexFn, fragmentFn Function, pixelF
 	// Set functions.
 	msgSend(desc, selSetVertexFunction, uintptr(vertexFn))
 	msgSend(desc, selSetFragmentFunction, uintptr(fragmentFn))
+
+	// Configure vertex descriptor if attributes are provided.
+	if len(vertexAttrs) > 0 {
+		vdCls := getClass("MTLVertexDescriptor")
+		vd := msgSend(msgSend(uintptr(vdCls), sel("alloc")), sel("init"))
+
+		attrs := msgSend(vd, sel("attributes"))
+		for _, a := range vertexAttrs {
+			attr := msgSend(attrs, sel("objectAtIndexedSubscript:"), uintptr(a.Index))
+			msgSend(attr, sel("setFormat:"), uintptr(a.Format))
+			msgSend(attr, sel("setOffset:"), uintptr(a.Offset))
+			msgSend(attr, sel("setBufferIndex:"), 0) // buffer slot 0
+		}
+
+		layouts := msgSend(vd, sel("layouts"))
+		layout0 := msgSend(layouts, sel("objectAtIndexedSubscript:"), 0)
+		msgSend(layout0, sel("setStride:"), uintptr(vertexStride))
+		msgSend(layout0, sel("setStepFunction:"), 1) // MTLVertexStepFunctionPerVertex
+
+		msgSend(desc, sel("setVertexDescriptor:"), vd)
+	}
 
 	// Configure color attachment 0.
 	colorAttachments := msgSend(desc, sel("colorAttachments"))
@@ -757,6 +863,32 @@ func RenderCommandEncoderSetFragmentTexture(enc RenderCommandEncoder, tex Textur
 func RenderCommandEncoderSetCullMode(enc RenderCommandEncoder, mode int) {
 	initPipelineSelectors()
 	msgSend(uintptr(enc), selSetCullMode, uintptr(mode))
+}
+
+// RenderCommandEncoderSetFragmentSamplerState binds a sampler state to a fragment slot.
+func RenderCommandEncoderSetFragmentSamplerState(enc RenderCommandEncoder, sampler uintptr, index uint64) {
+	msgSend(uintptr(enc), sel("setFragmentSamplerState:atIndex:"), sampler, uintptr(index))
+}
+
+// RenderCommandEncoderSetVertexBytes sets inline vertex shader constant data.
+func RenderCommandEncoderSetVertexBytes(enc RenderCommandEncoder, data unsafe.Pointer, length, index uint64) {
+	msgSend(uintptr(enc), sel("setVertexBytes:length:atIndex:"), uintptr(data), uintptr(length), uintptr(index))
+}
+
+// RenderCommandEncoderSetFragmentBytes sets inline fragment shader constant data.
+func RenderCommandEncoderSetFragmentBytes(enc RenderCommandEncoder, data unsafe.Pointer, length, index uint64) {
+	msgSend(uintptr(enc), sel("setFragmentBytes:length:atIndex:"), uintptr(data), uintptr(length), uintptr(index))
+}
+
+// DeviceNewSamplerState creates a sampler state with the given min/mag filter.
+func DeviceNewSamplerState(dev Device, minMagFilter int) uintptr {
+	cls := getClass("MTLSamplerDescriptor")
+	desc := msgSend(msgSend(uintptr(cls), sel("alloc")), sel("init"))
+	msgSend(desc, sel("setMinFilter:"), uintptr(minMagFilter))
+	msgSend(desc, sel("setMagFilter:"), uintptr(minMagFilter))
+	sampler := msgSend(uintptr(dev), sel("newSamplerStateWithDescriptor:"), desc)
+	msgSend(desc, sel("release"))
+	return sampler
 }
 
 // nsString creates an NSString from a Go string.

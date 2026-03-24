@@ -26,6 +26,7 @@ type Window struct {
 	handler     platform.InputHandler
 	shouldClose bool
 	fullscreen  bool
+	noGL        bool
 
 	// Saved geometry for fullscreen restore.
 	savedStyle uint32
@@ -126,52 +127,56 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 	windowMap[hwnd] = w
 	procSetWindowLongPtrW.Call(hwnd, negIndex(gwlpUserData), uintptr(unsafe.Pointer(w)))
 
-	// Initialize OpenGL.
-	w.hdc, _, _ = procGetDC.Call(hwnd)
-	if w.hdc == 0 {
-		w.Destroy()
-		return fmt.Errorf("GetDC failed")
-	}
+	w.noGL = cfg.NoGL
 
-	pfd := pixelFormatDescriptor{
-		Size:        uint16(unsafe.Sizeof(pixelFormatDescriptor{})),
-		Version:     1,
-		Flags:       pfdDrawToWindow | pfdSupportOpenGL | pfdDoubleBuffer,
-		PixelType:   pfdTypeRGBA,
-		ColorBits:   32,
-		DepthBits:   24,
-		StencilBits: 8,
-	}
+	if !cfg.NoGL {
+		// Initialize OpenGL.
+		w.hdc, _, _ = procGetDC.Call(hwnd)
+		if w.hdc == 0 {
+			w.Destroy()
+			return fmt.Errorf("GetDC failed")
+		}
 
-	pixelFmt, _, _ := procChoosePixelFormat.Call(w.hdc, uintptr(unsafe.Pointer(&pfd)))
-	if pixelFmt == 0 {
-		w.Destroy()
-		return fmt.Errorf("ChoosePixelFormat failed")
-	}
+		pfd := pixelFormatDescriptor{
+			Size:        uint16(unsafe.Sizeof(pixelFormatDescriptor{})),
+			Version:     1,
+			Flags:       pfdDrawToWindow | pfdSupportOpenGL | pfdDoubleBuffer,
+			PixelType:   pfdTypeRGBA,
+			ColorBits:   32,
+			DepthBits:   24,
+			StencilBits: 8,
+		}
 
-	ret, _, _ := procSetPixelFormat.Call(w.hdc, pixelFmt, uintptr(unsafe.Pointer(&pfd)))
-	if ret == 0 {
-		w.Destroy()
-		return fmt.Errorf("SetPixelFormat failed")
-	}
+		pixelFmt, _, _ := procChoosePixelFormat.Call(w.hdc, uintptr(unsafe.Pointer(&pfd)))
+		if pixelFmt == 0 {
+			w.Destroy()
+			return fmt.Errorf("ChoosePixelFormat failed")
+		}
 
-	w.hglrc, _, _ = procWglCreateContext.Call(w.hdc)
-	if w.hglrc == 0 {
-		w.Destroy()
-		return fmt.Errorf("wglCreateContext failed")
-	}
+		ret, _, _ := procSetPixelFormat.Call(w.hdc, pixelFmt, uintptr(unsafe.Pointer(&pfd)))
+		if ret == 0 {
+			w.Destroy()
+			return fmt.Errorf("SetPixelFormat failed")
+		}
 
-	ret, _, _ = procWglMakeCurrent.Call(w.hdc, w.hglrc)
-	if ret == 0 {
-		w.Destroy()
-		return fmt.Errorf("wglMakeCurrent failed")
-	}
+		w.hglrc, _, _ = procWglCreateContext.Call(w.hdc)
+		if w.hglrc == 0 {
+			w.Destroy()
+			return fmt.Errorf("wglCreateContext failed")
+		}
 
-	// Enable VSync via wglSwapIntervalEXT if available.
-	if cfg.VSync {
-		w.setSwapInterval(1)
-	} else {
-		w.setSwapInterval(0)
+		ret, _, _ = procWglMakeCurrent.Call(w.hdc, w.hglrc)
+		if ret == 0 {
+			w.Destroy()
+			return fmt.Errorf("wglMakeCurrent failed")
+		}
+
+		// Enable VSync via wglSwapIntervalEXT if available.
+		if cfg.VSync {
+			w.setSwapInterval(1)
+		} else {
+			w.setSwapInterval(0)
+		}
 	}
 
 	// Show the window.
@@ -243,11 +248,12 @@ func (w *Window) PollEvents() {
 	}
 }
 
-// SwapBuffers swaps the OpenGL front and back buffers.
+// SwapBuffers swaps the OpenGL front and back buffers. No-op when NoGL is set.
 func (w *Window) SwapBuffers() {
-	if w.hdc != 0 {
-		procSwapBuffers.Call(w.hdc)
+	if w.noGL || w.hdc == 0 {
+		return
 	}
+	procSwapBuffers.Call(w.hdc)
 }
 
 // Size returns the window client area size in logical pixels.

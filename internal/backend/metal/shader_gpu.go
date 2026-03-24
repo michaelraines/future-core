@@ -1,20 +1,26 @@
-//go:build metal
+//go:build darwin && !soft
 
 package metal
 
 import (
+	"encoding/binary"
+	"fmt"
+	"math"
+	"unsafe"
+
 	"github.com/michaelraines/future-render/internal/backend"
 	"github.com/michaelraines/future-render/internal/mtl"
+	"github.com/michaelraines/future-render/internal/shadertranslate"
 )
 
 // Shader implements backend.Shader for Metal.
-// Stores MSL source and compiled MTLLibrary/MTLFunction handles.
+// GLSL source is translated to MSL at compile time.
 type Shader struct {
 	dev            *Device
 	vertexSource   string
 	fragmentSource string
 	attributes     []backend.VertexAttribute
-	uniforms       map[string]interface{}
+	uniforms       map[string]any
 
 	// Compiled Metal objects (lazily created).
 	vertexLib    mtl.Library
@@ -23,9 +29,13 @@ type Shader struct {
 	fragmentFn   mtl.Function
 	compiled     bool
 	compileError error
+
+	// Uniform buffer layout from the GLSL→MSL translator.
+	vertexUniformLayout   []shadertranslate.UniformField
+	fragmentUniformLayout []shadertranslate.UniformField
 }
 
-// compile compiles the MSL source into MTLLibrary + MTLFunction.
+// compile translates GLSL to MSL and compiles to MTLLibrary + MTLFunction.
 func (s *Shader) compile() error {
 	if s.compiled {
 		return s.compileError
@@ -33,33 +43,86 @@ func (s *Shader) compile() error {
 	s.compiled = true
 
 	if s.vertexSource != "" {
-		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, s.vertexSource)
+		result, err := shadertranslate.GLSLToMSLVertex(s.vertexSource)
 		if err != nil {
-			s.compileError = err
-			return err
+			s.compileError = fmt.Errorf("metal: vertex GLSL→MSL: %w", err)
+			return s.compileError
+		}
+		s.vertexUniformLayout = result.Uniforms
+
+		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, result.Source)
+		if err != nil {
+			s.compileError = fmt.Errorf("metal: compile vertex MSL: %w", err)
+			return s.compileError
 		}
 		s.vertexLib = lib
 		s.vertexFn = mtl.LibraryNewFunctionWithName(lib, "vertexMain")
-		if s.vertexFn == 0 {
-			// Try common alternative names.
-			s.vertexFn = mtl.LibraryNewFunctionWithName(lib, "vertex_main")
-		}
 	}
 
 	if s.fragmentSource != "" {
-		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, s.fragmentSource)
+		result, err := shadertranslate.GLSLToMSLFragment(s.fragmentSource)
 		if err != nil {
-			s.compileError = err
-			return err
+			s.compileError = fmt.Errorf("metal: fragment GLSL→MSL: %w", err)
+			return s.compileError
+		}
+		s.fragmentUniformLayout = result.Uniforms
+
+		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, result.Source)
+		if err != nil {
+			s.compileError = fmt.Errorf("metal: compile fragment MSL: %w", err)
+			return s.compileError
 		}
 		s.fragmentLib = lib
 		s.fragmentFn = mtl.LibraryNewFunctionWithName(lib, "fragmentMain")
-		if s.fragmentFn == 0 {
-			s.fragmentFn = mtl.LibraryNewFunctionWithName(lib, "fragment_main")
-		}
 	}
 
 	return nil
+}
+
+// packUniformBuffer builds a byte buffer from the uniform map using the given layout.
+func (s *Shader) packUniformBuffer(layout []shadertranslate.UniformField) []byte {
+	if len(layout) == 0 {
+		return nil
+	}
+	// Calculate total size.
+	totalSize := 0
+	for _, f := range layout {
+		end := f.Offset + f.Size
+		if end > totalSize {
+			totalSize = end
+		}
+	}
+	buf := make([]byte, totalSize)
+
+	for _, f := range layout {
+		v, ok := s.uniforms[f.Name]
+		if !ok {
+			continue
+		}
+		writeUniformValue(buf[f.Offset:f.Offset+f.Size], v)
+	}
+	return buf
+}
+
+// writeUniformValue writes a uniform value to a byte slice.
+func writeUniformValue(dst []byte, v any) {
+	switch val := v.(type) {
+	case float32:
+		binary.LittleEndian.PutUint32(dst, math.Float32bits(val))
+	case [2]float32:
+		binary.LittleEndian.PutUint32(dst[0:4], math.Float32bits(val[0]))
+		binary.LittleEndian.PutUint32(dst[4:8], math.Float32bits(val[1]))
+	case [4]float32:
+		for i := 0; i < 4; i++ {
+			binary.LittleEndian.PutUint32(dst[i*4:(i+1)*4], math.Float32bits(val[i]))
+		}
+	case [16]float32:
+		for i := 0; i < 16; i++ {
+			binary.LittleEndian.PutUint32(dst[i*4:(i+1)*4], math.Float32bits(val[i]))
+		}
+	case int32:
+		binary.LittleEndian.PutUint32(dst, uint32(val))
+	}
 }
 
 // SetUniformFloat sets a float uniform.
@@ -94,3 +157,6 @@ func (s *Shader) Dispose() {
 	s.vertexFn = 0
 	s.fragmentFn = 0
 }
+
+// Keep the compiler happy.
+var _ = unsafe.Pointer(nil)

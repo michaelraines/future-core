@@ -295,6 +295,77 @@ func TestPreferredBackends(t *testing.T) {
 	require.NotEmpty(t, backends)
 	// soft should always be in the list as a fallback.
 	require.Equal(t, "soft", backends[len(backends)-1])
+	// opengl should be in the list on all desktop platforms.
+	found := false
+	for _, b := range backends {
+		if b == "opengl" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "opengl should be in preferred backends")
+}
+
+func TestWindowConfig(t *testing.T) {
+	e := &engine{
+		windowTitle: "Test Title",
+		windowW:     800,
+		windowH:     600,
+	}
+	cfg := e.windowConfig()
+	require.Equal(t, "Test Title", cfg.Title)
+	require.Equal(t, 800, cfg.Width)
+	require.Equal(t, 600, cfg.Height)
+}
+
+func TestWindowConfigDefaults(t *testing.T) {
+	e := &engine{}
+	cfg := e.windowConfig()
+	// With empty values, defaults from platform should be used.
+	require.NotZero(t, cfg.Width)
+	require.NotZero(t, cfg.Height)
+}
+
+func TestDisposeRenderResourcesNil(t *testing.T) {
+	// Disposing an engine with no resources should not panic.
+	e := &engine{}
+	e.disposeRenderResources()
+}
+
+func TestEngineSetVSync(t *testing.T) {
+	e := &engine{}
+	// setVSync is a no-op currently but should not panic.
+	e.setVSync(true)
+	require.True(t, e.isVSync())
+}
+
+func TestEngineSetFullscreenNilWindow(t *testing.T) {
+	e := &engine{}
+	// With no window, these should be no-ops.
+	e.setFullscreen(true)
+	require.False(t, e.isFullscreen())
+}
+
+func TestEngineDeviceScaleFactor(t *testing.T) {
+	e := &engine{}
+	require.Equal(t, 1.0, e.deviceScaleFactor())
+}
+
+func TestEngineCursorModeNilWindow(t *testing.T) {
+	e := &engine{}
+	e.setCursorMode(CursorModeVisible)
+	e.setCursorMode(CursorModeHidden)
+	e.setCursorMode(CursorModeCaptured)
+}
+
+func TestEngineSetWindowSizeNilWindow(t *testing.T) {
+	e := &engine{}
+	e.setWindowSize(800, 600)
+}
+
+func TestEngineSetWindowTitleNilWindow(t *testing.T) {
+	e := &engine{}
+	e.setWindowTitle("test")
 }
 
 func TestRegisterTexture(t *testing.T) {

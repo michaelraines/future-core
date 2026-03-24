@@ -1,4 +1,4 @@
-//go:build !wgpunative
+//go:build !(darwin || linux || freebsd || windows) || soft
 
 // Package webgpu implements backend.Device targeting the WebGPU API.
 //
@@ -23,52 +23,6 @@ type Device struct {
 	// WebGPU-specific state modeled for when real bindings are added.
 	adapterInfo AdapterInfo
 	limits      Limits
-}
-
-// AdapterInfo mirrors GPUAdapterInfo properties.
-type AdapterInfo struct {
-	Vendor       string
-	Architecture string
-	Device       string
-	Description  string
-	BackendType  BackendType
-}
-
-// BackendType represents the underlying GPU API used by wgpu.
-type BackendType int
-
-// BackendType constants.
-const (
-	BackendTypeNull BackendType = iota
-	BackendTypeWebGPU
-	BackendTypeD3D11
-	BackendTypeD3D12
-	BackendTypeMetal
-	BackendTypeVulkan
-	BackendTypeOpenGL
-	BackendTypeOpenGLES
-)
-
-// Limits mirrors GPUSupportedLimits.
-type Limits struct {
-	MaxTextureDimension2D      int
-	MaxTextureArrayLayers      int
-	MaxBindGroups              int
-	MaxSampledTexturesPerStage int
-	MaxSamplersPerStage        int
-	MaxColorAttachments        int
-}
-
-// DefaultLimits returns WebGPU default limits.
-func DefaultLimits() Limits {
-	return Limits{
-		MaxTextureDimension2D:      8192,
-		MaxTextureArrayLayers:      256,
-		MaxBindGroups:              4,
-		MaxSampledTexturesPerStage: 16,
-		MaxSamplersPerStage:        16,
-		MaxColorAttachments:        8,
-	}
 }
 
 // New creates a new WebGPU device.
@@ -96,6 +50,9 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 func (d *Device) Dispose() {
 	d.inner.Dispose()
 }
+
+// ReadScreen copies the rendered screen pixels into dst.
+func (d *Device) ReadScreen(dst []byte) bool { return d.inner.ReadScreen(dst) }
 
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {
