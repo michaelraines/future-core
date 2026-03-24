@@ -96,6 +96,9 @@ type engine struct {
 	// Screen presenter: blits non-GL backend output to the GL framebuffer.
 	presenter *gl.Presenter
 
+	// noGL is true when the backend uses its own presentation (Vulkan, Metal, DX12).
+	noGL bool
+
 	// Window config state.
 	windowTitle string
 	windowW     int
@@ -221,8 +224,9 @@ func (e *engine) initRenderResources() error {
 	e.renderPipeline.AddPass(sp)
 
 	// Check if the backend needs a screen presenter (non-GL backends).
-	// Pass nil to probe without reading pixels.
-	if dev.ReadScreen(nil) {
+	// Pass nil to probe without reading pixels. Skip if noGL since the
+	// GL presenter requires an OpenGL context.
+	if !e.noGL && dev.ReadScreen(nil) {
 		e.presenter = &gl.Presenter{}
 	}
 
@@ -257,6 +261,7 @@ func (e *engine) run() error {
 	preferred := preferredBackends()
 	resolvedName := resolveBackendName(backendName(), preferred)
 	needsNoGL := resolvedName == "vulkan" || resolvedName == "metal" || resolvedName == "dx12"
+	e.noGL = needsNoGL
 
 	// Create platform window (selected per OS via build tags).
 	win := newPlatformWindow()
@@ -290,7 +295,9 @@ func (e *engine) run() error {
 		Height: fbH,
 		VSync:  true,
 	}
-	if needsNoGL {
+	// In headless mode, skip swapchain creation so the backend renders to its
+	// offscreen target, which supports ReadScreen for screenshot capture.
+	if needsNoGL && headless == nil {
 		if creator, ok := win.(platform.VulkanSurfaceCreator); ok {
 			devCfg.SurfaceFactory = func(instance uintptr) (uintptr, error) {
 				return creator.CreateVulkanSurface(instance)

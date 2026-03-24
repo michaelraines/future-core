@@ -122,6 +122,7 @@ const (
 	FormatR8G8B8UNorm        = 23
 	FormatR8G8B8A8UNorm      = 37
 	FormatB8G8R8A8UNorm      = 44
+	FormatB8G8R8A8SRGB       = 50
 	FormatR16G16B16A16SFloat = 97
 	FormatR32G32SFloat       = 103
 	FormatR32G32B32SFloat    = 106
