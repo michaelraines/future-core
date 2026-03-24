@@ -168,11 +168,12 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 	// Shader stages — compile GLSL to SPIR-V and create VkShaderModules.
 	shader, hasShader := p.desc.Shader.(*Shader)
 	stages := []vk.PipelineShaderStageCreateInfo{}
+	var mainName *byte
 	if hasShader && shader != nil {
 		if err := shader.compile(); err != nil {
 			return fmt.Errorf("vulkan: shader compilation: %w", err)
 		}
-		mainName := vk.CStr("main")
+		mainName = vk.CStr("main")
 		if shader.vertexModule != 0 {
 			stages = append(stages, vk.PipelineShaderStageCreateInfo{
 				SType:  vk.StructureTypePipelineShaderStageCreateInfo,
@@ -189,18 +190,16 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 				PName:  uintptr(unsafe.Pointer(mainName)),
 			})
 		}
-		runtime.KeepAlive(mainName)
 	}
 
-	var pStages uintptr
-	if len(stages) > 0 {
-		pStages = uintptr(unsafe.Pointer(&stages[0]))
+	if len(stages) == 0 {
+		return fmt.Errorf("vulkan: cannot create pipeline without shader stages")
 	}
 
 	ci := vk.GraphicsPipelineCreateInfo{
 		SType:               vk.StructureTypeGraphicsPipelineCreateInfo,
 		StageCount:          uint32(len(stages)),
-		PStages:             pStages,
+		PStages:             uintptr(unsafe.Pointer(&stages[0])),
 		PVertexInputState:   uintptr(unsafe.Pointer(&vertexInput)),
 		PInputAssemblyState: uintptr(unsafe.Pointer(&inputAssembly)),
 		PViewportState:      uintptr(unsafe.Pointer(&viewportState)),
@@ -214,6 +213,9 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 	}
 
 	pip, err := vk.CreateGraphicsPipeline(p.dev.device, uintptr(unsafe.Pointer(&ci)))
+	// Keep all referenced objects alive past the FFI call.
+	runtime.KeepAlive(stages)
+	runtime.KeepAlive(mainName)
 	runtime.KeepAlive(vertexInput)
 	runtime.KeepAlive(inputAssembly)
 	runtime.KeepAlive(viewportState)
@@ -227,8 +229,6 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 	runtime.KeepAlive(colorBlendAttachment)
 	runtime.KeepAlive(dynamicStates)
 	if err != nil {
-		// Pipeline creation may fail without SPIR-V shaders — this is expected
-		// until runtime shader compilation is implemented.
 		return err
 	}
 	p.vkPipeline = pip

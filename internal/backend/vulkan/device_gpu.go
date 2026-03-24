@@ -680,7 +680,7 @@ func (d *Device) Dispose() {
 // Returns false when the device presents directly via swapchain (no readback needed).
 func (d *Device) ReadScreen(dst []byte) bool {
 	if d.hasSwapchain {
-		return false // presenting directly — no readback needed
+		return d.readSwapchainScreen(dst)
 	}
 	if d.defaultColorImage == 0 || d.stagingMapped == nil {
 		return false
@@ -761,6 +761,99 @@ func (d *Device) ReadScreen(dst []byte) bool {
 
 	vk.FreeCommandBuffers(d.device, d.commandPool, cmd)
 
+	return true
+}
+
+// readSwapchainScreen reads pixels from the current swapchain image into dst.
+// When dst is nil (probe), returns false because swapchain presents directly
+// and doesn't need a GL presenter. When dst is non-nil, performs readback.
+func (d *Device) readSwapchainScreen(dst []byte) bool {
+	if d.stagingMapped == nil {
+		return false
+	}
+	if len(dst) == 0 {
+		return false // probe: swapchain presents directly, no GL presenter needed
+	}
+
+	w := int(d.swapchainExtent[0])
+	h := int(d.swapchainExtent[1])
+	dataSize := w * h * 4
+	if dataSize > d.stagingSize {
+		return false
+	}
+
+	img := d.swapchainImages[d.currentImageIndex]
+
+	cmd, err := vk.AllocateCommandBuffer(d.device, d.commandPool)
+	if err != nil {
+		return false
+	}
+	if err := vk.BeginCommandBuffer(cmd, vk.CommandBufferUsageOneTimeSubmit); err != nil {
+		return false
+	}
+
+	// Transition swapchain image to transfer src.
+	barriers := []vk.ImageMemoryBarrier{{
+		SType:               vk.StructureTypeImageMemoryBarrier,
+		SrcAccessMask:       vk.AccessColorAttachmentWrite,
+		DstAccessMask:       vk.AccessTransferRead,
+		OldLayout:           vk.ImageLayoutPresentSrcKHR,
+		NewLayout:           vk.ImageLayoutTransferSrcOptimal,
+		SrcQueueFamilyIndex: vk.QueueFamilyIgnored,
+		DstQueueFamilyIndex: vk.QueueFamilyIgnored,
+		Image_:              img,
+		SubresAspectMask:    vk.ImageAspectColor,
+		SubresLevelCount:    1,
+		SubresLayerCount:    1,
+	}}
+	vk.CmdPipelineBarrier(cmd,
+		vk.PipelineStageColorAttachmentOutput, vk.PipelineStageTransfer,
+		barriers)
+
+	region := vk.BufferImageCopy{
+		AspectMask:   vk.ImageAspectColor,
+		LayerCount:   1,
+		ImageExtentW: uint32(w),
+		ImageExtentH: uint32(h),
+		ImageExtentD: 1,
+	}
+	vk.CmdCopyImageToBuffer(cmd, img,
+		vk.ImageLayoutTransferSrcOptimal, d.stagingBuffer, region)
+
+	// Transition back to present src.
+	barriers[0].SrcAccessMask = vk.AccessTransferRead
+	barriers[0].DstAccessMask = 0
+	barriers[0].OldLayout = vk.ImageLayoutTransferSrcOptimal
+	barriers[0].NewLayout = vk.ImageLayoutPresentSrcKHR
+	vk.CmdPipelineBarrier(cmd,
+		vk.PipelineStageTransfer, vk.PipelineStageBottomOfPipe,
+		barriers)
+
+	_ = vk.EndCommandBuffer(cmd)
+
+	submitInfo := vk.SubmitInfo{
+		SType:              vk.StructureTypeSubmitInfo,
+		CommandBufferCount: 1,
+		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
+	}
+	_ = vk.QueueSubmit(d.graphicsQueue, &submitInfo, 0)
+	_ = vk.DeviceWaitIdle(d.device)
+
+	n := len(dst)
+	if n > dataSize {
+		n = dataSize
+	}
+
+	// Copy from staging and convert BGRA → RGBA if the swapchain format is BGRA.
+	src := unsafe.Slice((*byte)(d.stagingMapped), n)
+	copy(dst[:n], src)
+	if d.swapchainFormat == vk.FormatB8G8R8A8UNorm || d.swapchainFormat == vk.FormatB8G8R8A8SRGB {
+		for i := 0; i+3 < n; i += 4 {
+			dst[i], dst[i+2] = dst[i+2], dst[i] // swap R and B
+		}
+	}
+
+	vk.FreeCommandBuffers(d.device, d.commandPool, cmd)
 	return true
 }
 

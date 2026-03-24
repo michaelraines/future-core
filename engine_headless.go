@@ -50,6 +50,9 @@ func (e *engine) saveScreenshot(width, height int, path string) error {
 
 	// Try ReadScreen first (works for soft, vulkan, metal, etc.).
 	if !e.device.ReadScreen(pixels) {
+		if e.noGL {
+			return fmt.Errorf("headless: backend does not support ReadScreen and GL is not available")
+		}
 		// OpenGL renders directly to the window framebuffer.
 		// Read pixels via glReadPixels from the default framebuffer.
 		gl.ReadPixels(0, 0, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE,

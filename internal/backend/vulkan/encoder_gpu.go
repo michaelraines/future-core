@@ -17,8 +17,9 @@ type Encoder struct {
 	cmd vk.CommandBuffer
 
 	// Current render pass state.
-	inRenderPass    bool
-	currentPipeline *Pipeline
+	inRenderPass      bool
+	currentRenderPass vk.RenderPass
+	currentPipeline   *Pipeline
 	boundTexture    *Texture
 	boundShader     *Shader
 	boundSampler    vk.Sampler
@@ -67,6 +68,15 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	vk.CmdBeginRenderPass(e.cmd, &rpBegin)
 	runtime.KeepAlive(clearColor)
 	e.inRenderPass = true
+	e.currentRenderPass = rp
+
+	// Set default scissor/viewport matching the render area. Vulkan requires
+	// both to be set before draws when using dynamic state.
+	vk.CmdSetScissor(e.cmd, vk.Rect2D{ExtentW: w, ExtentH: h})
+	vk.CmdSetViewport(e.cmd, vk.Viewport{
+		Width: float32(w), Height: float32(h),
+		MaxDepth: 1,
+	})
 	e.colorWriteOn = true
 }
 
@@ -75,6 +85,7 @@ func (e *Encoder) EndRenderPass() {
 	if e.inRenderPass {
 		vk.CmdEndRenderPass(e.cmd)
 		e.inRenderPass = false
+		e.currentRenderPass = 0
 	}
 	e.cleanupDescriptors()
 }
@@ -92,9 +103,17 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 		e.boundShader = s
 	}
 
-	// Attempt to create the VkPipeline lazily if not yet created.
+	// Create the VkPipeline lazily using the current render pass.
 	if p.vkPipeline == 0 {
-		_ = p.createVkPipeline(e.dev.defaultRenderPass)
+		rp := e.currentRenderPass
+		if rp == 0 {
+			rp = e.dev.defaultRenderPass
+		}
+		if err := p.createVkPipeline(rp); err != nil {
+			// Pipeline creation failed — skip binding. Draw calls will
+			// be no-ops since vkPipeline remains 0.
+			return
+		}
 	}
 
 	if p.vkPipeline != 0 {
