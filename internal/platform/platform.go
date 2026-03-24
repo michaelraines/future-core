@@ -67,6 +67,16 @@ type WindowConfig struct {
 	Decorated     bool // window decorations (title bar, borders)
 	Transparent   bool
 	HighDPI       bool
+	NoGL          bool // skip OpenGL context creation (for Vulkan/Metal presentation)
+}
+
+// VulkanSurfaceCreator is an optional interface that platform windows can
+// implement to support Vulkan surface creation.
+type VulkanSurfaceCreator interface {
+	// CreateVulkanSurface creates a VkSurfaceKHR for this window using the
+	// given Vulkan instance handle. The caller is responsible for destroying
+	// the surface via vkDestroySurfaceKHR.
+	CreateVulkanSurface(instance uintptr) (uintptr, error)
 }
 
 // DefaultWindowConfig returns a reasonable default window configuration.

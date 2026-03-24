@@ -69,6 +69,8 @@ const (
 	DEPTH_COMPONENT32F = 0x8CAC
 
 	FRAMEBUFFER          = 0x8D40
+	READ_FRAMEBUFFER     = 0x8CA8
+	DRAW_FRAMEBUFFER     = 0x8CA9
 	COLOR_ATTACHMENT0    = 0x8CE0
 	DEPTH_ATTACHMENT     = 0x8D00
 	FRAMEBUFFER_COMPLETE = 0x8CD5
@@ -184,6 +186,7 @@ var (
 	fnBindFramebuffer        func(target, framebuffer uint32)
 	fnFramebufferTexture2D   func(target, attachment, textarget, texture uint32, level int32)
 	fnCheckFramebufferStatus func(target uint32) uint32
+	fnBlitFramebuffer        func(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1 int32, mask, filter uint32)
 
 	fnGetIntegerv func(pname uint32, data *int32)
 	fnGetString   func(name uint32) uintptr
@@ -207,6 +210,7 @@ var (
 	fnSamplerParameteri func(sampler, pname uint32, param int32)
 
 	fnGetTexImage func(target uint32, level int32, format, typ uint32, pixels uintptr)
+	fnReadPixels  func(x, y, width, height int32, format, typ uint32, pixels uintptr)
 
 	fnGenVertexArrays          func(n int32, arrays *uint32)
 	fnDeleteVertexArrays       func(n int32, arrays *uint32)
@@ -268,6 +272,11 @@ func TexSubImage2D(target uint32, level, xoffset, yoffset, width, height int32, 
 
 func GetTexImage(target uint32, level int32, format, typ uint32, pixels unsafe.Pointer) {
 	fnGetTexImage(target, level, format, typ, uintptr(pixels))
+}
+
+// ReadPixels reads a block of pixels from the framebuffer.
+func ReadPixels(x, y, width, height int32, format, typ uint32, pixels unsafe.Pointer) {
+	fnReadPixels(x, y, width, height, format, typ, uintptr(pixels))
 }
 
 func GenBuffers(n int32, buffers *uint32)    { fnGenBuffers(n, buffers) }
@@ -343,6 +352,10 @@ func FramebufferTexture2D(target, attachment, textarget, texture uint32, level i
 
 func CheckFramebufferStatus(target uint32) uint32 {
 	return fnCheckFramebufferStatus(target)
+}
+
+func BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1 int32, mask, filter uint32) {
+	fnBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter)
 }
 
 func GetIntegerv(pname uint32, data *int32) { fnGetIntegerv(pname, data) }
@@ -513,6 +526,7 @@ func Init() error {
 		{&fnTexImage2D, "glTexImage2D"},
 		{&fnTexSubImage2D, "glTexSubImage2D"},
 		{&fnGetTexImage, "glGetTexImage"},
+		{&fnReadPixels, "glReadPixels"},
 		{&fnStencilFunc, "glStencilFunc"},
 		{&fnStencilOp, "glStencilOp"},
 		{&fnStencilMask, "glStencilMask"},
@@ -581,6 +595,7 @@ func Init() error {
 		{&fnBindFramebuffer, "glBindFramebuffer"},
 		{&fnFramebufferTexture2D, "glFramebufferTexture2D"},
 		{&fnCheckFramebufferStatus, "glCheckFramebufferStatus"},
+		{&fnBlitFramebuffer, "glBlitFramebuffer"},
 		{&fnDrawArraysInstanced, "glDrawArraysInstanced"},
 		{&fnDrawElementsInstanced, "glDrawElementsInstanced"},
 		{&fnGenSamplers, "glGenSamplers"},

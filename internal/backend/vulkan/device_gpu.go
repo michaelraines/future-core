@@ -1,4 +1,4 @@
-//go:build vulkan
+//go:build (darwin || linux || freebsd || windows) && !soft
 
 package vulkan
 
@@ -42,10 +42,31 @@ type Device struct {
 	// Default sampler for texture binding.
 	defaultSampler vk.Sampler
 
+	// Shared uniform buffer for UBO descriptors (persistently mapped).
+	uniformBuffer  vk.Buffer
+	uniformMemory  vk.DeviceMemory
+	uniformMapped  unsafe.Pointer
+	uniformBufSize int
+
 	// Vulkan-specific state for public API compatibility.
 	instanceInfo       InstanceCreateInfo
 	physicalDeviceInfo PhysicalDeviceInfo
 	debugEnabled       bool
+
+	// Swapchain state (populated when presenting directly to a surface).
+	surfaceFactory      func(uintptr) (uintptr, error)
+	surface             vk.SurfaceKHR
+	swapchain           vk.SwapchainKHR
+	swapchainImages     []vk.Image
+	swapchainViews      []vk.ImageView
+	swapchainFormat     uint32
+	swapchainExtent     [2]uint32
+	swapchainFBs        []vk.Framebuffer
+	swapchainRenderPass vk.RenderPass
+	currentImageIndex   uint32
+	hasSwapchain        bool
+	imageAvailableSem   vk.Semaphore
+	renderFinishedSem   vk.Semaphore
 }
 
 // ensureDefaultSampler creates a default nearest-filter sampler if needed.
@@ -111,10 +132,39 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	d.width = cfg.Width
 	d.height = cfg.Height
 	d.debugEnabled = cfg.Debug
+	d.surfaceFactory = cfg.SurfaceFactory
 
 	// Load Vulkan library.
 	if err := vk.Init(); err != nil {
 		return fmt.Errorf("vulkan: %w", err)
+	}
+
+	// If we have a surface factory, request the necessary instance extensions.
+	if d.surfaceFactory != nil {
+		// Query available extensions so we only request ones that exist.
+		availExts, _ := vk.EnumerateInstanceExtensionProperties()
+		hasExt := func(name string) bool {
+			for _, e := range availExts {
+				if e == name {
+					return true
+				}
+			}
+			return false
+		}
+
+		d.instanceInfo.Extensions = appendUnique(d.instanceInfo.Extensions, "VK_KHR_surface")
+		switch runtime.GOOS {
+		case "darwin":
+			d.instanceInfo.Extensions = appendUnique(d.instanceInfo.Extensions, "VK_EXT_metal_surface")
+			// MoltenVK may require portability enumeration.
+			if hasExt("VK_KHR_portability_enumeration") {
+				d.instanceInfo.Extensions = appendUnique(d.instanceInfo.Extensions, "VK_KHR_portability_enumeration")
+			}
+		case "windows":
+			d.instanceInfo.Extensions = appendUnique(d.instanceInfo.Extensions, "VK_KHR_win32_surface")
+		default: // linux, freebsd
+			d.instanceInfo.Extensions = appendUnique(d.instanceInfo.Extensions, "VK_KHR_xlib_surface")
+		}
 	}
 
 	// Set up validation layers if debug mode.
@@ -166,11 +216,28 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		runtime.KeepAlive(cExts)
 	}
 
+	// MoltenVK on macOS may require portability enumeration flag.
+	if runtime.GOOS == "darwin" {
+		for _, ext := range d.instanceInfo.Extensions {
+			if ext == "VK_KHR_portability_enumeration" {
+				createInfo.Flags |= 0x00000001 // VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+				break
+			}
+		}
+	}
+
 	inst, err := vk.CreateInstance(&createInfo)
 	if err != nil {
 		return fmt.Errorf("vulkan: %w", err)
 	}
 	d.instance = inst
+
+	// Load KHR extension functions if we have a surface factory.
+	if d.surfaceFactory != nil {
+		if err := vk.InitSwapchainFunctions(inst); err != nil {
+			return fmt.Errorf("vulkan: %w", err)
+		}
+	}
 
 	// Select physical device (prefer discrete GPU).
 	physDevices, err := vk.EnumeratePhysicalDevices(inst)
@@ -240,7 +307,16 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		PQueueCreateInfos:    uintptr(unsafe.Pointer(&queueCI)),
 	}
 
+	// Enable swapchain device extension if presenting.
+	var devExts []*byte
+	if d.surfaceFactory != nil {
+		devExts = vk.CStrSlice([]string{"VK_KHR_swapchain"})
+		deviceCI.EnabledExtensionCount = uint32(len(devExts))
+		deviceCI.PPEnabledExtensionNames = uintptr(unsafe.Pointer(&devExts[0]))
+	}
+
 	dev, err := vk.CreateDevice(d.physicalDevice, &deviceCI)
+	runtime.KeepAlive(devExts)
 	if err != nil {
 		return fmt.Errorf("vulkan: %w", err)
 	}
@@ -282,8 +358,49 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("vulkan: staging: %w", err)
 	}
 
+	// Create shared uniform buffer for UBO descriptors (16 KB, persistently mapped).
+	if err := d.createUniformBuffer(16 * 1024); err != nil {
+		return fmt.Errorf("vulkan: uniform buffer: %w", err)
+	}
+
 	// Create encoder.
 	d.encoder = &Encoder{dev: d, cmd: d.commandBuffer}
+
+	// Set up swapchain if we have a surface factory.
+	if d.surfaceFactory != nil {
+		surfaceHandle, serr := d.surfaceFactory(uintptr(d.instance))
+		if serr != nil {
+			return fmt.Errorf("vulkan: surface creation: %w", serr)
+		}
+		d.surface = vk.SurfaceKHR(surfaceHandle)
+
+		// Verify graphics queue supports presentation.
+		supported, serr := vk.GetPhysicalDeviceSurfaceSupportKHR(d.physicalDevice, d.queueFamily, d.surface)
+		if serr != nil {
+			return fmt.Errorf("vulkan: %w", serr)
+		}
+		if !supported {
+			return fmt.Errorf("vulkan: graphics queue family does not support presentation")
+		}
+
+		if serr := d.createSwapchain(); serr != nil {
+			return fmt.Errorf("vulkan: %w", serr)
+		}
+
+		// Create synchronization semaphores for swapchain.
+		imgSem, serr := vk.CreateSemaphore(d.device)
+		if serr != nil {
+			return fmt.Errorf("vulkan: %w", serr)
+		}
+		d.imageAvailableSem = imgSem
+
+		renSem, serr := vk.CreateSemaphore(d.device)
+		if serr != nil {
+			return fmt.Errorf("vulkan: %w", serr)
+		}
+		d.renderFinishedSem = renSem
+		d.hasSwapchain = true
+	}
 
 	return nil
 }
@@ -453,6 +570,52 @@ func (d *Device) createStagingBuffer(size int) error {
 	return nil
 }
 
+// createUniformBuffer creates a host-visible, host-coherent buffer for UBO
+// descriptors. The buffer is persistently mapped so uniform data can be
+// written directly before each draw call.
+func (d *Device) createUniformBuffer(size int) error {
+	bufCI := vk.BufferCreateInfo{
+		SType:       vk.StructureTypeBufferCreateInfo,
+		Size:        uint64(size),
+		Usage:       uint32(vk.BufferUsageUniformBuffer),
+		SharingMode: vk.SharingModeExclusive,
+	}
+	buf, err := vk.CreateBufferRaw(d.device, &bufCI)
+	if err != nil {
+		return err
+	}
+	d.uniformBuffer = buf
+	d.uniformBufSize = size
+
+	memReq := vk.GetBufferMemoryRequirements(d.device, buf)
+	memIdx, err := vk.FindMemoryType(d.memProps, memReq.MemoryTypeBits,
+		vk.MemoryPropertyHostVisible|vk.MemoryPropertyHostCoherent)
+	if err != nil {
+		return err
+	}
+	allocInfo := vk.MemoryAllocateInfo{
+		SType:           vk.StructureTypeMemoryAllocateInfo,
+		AllocationSize:  memReq.Size,
+		MemoryTypeIndex: memIdx,
+	}
+	mem, err := vk.AllocateMemory(d.device, &allocInfo)
+	if err != nil {
+		return err
+	}
+	d.uniformMemory = mem
+	if err := vk.BindBufferMemory(d.device, buf, mem, 0); err != nil {
+		return err
+	}
+
+	ptr, err := vk.MapMemory(d.device, mem, 0, uint64(size))
+	if err != nil {
+		return err
+	}
+	d.uniformMapped = ptr
+
+	return nil
+}
+
 // Dispose releases all Vulkan resources.
 func (d *Device) Dispose() {
 	if d.device == 0 {
@@ -460,8 +623,27 @@ func (d *Device) Dispose() {
 	}
 	_ = vk.DeviceWaitIdle(d.device)
 
+	// Destroy swapchain resources.
+	if d.hasSwapchain {
+		d.destroySwapchain()
+		if d.imageAvailableSem != 0 {
+			vk.DestroySemaphore(d.device, d.imageAvailableSem)
+		}
+		if d.renderFinishedSem != 0 {
+			vk.DestroySemaphore(d.device, d.renderFinishedSem)
+		}
+	}
+	if d.surface != 0 {
+		vk.DestroySurfaceKHR(d.instance, d.surface)
+	}
+
 	if d.defaultSampler != 0 {
 		vk.DestroySampler(d.device, d.defaultSampler)
+	}
+	if d.uniformBuffer != 0 {
+		vk.UnmapMemory(d.device, d.uniformMemory)
+		vk.DestroyBuffer(d.device, d.uniformBuffer)
+		vk.FreeMemory(d.device, d.uniformMemory)
 	}
 	if d.stagingBuffer != 0 {
 		vk.UnmapMemory(d.device, d.stagingMemory)
@@ -494,23 +676,181 @@ func (d *Device) Dispose() {
 	d.device = 0
 }
 
+// ReadScreen copies the default color image pixels into dst via the staging buffer.
+// Returns false when the device presents directly via swapchain (no readback needed).
+func (d *Device) ReadScreen(dst []byte) bool {
+	if d.hasSwapchain {
+		return false // presenting directly — no readback needed
+	}
+	if d.defaultColorImage == 0 || d.stagingMapped == nil {
+		return false
+	}
+	if len(dst) == 0 {
+		return true // probe: yes, this backend needs presentation
+	}
+
+	dataSize := d.width * d.height * 4 // RGBA8
+	if dataSize > d.stagingSize {
+		return false
+	}
+
+	// Allocate a one-shot command buffer for the copy.
+	cmd, err := vk.AllocateCommandBuffer(d.device, d.commandPool)
+	if err != nil {
+		return false
+	}
+	if err := vk.BeginCommandBuffer(cmd, vk.CommandBufferUsageOneTimeSubmit); err != nil {
+		return false
+	}
+
+	// Transition default color image to transfer src.
+	barriers := []vk.ImageMemoryBarrier{{
+		SType:               vk.StructureTypeImageMemoryBarrier,
+		SrcAccessMask:       vk.AccessColorAttachmentWrite,
+		DstAccessMask:       vk.AccessTransferRead,
+		OldLayout:           vk.ImageLayoutColorAttachmentOptimal,
+		NewLayout:           vk.ImageLayoutTransferSrcOptimal,
+		SrcQueueFamilyIndex: vk.QueueFamilyIgnored,
+		DstQueueFamilyIndex: vk.QueueFamilyIgnored,
+		Image_:              d.defaultColorImage,
+		SubresAspectMask:    vk.ImageAspectColor,
+		SubresLevelCount:    1,
+		SubresLayerCount:    1,
+	}}
+	vk.CmdPipelineBarrier(cmd,
+		vk.PipelineStageColorAttachmentOutput, vk.PipelineStageTransfer,
+		barriers)
+
+	// Copy image to staging buffer.
+	region := vk.BufferImageCopy{
+		AspectMask:   vk.ImageAspectColor,
+		LayerCount:   1,
+		ImageExtentW: uint32(d.width),
+		ImageExtentH: uint32(d.height),
+		ImageExtentD: 1,
+	}
+	vk.CmdCopyImageToBuffer(cmd, d.defaultColorImage,
+		vk.ImageLayoutTransferSrcOptimal, d.stagingBuffer, region)
+
+	// Transition back to color attachment.
+	barriers[0].SrcAccessMask = vk.AccessTransferRead
+	barriers[0].DstAccessMask = vk.AccessColorAttachmentWrite
+	barriers[0].OldLayout = vk.ImageLayoutTransferSrcOptimal
+	barriers[0].NewLayout = vk.ImageLayoutColorAttachmentOptimal
+	vk.CmdPipelineBarrier(cmd,
+		vk.PipelineStageTransfer, vk.PipelineStageColorAttachmentOutput,
+		barriers)
+
+	_ = vk.EndCommandBuffer(cmd)
+
+	submitInfo := vk.SubmitInfo{
+		SType:              vk.StructureTypeSubmitInfo,
+		CommandBufferCount: 1,
+		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
+	}
+	_ = vk.QueueSubmit(d.graphicsQueue, &submitInfo, 0)
+	_ = vk.DeviceWaitIdle(d.device)
+
+	// Copy from mapped staging memory to dst.
+	n := len(dst)
+	if n > dataSize {
+		n = dataSize
+	}
+	src := unsafe.Slice((*byte)(d.stagingMapped), n)
+	copy(dst[:n], src)
+
+	vk.FreeCommandBuffers(d.device, d.commandPool, cmd)
+
+	return true
+}
+
 // BeginFrame waits for the previous frame's fence and resets the command buffer.
+// When a swapchain is active, acquires the next image.
 func (d *Device) BeginFrame() {
+	if d.device == 0 {
+		return
+	}
 	_ = vk.WaitForFence(d.device, d.fence, ^uint64(0))
 	_ = vk.ResetFence(d.device, d.fence)
 	_ = vk.ResetCommandBuffer(d.commandBuffer)
 	_ = vk.BeginCommandBuffer(d.commandBuffer, vk.CommandBufferUsageOneTimeSubmit)
+
+	if d.hasSwapchain {
+		idx, r := vk.AcquireNextImageKHR(d.device, d.swapchain, ^uint64(0), d.imageAvailableSem, 0)
+		if r == vk.ErrorOutOfDateKHR {
+			caps, _ := vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(d.physicalDevice, d.surface)
+			_ = d.recreateSwapchain(int(caps.CurrentExtentWidth), int(caps.CurrentExtentHeight))
+			// Re-acquire after recreation.
+			idx, _ = vk.AcquireNextImageKHR(d.device, d.swapchain, ^uint64(0), d.imageAvailableSem, 0)
+		}
+		d.currentImageIndex = idx
+	}
 }
 
-// EndFrame ends command recording and submits to the queue.
+// EndFrame ends command recording, submits to the queue, and presents
+// when a swapchain is active.
 func (d *Device) EndFrame() {
-	_ = vk.EndCommandBuffer(d.commandBuffer)
-	submitInfo := vk.SubmitInfo{
-		SType:              vk.StructureTypeSubmitInfo,
-		CommandBufferCount: 1,
-		PCommandBuffers:    uintptr(unsafe.Pointer(&d.commandBuffer)),
+	if d.device == 0 || d.graphicsQueue == 0 {
+		return
 	}
-	_ = vk.QueueSubmit(d.graphicsQueue, &submitInfo, d.fence)
+	_ = vk.EndCommandBuffer(d.commandBuffer)
+
+	cmd := d.commandBuffer
+
+	if d.hasSwapchain {
+		// Submit with semaphore synchronization for presentation.
+		waitStage := uint32(vk.PipelineStageColorAttachmentOutput)
+		submitInfo := vk.SubmitInfo{
+			SType:                vk.StructureTypeSubmitInfo,
+			WaitSemaphoreCount:   1,
+			PWaitSemaphores:      uintptr(unsafe.Pointer(&d.imageAvailableSem)),
+			PWaitDstStageMask:    uintptr(unsafe.Pointer(&waitStage)),
+			CommandBufferCount:   1,
+			PCommandBuffers:      uintptr(unsafe.Pointer(&cmd)),
+			SignalSemaphoreCount: 1,
+			PSignalSemaphores:    uintptr(unsafe.Pointer(&d.renderFinishedSem)),
+		}
+		err := vk.QueueSubmit(d.graphicsQueue, &submitInfo, d.fence)
+		runtime.KeepAlive(cmd)
+		runtime.KeepAlive(submitInfo)
+		runtime.KeepAlive(waitStage)
+		if err != nil {
+			return
+		}
+
+		// Present the rendered image.
+		imageIndex := d.currentImageIndex
+		presentInfo := vk.PresentInfoKHR{
+			SType:              vk.StructureTypePresentInfoKHR,
+			WaitSemaphoreCount: 1,
+			PWaitSemaphores:    uintptr(unsafe.Pointer(&d.renderFinishedSem)),
+			SwapchainCount:     1,
+			PSwapchains:        uintptr(unsafe.Pointer(&d.swapchain)),
+			PImageIndices:      uintptr(unsafe.Pointer(&imageIndex)),
+		}
+		r := vk.QueuePresentKHR(d.graphicsQueue, &presentInfo)
+		runtime.KeepAlive(presentInfo)
+		runtime.KeepAlive(imageIndex)
+
+		if r == vk.ErrorOutOfDateKHR || r == vk.SuboptimalKHR {
+			caps, _ := vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(d.physicalDevice, d.surface)
+			_ = d.recreateSwapchain(int(caps.CurrentExtentWidth), int(caps.CurrentExtentHeight))
+		}
+	} else {
+		// Non-swapchain path: submit and wait.
+		submitInfo := vk.SubmitInfo{
+			SType:              vk.StructureTypeSubmitInfo,
+			CommandBufferCount: 1,
+			PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
+		}
+		err := vk.QueueSubmit(d.graphicsQueue, &submitInfo, d.fence)
+		runtime.KeepAlive(cmd)
+		runtime.KeepAlive(submitInfo)
+		if err != nil {
+			return
+		}
+		_ = vk.WaitForFence(d.device, d.fence, ^uint64(0))
+	}
 }
 
 // NewTexture creates a VkImage + VkImageView + VkDeviceMemory.
@@ -756,4 +1096,233 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 // Encoder returns the command encoder.
 func (d *Device) Encoder() backend.CommandEncoder {
 	return d.encoder
+}
+
+// ---------------------------------------------------------------------------
+// Swapchain management
+// ---------------------------------------------------------------------------
+
+// createSwapchain queries surface capabilities and creates a VkSwapchainKHR
+// with image views, a compatible render pass, and framebuffers.
+func (d *Device) createSwapchain() error {
+	caps, err := vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(d.physicalDevice, d.surface)
+	if err != nil {
+		return err
+	}
+
+	formats, err := vk.GetPhysicalDeviceSurfaceFormatsKHR(d.physicalDevice, d.surface)
+	if err != nil {
+		return err
+	}
+	if len(formats) == 0 {
+		return fmt.Errorf("no surface formats available")
+	}
+
+	// Prefer B8G8R8A8 SRGB non-linear; fall back to first available.
+	chosenFmt := formats[0]
+	for _, f := range formats {
+		if f.Format == vk.FormatB8G8R8A8UNorm && f.ColorSpace == vk.ColorSpaceSRGBNonLinearKHR {
+			chosenFmt = f
+			break
+		}
+	}
+
+	// Present mode: prefer FIFO (guaranteed, acts as vsync).
+	presentMode := uint32(vk.PresentModeFifoKHR)
+	modes, _ := vk.GetPhysicalDeviceSurfacePresentModesKHR(d.physicalDevice, d.surface)
+	for _, m := range modes {
+		if m == vk.PresentModeMailboxKHR {
+			presentMode = vk.PresentModeMailboxKHR
+			break
+		}
+	}
+
+	// Extent: use current extent if defined, else clamp to our desired size.
+	extent := [2]uint32{caps.CurrentExtentWidth, caps.CurrentExtentHeight}
+	if caps.CurrentExtentWidth == 0xFFFFFFFF {
+		extent[0] = clampU32(uint32(d.width), caps.MinImageExtentWidth, caps.MaxImageExtentWidth)
+		extent[1] = clampU32(uint32(d.height), caps.MinImageExtentHeight, caps.MaxImageExtentHeight)
+	}
+
+	imageCount := caps.MinImageCount + 1
+	if caps.MaxImageCount > 0 && imageCount > caps.MaxImageCount {
+		imageCount = caps.MaxImageCount
+	}
+
+	sci := vk.SwapchainCreateInfoKHR{
+		SType:             vk.StructureTypeSwapchainCreateInfoKHR,
+		Surface:           d.surface,
+		MinImageCount:     imageCount,
+		ImageFormat:       chosenFmt.Format,
+		ImageColorSpace:   chosenFmt.ColorSpace,
+		ImageExtentWidth:  extent[0],
+		ImageExtentHeight: extent[1],
+		ImageArrayLayers:  1,
+		ImageUsage:        uint32(vk.ImageUsageColorAttachment),
+		ImageSharingMode:  vk.SharingModeExclusive,
+		PreTransform:      caps.CurrentTransform,
+		CompositeAlpha:    vk.CompositeAlphaOpaqueKHR,
+		PresentMode:       presentMode,
+		Clipped:           1,
+		OldSwapchain:      d.swapchain, // reuse old swapchain if recreating
+	}
+
+	sc, err := vk.CreateSwapchainKHR(d.device, &sci)
+	if err != nil {
+		return err
+	}
+	d.swapchain = sc
+	d.swapchainFormat = chosenFmt.Format
+	d.swapchainExtent = extent
+
+	// Get swapchain images.
+	images, err := vk.GetSwapchainImagesKHR(d.device, sc)
+	if err != nil {
+		return err
+	}
+	d.swapchainImages = images
+
+	// Create image views.
+	d.swapchainViews = make([]vk.ImageView, len(images))
+	for i, img := range images {
+		viewCI := vk.ImageViewCreateInfo{
+			SType:            vk.StructureTypeImageViewCreateInfo,
+			Image:            img,
+			ViewType:         vk.ImageViewType2D,
+			Format:           chosenFmt.Format,
+			ComponentR:       vk.ComponentSwizzleIdentity,
+			ComponentG:       vk.ComponentSwizzleIdentity,
+			ComponentB:       vk.ComponentSwizzleIdentity,
+			ComponentA:       vk.ComponentSwizzleIdentity,
+			SubresAspectMask: vk.ImageAspectColor,
+			SubresLevelCount: 1,
+			SubresLayerCount: 1,
+		}
+		view, verr := vk.CreateImageViewRaw(d.device, &viewCI)
+		if verr != nil {
+			return verr
+		}
+		d.swapchainViews[i] = view
+	}
+
+	// Create render pass for swapchain (final layout = PresentSrcKHR).
+	colorAttach := vk.AttachmentDescription{
+		Format:         chosenFmt.Format,
+		Samples:        vk.SampleCount1,
+		LoadOp:         vk.AttachmentLoadOpClear,
+		StoreOp:        vk.AttachmentStoreOpStore,
+		StencilLoadOp:  vk.AttachmentLoadOpDontCare,
+		StencilStoreOp: vk.AttachmentStoreOpDontCare,
+		InitialLayout:  vk.ImageLayoutUndefined,
+		FinalLayout:    vk.ImageLayoutPresentSrcKHR,
+	}
+	colorRef := vk.AttachmentReference{
+		Attachment: 0,
+		Layout:     vk.ImageLayoutColorAttachmentOptimal,
+	}
+	subpass := vk.SubpassDescription{
+		PipelineBindPoint:    vk.PipelineBindPointGraphics,
+		ColorAttachmentCount: 1,
+		PColorAttachments:    uintptr(unsafe.Pointer(&colorRef)),
+	}
+	dependency := vk.SubpassDependency{
+		SrcSubpass:    0xFFFFFFFF,
+		DstSubpass:    0,
+		SrcStageMask:  vk.PipelineStageColorAttachmentOutput,
+		DstStageMask:  vk.PipelineStageColorAttachmentOutput,
+		DstAccessMask: vk.AccessColorAttachmentWrite,
+	}
+	rpCI := vk.RenderPassCreateInfo{
+		SType:           vk.StructureTypeRenderPassCreateInfo,
+		AttachmentCount: 1,
+		PAttachments:    uintptr(unsafe.Pointer(&colorAttach)),
+		SubpassCount:    1,
+		PSubpasses:      uintptr(unsafe.Pointer(&subpass)),
+		DependencyCount: 1,
+		PDependencies:   uintptr(unsafe.Pointer(&dependency)),
+	}
+	rp, err := vk.CreateRenderPass(d.device, &rpCI)
+	if err != nil {
+		return err
+	}
+	d.swapchainRenderPass = rp
+
+	// Create framebuffers.
+	d.swapchainFBs = make([]vk.Framebuffer, len(images))
+	for i := range images {
+		fbCI := vk.FramebufferCreateInfo{
+			SType:           vk.StructureTypeFramebufferCreateInfo,
+			RenderPass_:     rp,
+			AttachmentCount: 1,
+			PAttachments:    uintptr(unsafe.Pointer(&d.swapchainViews[i])),
+			Width:           extent[0],
+			Height:          extent[1],
+			Layers:          1,
+		}
+		fb, ferr := vk.CreateFramebuffer(d.device, &fbCI)
+		if ferr != nil {
+			return ferr
+		}
+		d.swapchainFBs[i] = fb
+	}
+
+	return nil
+}
+
+// destroySwapchain destroys framebuffers, image views, render pass, and swapchain.
+func (d *Device) destroySwapchain() {
+	for _, fb := range d.swapchainFBs {
+		if fb != 0 {
+			vk.DestroyFramebuffer(d.device, fb)
+		}
+	}
+	d.swapchainFBs = nil
+
+	if d.swapchainRenderPass != 0 {
+		vk.DestroyRenderPass(d.device, d.swapchainRenderPass)
+		d.swapchainRenderPass = 0
+	}
+
+	for _, v := range d.swapchainViews {
+		if v != 0 {
+			vk.DestroyImageView(d.device, v)
+		}
+	}
+	d.swapchainViews = nil
+	d.swapchainImages = nil
+
+	if d.swapchain != 0 {
+		vk.DestroySwapchainKHR(d.device, d.swapchain)
+		d.swapchain = 0
+	}
+}
+
+// recreateSwapchain rebuilds the swapchain after a resize or out-of-date error.
+func (d *Device) recreateSwapchain(w, h int) error {
+	_ = vk.DeviceWaitIdle(d.device)
+	d.width = w
+	d.height = h
+	d.destroySwapchain()
+	return d.createSwapchain()
+}
+
+// appendUnique appends s to slice if not already present.
+func appendUnique(slice []string, s string) []string {
+	for _, v := range slice {
+		if v == s {
+			return slice
+		}
+	}
+	return append(slice, s)
+}
+
+// clampU32 clamps v to [lo, hi].
+func clampU32(v, lo, hi uint32) uint32 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }

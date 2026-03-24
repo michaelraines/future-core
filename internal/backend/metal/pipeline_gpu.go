@@ -1,4 +1,4 @@
-//go:build metal
+//go:build darwin && !soft
 
 package metal
 
@@ -39,12 +39,27 @@ func (p *Pipeline) createPipelineState() error {
 
 	blendEnabled, srcRGB, dstRGB, srcAlpha, dstAlpha := mtlBlendConfig(p.desc.BlendMode)
 
+	// Build vertex descriptor from pipeline's vertex format.
+	var vertexAttrs []mtl.VertexAttr
+	stride := 0
+	if p.desc.VertexFormat.Stride > 0 {
+		stride = p.desc.VertexFormat.Stride
+		for i, attr := range p.desc.VertexFormat.Attributes {
+			vertexAttrs = append(vertexAttrs, mtl.VertexAttr{
+				Format: backendAttrToMTL(attr.Format),
+				Offset: attr.Offset,
+				Index:  i,
+			})
+		}
+	}
+
 	pso, err := mtl.CreateRenderPipelineState(
 		p.dev.device,
 		shader.vertexFn, shader.fragmentFn,
 		mtl.PixelFormatRGBA8Unorm,
 		blendEnabled,
 		srcRGB, dstRGB, srcAlpha, dstAlpha,
+		vertexAttrs, stride,
 	)
 	if err != nil {
 		return err
@@ -74,6 +89,20 @@ func mtlBlendConfig(mode backend.BlendMode) (enabled bool, srcRGB, dstRGB, srcAl
 			mtl.BlendFactorOne, mtl.BlendFactorOneMinusSourceAlpha
 	default:
 		return false, 0, 0, 0, 0
+	}
+}
+
+// backendAttrToMTL maps backend vertex attribute formats to MTLVertexFormat.
+func backendAttrToMTL(f backend.AttributeFormat) int {
+	switch f {
+	case backend.AttributeFloat2:
+		return mtl.VertexFormatFloat2
+	case backend.AttributeFloat3:
+		return mtl.VertexFormatFloat3
+	case backend.AttributeFloat4:
+		return mtl.VertexFormatFloat4
+	default:
+		return mtl.VertexFormatFloat4
 	}
 }
 

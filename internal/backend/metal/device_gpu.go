@@ -1,4 +1,4 @@
-//go:build metal
+//go:build darwin && !soft
 
 package metal
 
@@ -18,8 +18,15 @@ type Device struct {
 	width  int
 	height int
 
-	// Default render target for screen rendering.
+	// Default render target: a buffer-backed texture for screen rendering.
+	// The buffer allows CPU readback without getBytes (avoids arm64 struct ABI issues).
 	defaultColorTex mtl.Texture
+	screenBuffer    mtl.Buffer
+	screenBufSize   int
+
+	// Sampler states for texture filtering.
+	defaultSampler uintptr // MTLSamplerState (nearest)
+	linearSampler  uintptr // MTLSamplerState (linear)
 
 	// Metal-specific state modeled for when real bindings are added.
 	deviceName string
@@ -71,18 +78,26 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("metal: failed to create command queue")
 	}
 
-	// Create default color texture for screen rendering.
-	texDesc := mtl.TextureDescriptor{
-		PixelFormat: mtl.PixelFormatRGBA8Unorm,
-		Width:       uint64(d.width),
-		Height:      uint64(d.height),
-		Depth:       1,
-		MipmapCount: 1,
-		SampleCount: 1,
-		StorageMode: mtl.StorageModeShared,
-		Usage:       mtl.TextureUsageShaderRead | mtl.TextureUsageRenderTarget,
+	// Create a shared buffer and a texture backed by it for screen rendering.
+	// Using a buffer-backed texture allows CPU readback via buffer.contents
+	// instead of getBytes:fromRegion: (which has arm64 struct ABI issues with purego).
+	bytesPerRow := d.width * 4
+	d.screenBufSize = bytesPerRow * d.height
+	d.screenBuffer = mtl.DeviceNewBuffer(d.device, uint64(d.screenBufSize), mtl.ResourceStorageModeShared)
+	if d.screenBuffer == 0 {
+		return fmt.Errorf("metal: failed to create screen buffer")
 	}
-	d.defaultColorTex = mtl.DeviceNewTexture(d.device, &texDesc)
+
+	d.defaultColorTex = mtl.BufferNewTexture(d.screenBuffer, d.device,
+		mtl.PixelFormatRGBA8Unorm, uint64(d.width), uint64(d.height),
+		uint64(bytesPerRow), mtl.TextureUsageShaderRead|mtl.TextureUsageRenderTarget)
+	if d.defaultColorTex == 0 {
+		return fmt.Errorf("metal: failed to create default color texture")
+	}
+
+	// Create sampler states.
+	d.defaultSampler = mtl.DeviceNewSamplerState(d.device, mtl.SamplerMinMagFilterNearest)
+	d.linearSampler = mtl.DeviceNewSamplerState(d.device, mtl.SamplerMinMagFilterLinear)
 
 	return nil
 }
@@ -99,6 +114,28 @@ func (d *Device) Dispose() {
 	}
 	// Device is autoreleased by the system; we don't release it.
 	d.device = 0
+}
+
+// ReadScreen copies the rendered screen pixels from the default color
+// texture into dst (RGBA, width*height*4 bytes).
+func (d *Device) ReadScreen(dst []byte) bool {
+	if d.screenBuffer == 0 {
+		return false
+	}
+	if len(dst) == 0 {
+		return true // probe: yes, this backend needs presentation
+	}
+	// Read directly from the buffer-backed texture's underlying buffer.
+	src := mtl.BufferContents(d.screenBuffer)
+	if src == 0 {
+		return false
+	}
+	n := d.screenBufSize
+	if n > len(dst) {
+		n = len(dst)
+	}
+	copy(dst, unsafe.Slice((*byte)(unsafe.Pointer(src)), n))
+	return true
 }
 
 // BeginFrame prepares for a new frame.

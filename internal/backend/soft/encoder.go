@@ -20,6 +20,7 @@ type DrawRecord struct {
 // Encoder implements backend.CommandEncoder for the software backend.
 // It tracks bound state and rasterizes triangles into the render target.
 type Encoder struct {
+	dev           *Device
 	inPass        bool
 	passDesc      backend.RenderPassDescriptor
 	draws         []DrawRecord
@@ -301,9 +302,14 @@ func (e *Encoder) buildRasterizer(rt *RenderTarget) *rasterizer {
 	return r
 }
 
-// renderTarget returns the current render target, or nil if none.
+// renderTarget returns the current render target. When the pass target is nil
+// (screen rendering), the device's internal screen render target is used so
+// the software rasterizer produces actual pixels for presentation.
 func (e *Encoder) renderTarget() *RenderTarget {
 	if e.passDesc.Target == nil {
+		if e.dev != nil {
+			return e.dev.screenRT
+		}
 		return nil
 	}
 	rt, ok := e.passDesc.Target.(*RenderTarget)

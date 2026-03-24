@@ -90,6 +90,12 @@ linters:
           - revive
         text: "exported"
 
+      # math/ package intentionally shadows the stdlib math package name.
+      - path: math/.+\.go
+        linters:
+          - revive
+        text: "var-naming.*conflict"
+
 formatters:
   enable:
     - gofmt

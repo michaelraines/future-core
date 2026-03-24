@@ -22,9 +22,12 @@ type Window struct {
 
 	trackingArea objc.ID
 
+	metalLayer objc.ID
+
 	handler     platform.InputHandler
 	shouldClose bool
 	fullscreen  bool
+	noGL        bool
 
 	// Cursor state.
 	cursorHidden bool
@@ -115,43 +118,55 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 	)
 	w.contentView.Send(selAddTrackingArea, w.trackingArea)
 
-	// Create OpenGL pixel format.
-	attrs := [...]int32{
-		nsOpenGLPFADoubleBuffer,
-		nsOpenGLPFAOpenGLProfile, nsOpenGLProfileVersion3_2Core,
-		nsOpenGLPFAColorSize, 24,
-		nsOpenGLPFADepthSize, 24,
-		nsOpenGLPFAStencilSize, 8,
-		0, // terminator
-	}
-	pixelFormat := cls(classNSOpenGLPixelFormat).Send(selAlloc).Send(
-		selInitWithAttributes,
-		uintptr(unsafe.Pointer(&attrs[0])),
-	)
-	if pixelFormat == 0 {
-		return fmt.Errorf("failed to create NSOpenGLPixelFormat")
-	}
+	w.noGL = cfg.NoGL
 
-	// Create OpenGL context.
-	w.glContext = cls(classNSOpenGLContext).Send(selAlloc).Send(
-		selInitWithFormat,
-		pixelFormat,
-		uintptr(0), // shareContext: nil
-	)
-	pixelFormat.Send(selRelease)
-	if w.glContext == 0 {
-		return fmt.Errorf("failed to create NSOpenGLContext")
-	}
+	if cfg.NoGL {
+		// Set up CAMetalLayer for Vulkan/Metal presentation.
+		w.contentView.Send(objc.RegisterName("setWantsLayer:"), true)
+		classCAMetalLayer := objc.GetClass("CAMetalLayer")
+		if classCAMetalLayer != 0 {
+			w.metalLayer = cls(classCAMetalLayer).Send(selAlloc).Send(selInit)
+			w.contentView.Send(objc.RegisterName("setLayer:"), w.metalLayer)
+		}
+	} else {
+		// Create OpenGL pixel format.
+		attrs := [...]int32{
+			nsOpenGLPFADoubleBuffer,
+			nsOpenGLPFAOpenGLProfile, nsOpenGLProfileVersion3_2Core,
+			nsOpenGLPFAColorSize, 24,
+			nsOpenGLPFADepthSize, 24,
+			nsOpenGLPFAStencilSize, 8,
+			0, // terminator
+		}
+		pixelFormat := cls(classNSOpenGLPixelFormat).Send(selAlloc).Send(
+			selInitWithAttributes,
+			uintptr(unsafe.Pointer(&attrs[0])),
+		)
+		if pixelFormat == 0 {
+			return fmt.Errorf("failed to create NSOpenGLPixelFormat")
+		}
 
-	// Attach context to the content view.
-	w.glContext.Send(selSetView, w.contentView)
-	w.glContext.Send(selMakeCurrentContext)
+		// Create OpenGL context.
+		w.glContext = cls(classNSOpenGLContext).Send(selAlloc).Send(
+			selInitWithFormat,
+			pixelFormat,
+			uintptr(0), // shareContext: nil
+		)
+		pixelFormat.Send(selRelease)
+		if w.glContext == 0 {
+			return fmt.Errorf("failed to create NSOpenGLContext")
+		}
 
-	// VSync.
-	if cfg.VSync {
-		selSetValues := objc.RegisterName("setValues:forParameter:")
-		swapInterval := int32(1)
-		w.glContext.Send(selSetValues, uintptr(unsafe.Pointer(&swapInterval)), uintptr(222)) // NSOpenGLCPSwapInterval = 222
+		// Attach context to the content view.
+		w.glContext.Send(selSetView, w.contentView)
+		w.glContext.Send(selMakeCurrentContext)
+
+		// VSync.
+		if cfg.VSync {
+			selSetValues := objc.RegisterName("setValues:forParameter:")
+			swapInterval := int32(1)
+			w.glContext.Send(selSetValues, uintptr(unsafe.Pointer(&swapInterval)), uintptr(222)) // NSOpenGLCPSwapInterval = 222
+		}
 	}
 
 	// Make first responder (so it receives key events).
@@ -360,4 +375,14 @@ func (w *Window) PollGamepads() {
 		return
 	}
 	pollGamepadsGC(w.handler)
+}
+
+// CreateVulkanSurface creates a VkSurfaceKHR using vkCreateMetalSurfaceEXT
+// with the CAMetalLayer from this window's content view. The Vulkan library
+// must already be loaded before calling this method.
+func (w *Window) CreateVulkanSurface(instance uintptr) (uintptr, error) {
+	if w.metalLayer == 0 {
+		return 0, fmt.Errorf("cocoa: no CAMetalLayer (was NoGL set?)")
+	}
+	return createMetalSurface(instance, uintptr(w.metalLayer))
 }

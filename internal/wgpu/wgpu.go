@@ -1,4 +1,4 @@
-//go:build wgpunative
+//go:build (darwin || linux || freebsd || windows) && !soft
 
 // Package wgpu provides pure Go WebGPU bindings loaded at runtime via purego
 // against wgpu-native (libwgpu_native). No CGo is required. The shared library

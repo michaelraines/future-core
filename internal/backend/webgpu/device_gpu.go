@@ -1,4 +1,4 @@
-//go:build wgpunative
+//go:build (darwin || linux || freebsd || windows) && !soft
 
 package webgpu
 
@@ -147,6 +147,84 @@ func (d *Device) Dispose() {
 		wgpu.InstanceRelease(d.instance)
 		d.instance = 0
 	}
+}
+
+// ReadScreen copies the default color texture pixels into dst.
+func (d *Device) ReadScreen(dst []byte) bool {
+	if d.defaultColorTex == 0 || d.device == 0 || d.queue == 0 || len(dst) == 0 {
+		return false
+	}
+
+	bpp := 4 // RGBA8
+	bytesPerRow := uint32(d.width * bpp)
+	alignedBytesPerRow := (bytesPerRow + 255) &^ 255
+	dataSize := uint64(alignedBytesPerRow) * uint64(d.height)
+
+	// Create a staging buffer for readback.
+	bufDesc := wgpu.BufferDescriptor{
+		Usage: wgpu.BufferUsageMapRead | wgpu.BufferUsageCopyDst,
+		Size:  dataSize,
+	}
+	stagingBuf := wgpu.DeviceCreateBuffer(d.device, &bufDesc)
+	if stagingBuf == 0 {
+		return false
+	}
+
+	// Encode copy texture -> buffer.
+	enc := wgpu.DeviceCreateCommandEncoder(d.device)
+	src := wgpu.ImageCopyTexture{
+		Texture_: d.defaultColorTex,
+		MipLevel: 0,
+		Origin:   wgpu.Origin3D{},
+		Aspect:   0,
+	}
+	dstCopy := wgpu.ImageCopyBuffer{
+		Layout: wgpu.TextureDataLayout{
+			BytesPerRow:  alignedBytesPerRow,
+			RowsPerImage: uint32(d.height),
+		},
+		Buffer_: stagingBuf,
+	}
+	copySize := wgpu.Extent3D{
+		Width:              uint32(d.width),
+		Height:             uint32(d.height),
+		DepthOrArrayLayers: 1,
+	}
+	wgpu.CommandEncoderCopyTextureToBuffer(enc, &src, &dstCopy, &copySize)
+	cmdBuf := wgpu.CommandEncoderFinish(enc)
+	wgpu.QueueSubmit(d.queue, []wgpu.CommandBuffer{cmdBuf})
+	wgpu.CommandBufferRelease(cmdBuf)
+	wgpu.CommandEncoderRelease(enc)
+
+	// Map the staging buffer and copy data.
+	wgpu.BufferMapAsync(stagingBuf, wgpu.MapModeRead, 0, dataSize)
+	wgpu.DevicePoll(d.device, true)
+
+	ptr := wgpu.BufferGetMappedRange(stagingBuf, 0, dataSize)
+	if ptr == 0 {
+		return false
+	}
+
+	// Copy row by row to handle alignment padding.
+	srcSlice := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), dataSize)
+	dstOffset := 0
+	for row := 0; row < d.height; row++ {
+		srcStart := int(alignedBytesPerRow) * row
+		n := int(bytesPerRow)
+		if dstOffset+n > len(dst) {
+			n = len(dst) - dstOffset
+		}
+		if n <= 0 {
+			break
+		}
+		copy(dst[dstOffset:dstOffset+n], srcSlice[srcStart:srcStart+n])
+		dstOffset += n
+	}
+
+	wgpu.BufferUnmap(stagingBuf)
+	wgpu.BufferDestroy(stagingBuf)
+	wgpu.BufferRelease(stagingBuf)
+	return true
 }
 
 // BeginFrame prepares for a new frame.

@@ -69,3 +69,49 @@ func wgpuBufferUsageFromBackend(u backend.BufferUsage) int {
 		return wgpuBufferUsageVertex | wgpuBufferUsageCopyDst
 	}
 }
+
+// AdapterInfo mirrors GPUAdapterInfo properties.
+type AdapterInfo struct {
+	Vendor       string
+	Architecture string
+	Device       string
+	Description  string
+	BackendType  BackendType
+}
+
+// BackendType represents the underlying GPU API used by wgpu.
+type BackendType int
+
+// BackendType constants.
+const (
+	BackendTypeNull BackendType = iota
+	BackendTypeWebGPU
+	BackendTypeD3D11
+	BackendTypeD3D12
+	BackendTypeMetal
+	BackendTypeVulkan
+	BackendTypeOpenGL
+	BackendTypeOpenGLES
+)
+
+// Limits mirrors GPUSupportedLimits.
+type Limits struct {
+	MaxTextureDimension2D      int
+	MaxTextureArrayLayers      int
+	MaxBindGroups              int
+	MaxSampledTexturesPerStage int
+	MaxSamplersPerStage        int
+	MaxColorAttachments        int
+}
+
+// DefaultLimits returns WebGPU default limits.
+func DefaultLimits() Limits {
+	return Limits{
+		MaxTextureDimension2D:      8192,
+		MaxTextureArrayLayers:      256,
+		MaxBindGroups:              4,
+		MaxSampledTexturesPerStage: 16,
+		MaxSamplersPerStage:        16,
+		MaxColorAttachments:        8,
+	}
+}

@@ -74,6 +74,9 @@ func (d *Device) Dispose() {
 	d.inner.Dispose()
 }
 
+// ReadScreen copies the rendered screen pixels into dst.
+func (d *Device) ReadScreen(dst []byte) bool { return d.inner.ReadScreen(dst) }
+
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {
 	d.inner.BeginFrame()

@@ -1,6 +1,7 @@
 package futurerender
 
 import (
+	"fmt"
 	goimage "image"
 	"image/color"
 	"testing"
@@ -608,4 +609,96 @@ func TestRecoverShaderPreservesID(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, uint32(42), s.id, "shader ID should be preserved")
+}
+
+// failTextureDevice fails on NewTexture.
+type failTextureDevice struct {
+	shaderMockDevice
+}
+
+func (d *failTextureDevice) NewTexture(_ backend.TextureDescriptor) (backend.Texture, error) {
+	return nil, fmt.Errorf("texture create failed")
+}
+
+func TestRecoverImageTextureError(t *testing.T) {
+	tracker := NewResourceTracker()
+	img := &Image{width: 4, height: 4, textureID: 1}
+	tracker.TrackImage(img, nil, false)
+
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
+
+	err := tracker.RecoverResources(&failTextureDevice{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "create texture")
+}
+
+// failShaderDevice fails on NewShader.
+type failShaderDevice struct {
+	shaderMockDevice
+}
+
+func (d *failShaderDevice) NewShader(_ backend.ShaderDescriptor) (backend.Shader, error) {
+	return nil, fmt.Errorf("shader compile failed")
+}
+
+func TestRecoverShaderCompileError(t *testing.T) {
+	tracker := NewResourceTracker()
+	s := &Shader{id: 1}
+	tracker.TrackShader(s, "v", "f", nil)
+
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
+
+	err := tracker.RecoverResources(&failShaderDevice{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "compile shader")
+}
+
+// failPipelineDevice succeeds on NewShader but fails on NewPipeline.
+type failPipelineDevice struct {
+	shaderMockDevice
+}
+
+func (d *failPipelineDevice) NewPipeline(_ backend.PipelineDescriptor) (backend.Pipeline, error) {
+	return nil, fmt.Errorf("pipeline create failed")
+}
+
+func TestRecoverShaderPipelineError(t *testing.T) {
+	tracker := NewResourceTracker()
+	s := &Shader{id: 2}
+	tracker.TrackShader(s, "v", "f", nil)
+
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
+
+	err := tracker.RecoverResources(&failPipelineDevice{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "create pipeline")
+}
+
+// failRenderTargetDevice fails on NewRenderTarget but succeeds on NewTexture.
+type failRenderTargetDevice struct {
+	shaderMockDevice
+}
+
+func (d *failRenderTargetDevice) NewRenderTarget(_ backend.RenderTargetDescriptor) (backend.RenderTarget, error) {
+	return nil, fmt.Errorf("render target create failed")
+}
+
+func TestRecoverImageRenderTargetError(t *testing.T) {
+	tracker := NewResourceTracker()
+	img := &Image{width: 4, height: 4, textureID: 1}
+	tracker.TrackImage(img, nil, true) // tracked as a render target
+
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
+
+	err := tracker.RecoverResources(&failRenderTargetDevice{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "create render target")
 }

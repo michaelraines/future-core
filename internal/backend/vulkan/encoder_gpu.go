@@ -1,4 +1,4 @@
-//go:build vulkan
+//go:build (darwin || linux || freebsd || windows) && !soft
 
 package vulkan
 
@@ -20,6 +20,7 @@ type Encoder struct {
 	inRenderPass    bool
 	currentPipeline *Pipeline
 	boundTexture    *Texture
+	boundShader     *Shader
 	boundSampler    vk.Sampler
 	descriptorPool  vk.DescriptorPool
 	descriptorSet   vk.DescriptorSet
@@ -46,6 +47,12 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 				fb = rt.framebuffer
 			}
 		}
+	} else if e.dev.hasSwapchain {
+		// Rendering to the screen — use swapchain render pass and framebuffer.
+		rp = e.dev.swapchainRenderPass
+		fb = e.dev.swapchainFBs[e.dev.currentImageIndex]
+		w = e.dev.swapchainExtent[0]
+		h = e.dev.swapchainExtent[1]
 	}
 
 	rpBegin := vk.RenderPassBeginInfo{
@@ -80,6 +87,11 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 	e.currentPipeline = p
 
+	// Track the shader for uniform binding.
+	if s, ok := p.desc.Shader.(*Shader); ok {
+		e.boundShader = s
+	}
+
 	// Attempt to create the VkPipeline lazily if not yet created.
 	if p.vkPipeline == 0 {
 		_ = p.createVkPipeline(e.dev.defaultRenderPass)
@@ -108,71 +120,15 @@ func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat)
 	}
 }
 
-// SetTexture binds a texture to a slot via descriptor sets.
+// SetTexture records the texture to bind at the given slot. The actual
+// descriptor set update happens in bindUniforms before each draw call so
+// that the sampler, fragment UBO, and vertex UBO are all written together.
 func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 	t, ok := tex.(*Texture)
-	if !ok || e.currentPipeline == nil {
+	if !ok {
 		return
 	}
 	e.boundTexture = t
-
-	// Create descriptor pool if needed.
-	if e.descriptorPool == 0 && e.currentPipeline.descSetLayout != 0 {
-		poolSize := vk.DescriptorPoolSize{
-			Type_:           vk.DescriptorTypeCombinedImageSampler,
-			DescriptorCount: 16,
-		}
-		poolCI := vk.DescriptorPoolCreateInfo{
-			SType:         vk.StructureTypeDescriptorPoolCreateInfo,
-			MaxSets:       16,
-			PoolSizeCount: 1,
-			PPoolSizes:    uintptr(unsafe.Pointer(&poolSize)),
-		}
-		pool, err := vk.CreateDescriptorPool(e.dev.device, &poolCI)
-		runtime.KeepAlive(poolSize)
-		if err != nil {
-			return
-		}
-		e.descriptorPool = pool
-	}
-
-	if e.currentPipeline.descSetLayout == 0 || e.descriptorPool == 0 {
-		return
-	}
-
-	// Allocate descriptor set.
-	set, err := vk.AllocateDescriptorSet(e.dev.device, e.descriptorPool, e.currentPipeline.descSetLayout)
-	if err != nil {
-		return
-	}
-	e.descriptorSet = set
-
-	// Ensure we have a sampler.
-	if e.boundSampler == 0 {
-		e.boundSampler = e.dev.ensureDefaultSampler()
-	}
-
-	// Update the descriptor set with the texture's image view.
-	imgInfo := vk.DescriptorImageInfo{
-		Sampler:     e.boundSampler,
-		ImageView:   t.view,
-		ImageLayout: vk.ImageLayoutShaderReadOnlyOptimal,
-	}
-	write := vk.WriteDescriptorSet{
-		SType:           vk.StructureTypeWriteDescriptorSet,
-		DstSet:          set,
-		DstBinding:      0,
-		DescriptorCount: 1,
-		DescriptorType:  vk.DescriptorTypeCombinedImageSampler,
-		PImageInfo:      uintptr(unsafe.Pointer(&imgInfo)),
-	}
-	vk.UpdateDescriptorSets(e.dev.device, []vk.WriteDescriptorSet{write})
-	runtime.KeepAlive(imgInfo)
-
-	// Bind the descriptor set.
-	if e.currentPipeline.pipelineLayout != 0 {
-		vk.CmdBindDescriptorSets(e.cmd, e.currentPipeline.pipelineLayout, 0, []vk.DescriptorSet{set})
-	}
 }
 
 // SetTextureFilter overrides the texture filter for a slot.
@@ -227,12 +183,158 @@ func (e *Encoder) SetScissor(rect *backend.ScissorRect) {
 
 // Draw issues a non-indexed draw call.
 func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
+	e.bindUniforms()
 	vk.CmdDraw(e.cmd, uint32(vertexCount), uint32(instanceCount), uint32(firstVertex), 0)
 }
 
 // DrawIndexed issues an indexed draw call.
 func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
+	e.bindUniforms()
 	vk.CmdDrawIndexed(e.cmd, uint32(indexCount), uint32(instanceCount), uint32(firstIndex), 0, 0)
+}
+
+// uniformAlignOffset is the minimum offset alignment for UBO descriptors.
+// Vulkan spec requires minUniformBufferOffsetAlignment, typically 256 bytes.
+const uniformAlignOffset = 256
+
+// ensureDescriptorPool creates a descriptor pool supporting combined image
+// samplers and uniform buffers if one does not already exist.
+func (e *Encoder) ensureDescriptorPool() bool {
+	if e.descriptorPool != 0 {
+		return true
+	}
+	if e.currentPipeline == nil || e.currentPipeline.descSetLayout == 0 {
+		return false
+	}
+	poolSizes := []vk.DescriptorPoolSize{
+		{Type_: vk.DescriptorTypeCombinedImageSampler, DescriptorCount: 16},
+		{Type_: vk.DescriptorTypeUniformBuffer, DescriptorCount: 32},
+	}
+	poolCI := vk.DescriptorPoolCreateInfo{
+		SType:         vk.StructureTypeDescriptorPoolCreateInfo,
+		MaxSets:       16,
+		PoolSizeCount: uint32(len(poolSizes)),
+		PPoolSizes:    uintptr(unsafe.Pointer(&poolSizes[0])),
+	}
+	pool, err := vk.CreateDescriptorPool(e.dev.device, &poolCI)
+	runtime.KeepAlive(poolSizes)
+	if err != nil {
+		return false
+	}
+	e.descriptorPool = pool
+	return true
+}
+
+// bindUniforms writes shader uniform data into the shared UBO buffer and
+// binds a descriptor set with the sampler (binding 0), fragment UBO
+// (binding 1), and vertex UBO (binding 2).
+func (e *Encoder) bindUniforms() {
+	if e.boundShader == nil || e.currentPipeline == nil || e.currentPipeline.pipelineLayout == 0 {
+		return
+	}
+	if e.dev.uniformMapped == nil {
+		return
+	}
+	if !e.ensureDescriptorPool() {
+		return
+	}
+
+	// Pack vertex uniforms at offset 0 of the uniform buffer.
+	vtxBuf := e.boundShader.packUniformBuffer(e.boundShader.vertexUniformLayout)
+	vtxSize := len(vtxBuf)
+	if vtxSize > 0 {
+		dst := unsafe.Slice((*byte)(e.dev.uniformMapped), e.dev.uniformBufSize)
+		copy(dst[:vtxSize], vtxBuf)
+	}
+
+	// Pack fragment uniforms at offset uniformAlignOffset (256-byte aligned).
+	fragBuf := e.boundShader.packUniformBuffer(e.boundShader.fragmentUniformLayout)
+	fragSize := len(fragBuf)
+	if fragSize > 0 {
+		dst := unsafe.Slice((*byte)(e.dev.uniformMapped), e.dev.uniformBufSize)
+		copy(dst[uniformAlignOffset:uniformAlignOffset+fragSize], fragBuf)
+	}
+
+	// Allocate a descriptor set from the pool.
+	set, err := vk.AllocateDescriptorSet(e.dev.device, e.descriptorPool, e.currentPipeline.descSetLayout)
+	if err != nil {
+		return
+	}
+	e.descriptorSet = set
+
+	// Build descriptor writes for all 3 bindings.
+	var writes []vk.WriteDescriptorSet
+
+	// Binding 0: combined image sampler.
+	if e.boundSampler == 0 {
+		e.boundSampler = e.dev.ensureDefaultSampler()
+	}
+	var imgInfo vk.DescriptorImageInfo
+	if e.boundTexture != nil {
+		imgInfo = vk.DescriptorImageInfo{
+			Sampler:     e.boundSampler,
+			ImageView:   e.boundTexture.view,
+			ImageLayout: vk.ImageLayoutShaderReadOnlyOptimal,
+		}
+	} else {
+		imgInfo = vk.DescriptorImageInfo{
+			Sampler: e.boundSampler,
+		}
+	}
+	writes = append(writes, vk.WriteDescriptorSet{
+		SType:           vk.StructureTypeWriteDescriptorSet,
+		DstSet:          set,
+		DstBinding:      0,
+		DescriptorCount: 1,
+		DescriptorType:  vk.DescriptorTypeCombinedImageSampler,
+		PImageInfo:      uintptr(unsafe.Pointer(&imgInfo)),
+	})
+
+	// Binding 1: fragment UBO.
+	fragRange := uint64(uniformAlignOffset) // cover the full aligned region
+	if fragSize > 0 {
+		fragRange = uint64(fragSize)
+	}
+	fragBufInfo := vk.DescriptorBufferInfo{
+		Buffer_: e.dev.uniformBuffer,
+		Offset:  uniformAlignOffset,
+		Range_:  fragRange,
+	}
+	writes = append(writes, vk.WriteDescriptorSet{
+		SType:           vk.StructureTypeWriteDescriptorSet,
+		DstSet:          set,
+		DstBinding:      1,
+		DescriptorCount: 1,
+		DescriptorType:  vk.DescriptorTypeUniformBuffer,
+		PBufferInfo:     uintptr(unsafe.Pointer(&fragBufInfo)),
+	})
+
+	// Binding 2: vertex UBO.
+	vtxRange := uint64(uniformAlignOffset)
+	if vtxSize > 0 {
+		vtxRange = uint64(vtxSize)
+	}
+	vtxBufInfo := vk.DescriptorBufferInfo{
+		Buffer_: e.dev.uniformBuffer,
+		Offset:  0,
+		Range_:  vtxRange,
+	}
+	writes = append(writes, vk.WriteDescriptorSet{
+		SType:           vk.StructureTypeWriteDescriptorSet,
+		DstSet:          set,
+		DstBinding:      2,
+		DescriptorCount: 1,
+		DescriptorType:  vk.DescriptorTypeUniformBuffer,
+		PBufferInfo:     uintptr(unsafe.Pointer(&vtxBufInfo)),
+	})
+
+	vk.UpdateDescriptorSets(e.dev.device, writes)
+	runtime.KeepAlive(imgInfo)
+	runtime.KeepAlive(fragBufInfo)
+	runtime.KeepAlive(vtxBufInfo)
+
+	// Bind the descriptor set.
+	vk.CmdBindDescriptorSets(e.cmd, e.currentPipeline.pipelineLayout, 0, []vk.DescriptorSet{set})
 }
 
 // Flush is a no-op for Vulkan — submission happens in EndFrame.

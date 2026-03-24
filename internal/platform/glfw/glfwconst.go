@@ -16,6 +16,8 @@ const (
 	// Window hints.
 	glfwResizable           = 0x00020003
 	glfwDecorated           = 0x00020005
+	glfwClientAPI           = 0x00022001
+	glfwNoAPI               = 0
 	glfwContextVersionMajor = 0x00022002
 	glfwContextVersionMinor = 0x00022003
 	glfwOpenGLForwardCompat = 0x00022006
@@ -188,6 +190,9 @@ var (
 	fnGlfwJoystickPresent    func(jid int32) int32
 	fnGlfwGetJoystickAxes    func(jid int32, count *int32) uintptr
 	fnGlfwGetJoystickButtons func(jid int32, count *int32) uintptr
+
+	// Vulkan surface creation (GLFW handles platform detection internally).
+	fnGlfwCreateWindowSurface func(instance uintptr, window uintptr, allocator uintptr, surface *uintptr) int32
 )
 
 // glfwVideoMode mirrors the C GLFWvidmode struct.

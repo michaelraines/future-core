@@ -82,6 +82,9 @@ func (d *Device) Dispose() {
 	// WebGL context is garbage-collected by the browser.
 }
 
+// ReadScreen returns false — WebGL renders directly to the canvas.
+func (d *Device) ReadScreen(_ []byte) bool { return false }
+
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {}
 

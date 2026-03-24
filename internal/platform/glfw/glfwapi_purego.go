@@ -58,6 +58,7 @@ func initGLFWAPI() error {
 		{&fnGlfwJoystickPresent, "glfwJoystickPresent"},
 		{&fnGlfwGetJoystickAxes, "glfwGetJoystickAxes"},
 		{&fnGlfwGetJoystickButtons, "glfwGetJoystickButtons"},
+		{&fnGlfwCreateWindowSurface, "glfwCreateWindowSurface"},
 	} {
 		if ferr := must(e.fn, e.name); ferr != nil {
 			return ferr

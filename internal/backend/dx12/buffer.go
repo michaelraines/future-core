@@ -1,4 +1,4 @@
-//go:build !dx12native
+//go:build !windows || soft
 
 package dx12
 

@@ -1,8 +1,9 @@
-//go:build vulkan
+//go:build (darwin || linux || freebsd || windows) && !soft
 
 package vulkan
 
 import (
+	"fmt"
 	"runtime"
 	"unsafe"
 
@@ -45,27 +46,28 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 		return nil
 	}
 
-	// Create descriptor set layout for texture binding (binding 0 = combined image sampler).
-	binding := vk.DescriptorSetLayoutBinding{
-		Binding:            0,
-		DescriptorType:     vk.DescriptorTypeCombinedImageSampler,
-		DescriptorCount:    1,
-		StageFlags:         vk.ShaderStageFragment,
-		PImmutableSamplers: 0,
+	// Create descriptor set layout with 3 bindings:
+	//   Binding 0: Fragment combined image sampler (uTexture)
+	//   Binding 1: Fragment UBO (uColorBody mat4 + uColorTranslation vec4 = 80 bytes)
+	//   Binding 2: Vertex UBO (uProjection mat4 = 64 bytes)
+	bindings := []vk.DescriptorSetLayoutBinding{
+		{Binding: 0, DescriptorType: vk.DescriptorTypeCombinedImageSampler, DescriptorCount: 1, StageFlags: vk.ShaderStageFragment},
+		{Binding: 1, DescriptorType: vk.DescriptorTypeUniformBuffer, DescriptorCount: 1, StageFlags: vk.ShaderStageFragment},
+		{Binding: 2, DescriptorType: vk.DescriptorTypeUniformBuffer, DescriptorCount: 1, StageFlags: vk.ShaderStageVertex},
 	}
 	dslCI := vk.DescriptorSetLayoutCreateInfo{
 		SType:        vk.StructureTypeDescriptorSetLayoutCreateInfo,
-		BindingCount: 1,
-		PBindings:    uintptr(unsafe.Pointer(&binding)),
+		BindingCount: uint32(len(bindings)),
+		PBindings:    uintptr(unsafe.Pointer(&bindings[0])),
 	}
 	dsl, err := vk.CreateDescriptorSetLayout(p.dev.device, &dslCI)
-	runtime.KeepAlive(binding)
+	runtime.KeepAlive(bindings)
 	if err != nil {
 		return err
 	}
 	p.descSetLayout = dsl
 
-	// Create pipeline layout.
+	// Create pipeline layout — UBOs are in descriptor sets, no push constants needed.
 	plCI := vk.PipelineLayoutCreateInfo{
 		SType:          vk.StructureTypePipelineLayoutCreateInfo,
 		SetLayoutCount: 1,
@@ -163,10 +165,32 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 		PDynamicStates:    uintptr(unsafe.Pointer(&dynamicStates[0])),
 	}
 
-	// Shader stages — placeholder modules.
-	// In a production implementation, GLSL would be compiled to SPIR-V here.
-	// For now, create an empty pipeline with the correct state configuration.
+	// Shader stages — compile GLSL to SPIR-V and create VkShaderModules.
+	shader, hasShader := p.desc.Shader.(*Shader)
 	stages := []vk.PipelineShaderStageCreateInfo{}
+	if hasShader && shader != nil {
+		if err := shader.compile(); err != nil {
+			return fmt.Errorf("vulkan: shader compilation: %w", err)
+		}
+		mainName := vk.CStr("main")
+		if shader.vertexModule != 0 {
+			stages = append(stages, vk.PipelineShaderStageCreateInfo{
+				SType:  vk.StructureTypePipelineShaderStageCreateInfo,
+				Stage:  vk.ShaderStageVertex,
+				Module: shader.vertexModule,
+				PName:  uintptr(unsafe.Pointer(mainName)),
+			})
+		}
+		if shader.fragmentModule != 0 {
+			stages = append(stages, vk.PipelineShaderStageCreateInfo{
+				SType:  vk.StructureTypePipelineShaderStageCreateInfo,
+				Stage:  vk.ShaderStageFragment,
+				Module: shader.fragmentModule,
+				PName:  uintptr(unsafe.Pointer(mainName)),
+			})
+		}
+		runtime.KeepAlive(mainName)
+	}
 
 	var pStages uintptr
 	if len(stages) > 0 {

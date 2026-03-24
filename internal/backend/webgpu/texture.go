@@ -1,4 +1,4 @@
-//go:build !wgpunative
+//go:build !(darwin || linux || freebsd || windows) || soft
 
 package webgpu
 

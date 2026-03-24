@@ -59,6 +59,10 @@ func (d *Device) Dispose() {
 	}
 }
 
+// ReadScreen returns false — OpenGL renders directly to the window's
+// GL framebuffer, so no pixel copy is needed.
+func (d *Device) ReadScreen(_ []byte) bool { return false }
+
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {}
 

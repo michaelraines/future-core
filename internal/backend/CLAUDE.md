@@ -22,10 +22,15 @@ internal/backend/
 └── dx12/               # DirectX 12 (soft-delegating)
 ```
 
-## Soft-Delegation Pattern
+## Dual-Mode Architecture
 
-Five backends (webgl, vulkan, metal, webgpu, dx12) currently delegate all
-rendering to the software rasterizer (`soft/`). This means:
+Four backends (vulkan, metal, webgpu, dx12) have **dual-mode** implementations
+controlled by build tags. WebGL remains soft-delegating only.
+
+### Soft-Delegation Mode (CI)
+
+When compiled without GPU support (CI, `-tags soft`, or non-matching platform),
+backends delegate all rendering to the software rasterizer (`soft/`):
 
 1. Each backend wraps `soft.Device` and `soft.Encoder()` internally
 2. Each type (Texture, Buffer, etc.) wraps the corresponding `backend.*`
@@ -33,15 +38,8 @@ rendering to the software rasterizer (`soft/`). This means:
 3. The encoder unwraps wrapper types before delegating to the soft encoder
 4. Conformance tests pass end-to-end in CI without any GPU hardware
 
-**When converting to real GPU bindings**, replace the `inner` delegation in
-each method with actual GPU API calls. The type structure, registration,
-and test scaffolding are already in place.
-
-### Unwrapping Pattern (Critical)
-
-The encoder's `BeginRenderPass`, `SetPipeline`, `SetVertexBuffer`,
-`SetIndexBuffer`, and `SetTexture` methods must unwrap wrapper types before
-delegating to the soft encoder. Example:
+**Unwrapping Pattern (Critical)**: The encoder must unwrap wrapper types
+before delegating to the soft encoder:
 
 ```go
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
@@ -53,8 +51,38 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 }
 ```
 
-Without unwrapping, the soft encoder's type assertions will fail silently
-and rendering will produce incorrect output.
+### GPU Mode (Desktop)
+
+When compiled on desktop platforms without the `soft` tag, `_gpu.go` files
+provide real GPU API implementations. Each backend has:
+
+- `device_gpu.go` — GPU device init, resource creation, frame lifecycle
+- `encoder_gpu.go` — command recording via GPU API
+- `pipeline_gpu.go` — graphics pipeline state objects
+- `shader_gpu.go` — shader compilation (GLSL→native format)
+- `texture_gpu.go` — GPU texture management, upload, readback
+- `buffer_gpu.go` — GPU buffer management
+- `render_target_gpu.go` — render target / framebuffer management
+
+**Build tags**:
+
+| Backend | GPU mode | Soft fallback |
+|---|---|---|
+| Vulkan | `(darwin \|\| linux \|\| freebsd \|\| windows) && !soft` | `!(darwin \|\| linux \|\| freebsd \|\| windows) \|\| soft` |
+| Metal | `darwin && !soft` | `!darwin \|\| soft` |
+| WebGPU | `(darwin \|\| linux \|\| freebsd \|\| windows) && !soft` | opposite |
+| DX12 | `windows && !soft` | `!windows \|\| soft` |
+
+**Native API bindings** (all purego, no CGo):
+
+| Backend | Bindings Package | Functions | Shader Pipeline |
+|---|---|---|---|
+| Vulkan | `internal/vk/` | 91 | GLSL→SPIR-V via `internal/shaderc/` (purego libshaderc) |
+| Metal | `internal/mtl/` | 56 | GLSL→MSL via `internal/shadertranslate/msl.go` (pure Go) |
+| WebGPU | `internal/wgpu/` | 53 | Planned (WGSL) |
+| DX12 | `internal/d3d12/` | 39 | Planned (HLSL) |
+
+See `BACKENDS.md` at the project root for detailed per-backend status and roadmap.
 
 ## Adding a New Backend
 
@@ -143,12 +171,11 @@ API-specific values are already defined and tested.
   to the soft encoder's `SetTexture`, it will silently fail.
 - **Don't forget `Encoder()` method on Device.** The conformance framework
   needs both `dev` and `enc` passed separately.
-- **Don't use build tags on soft-delegating backends.** They should compile
-  and test on all platforms. Build tags are only for backends that link to
-  native GPU libraries.
-- **Don't add GPU API dependencies to the soft-delegating backends.** They
-  must remain pure Go with only the `backend` and `soft` packages as
-  internal dependencies.
+- **Don't mix GPU and soft code in the same file.** GPU implementations go
+  in `_gpu.go` files with appropriate build tags; soft-delegation in the
+  untagged files.
+- **Don't request Vulkan extensions without checking availability.** On
+  macOS (MoltenVK), use `vk.EnumerateInstanceExtensionProperties()` first.
 - **Don't modify `conformance/` golden images** unless the soft rasterizer
   itself changes. All backends must produce identical output.
 

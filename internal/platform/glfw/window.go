@@ -24,6 +24,7 @@ type Window struct {
 	win            uintptr // GLFWwindow*
 	handler        platform.InputHandler
 	fullscreen     bool
+	noGL           bool
 	savedX, savedY int
 	savedW, savedH int
 
@@ -58,11 +59,18 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 		return fmt.Errorf("glfw init failed")
 	}
 
-	// Request OpenGL 3.3 core profile.
-	fnGlfwWindowHint(glfwContextVersionMajor, 3)
-	fnGlfwWindowHint(glfwContextVersionMinor, 3)
-	fnGlfwWindowHint(glfwOpenGLProfile, glfwOpenGLCoreProfile)
-	fnGlfwWindowHint(glfwOpenGLForwardCompat, glfwTrue)
+	w.noGL = cfg.NoGL
+
+	if cfg.NoGL {
+		// No OpenGL context — for Vulkan/Metal presentation.
+		fnGlfwWindowHint(glfwClientAPI, glfwNoAPI)
+	} else {
+		// Request OpenGL 3.3 core profile.
+		fnGlfwWindowHint(glfwContextVersionMajor, 3)
+		fnGlfwWindowHint(glfwContextVersionMinor, 3)
+		fnGlfwWindowHint(glfwOpenGLProfile, glfwOpenGLCoreProfile)
+		fnGlfwWindowHint(glfwOpenGLForwardCompat, glfwTrue)
+	}
 
 	if cfg.Resizable {
 		fnGlfwWindowHint(glfwResizable, glfwTrue)
@@ -90,12 +98,14 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 		return fmt.Errorf("glfw create window failed")
 	}
 	w.win = win
-	fnGlfwMakeContextCurrent(win)
 
-	if cfg.VSync {
-		fnGlfwSwapInterval(1)
-	} else {
-		fnGlfwSwapInterval(0)
+	if !cfg.NoGL {
+		fnGlfwMakeContextCurrent(win)
+		if cfg.VSync {
+			fnGlfwSwapInterval(1)
+		} else {
+			fnGlfwSwapInterval(0)
+		}
 	}
 
 	w.installCallbacks()
@@ -122,9 +132,23 @@ func (w *Window) PollEvents() {
 	fnGlfwPollEvents()
 }
 
-// SwapBuffers swaps front and back buffers.
+// SwapBuffers swaps front and back buffers. No-op when NoGL is set.
 func (w *Window) SwapBuffers() {
+	if w.noGL {
+		return
+	}
 	fnGlfwSwapBuffers(w.win)
+}
+
+// CreateVulkanSurface creates a VkSurfaceKHR for this window using GLFW's
+// built-in Vulkan surface creation (handles X11/Wayland automatically).
+func (w *Window) CreateVulkanSurface(instance uintptr) (uintptr, error) {
+	var surface uintptr
+	result := fnGlfwCreateWindowSurface(instance, w.win, 0, &surface)
+	if result != 0 {
+		return 0, fmt.Errorf("glfwCreateWindowSurface failed: VkResult(%d)", result)
+	}
+	return surface, nil
 }
 
 // Size returns the window size in screen coordinates.

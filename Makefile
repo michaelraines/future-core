@@ -21,20 +21,32 @@
 # Minimum required test coverage per package (percentage).
 COVERAGE_MIN := 80
 
+# Build tags. Set TAGS=soft for CI (no GPU hardware).
+# GPU bindings compile by default; -tags soft switches to soft-delegation.
+TAGS ?=
+ifneq ($(TAGS),)
+  GO_TAGS := -tags "$(TAGS)"
+endif
+
 # Packages for vet/lint/test/coverage. Excludes:
 # - audio/: requires ALSA headers (CGo) on Linux
 # - cmd/: example binaries with no test files
-# - internal/gl, internal/platform/glfw, internal/backend/opengl: purego interop
-#   requires uintptr→unsafe.Pointer conversions that go vet flags; no tests in CI
-PKGS := $(shell go list ./... | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl | grep -v /internal/platform/glfw | grep -v /internal/backend/opengl)
+# - internal/gl, internal/platform/glfw, internal/platform/cocoa,
+#   internal/backend/opengl: purego interop requires uintptr→unsafe.Pointer
+#   conversions that go vet flags; no tests in CI
+# - internal/mtl, internal/vk, internal/wgpu, internal/d3d12: GPU binding packages
+#   use purego/unsafe; excluded from vet/lint (tested via backend conformance)
+PKGS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl$$ | grep -v /internal/platform/glfw | grep -v /internal/platform/cocoa | grep -v /internal/backend/opengl | grep -v /internal/mtl$$ | grep -v /internal/vk$$ | grep -v /internal/wgpu$$ | grep -v /internal/d3d12$$)
 
 # LINT_PATHS provides relative directory paths for golangci-lint, which
 # requires filesystem paths rather than Go module paths.
 MODULE := $(shell go list -m)
-LINT_PATHS := $(shell go list ./... | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl | grep -v /internal/platform/glfw | grep -v /internal/backend/opengl | sed "s|^$(MODULE)|.|")
+LINT_PATHS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl$$ | grep -v /internal/platform/glfw | grep -v /internal/platform/cocoa | grep -v /internal/backend/opengl | grep -v /internal/mtl$$ | grep -v /internal/vk$$ | grep -v /internal/wgpu$$ | grep -v /internal/d3d12$$ | sed "s|^$(MODULE)|.|")
 
-# All buildable packages (excludes only audio due to CGo/ALSA dependency).
-BUILD_PKGS := $(shell go list ./... | grep -v /audio)
+# All buildable packages. Excludes:
+# - audio/: requires ALSA headers (CGo) on Linux
+# - internal/platform/glfw: contains vendored C source requiring CGo
+BUILD_PKGS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep -v /internal/platform/glfw)
 
 # Default target runs the full CI pipeline
 all: ci
@@ -52,41 +64,44 @@ fmt:
 	@test -z "$$(gofmt -l .)" || { echo "Files need formatting:"; gofmt -l .; exit 1; }
 
 # Go vet
+# -unsafeptr=false: purego-based platform packages (cocoa, win32) use
+# uintptr→unsafe.Pointer casts that are valid for the ObjC/Win32 runtime
+# but flagged by go vet's unsafeptr analyzer.
 vet:
 	@echo "==> Running go vet..."
-	go vet $(PKGS)
+	go vet -unsafeptr=false $(GO_TAGS) $(PKGS)
 
 # Lint with golangci-lint
 lint: check-lint
 	@echo "==> Running golangci-lint..."
-	golangci-lint run $(LINT_PATHS)
+	golangci-lint run $(if $(TAGS),--build-tags "$(TAGS)") $(LINT_PATHS)
 
 # Run all tests
 test:
 	@echo "==> Running tests..."
-	go test $(PKGS)
+	go test $(GO_TAGS) $(PKGS)
 
 # Run tests with race detector
 test-race:
 	@echo "==> Running tests with race detector..."
-	go test -race $(PKGS)
+	go test -race $(GO_TAGS) $(PKGS)
 
 # Run benchmarks
 bench:
 	@echo "==> Running benchmarks..."
-	go test -bench=. -benchmem ./math/ ./internal/batch/
+	go test -bench=. -benchmem $(GO_TAGS) ./math/ ./internal/batch/
 
 # Build all packages (includes cmd/ examples and platform code)
 build:
 	@echo "==> Building..."
-	go build $(BUILD_PKGS)
+	go build $(GO_TAGS) $(BUILD_PKGS)
 
 # --- Coverage Targets ---
 
 # Run tests and print per-package coverage summary
 cover:
 	@echo "==> Running tests with coverage..."
-	@go test -cover $(PKGS)
+	@go test -cover $(GO_TAGS) $(PKGS)
 
 # Enforce minimum coverage per package.
 # - Lines starting with "ok" have tests — enforce COVERAGE_MIN%.
@@ -94,7 +109,7 @@ cover:
 # - Interface-only packages (backend, platform) are excluded.
 cover-check:
 	@echo "==> Checking coverage (minimum $(COVERAGE_MIN)%)..."
-	@go test -cover $(PKGS) 2>&1 | awk -v min=$(COVERAGE_MIN) ' \
+	@go test -cover $(GO_TAGS) $(PKGS) 2>&1 | awk -v min=$(COVERAGE_MIN) ' \
 	/^ok/ && /coverage:/ { \
 		pkg = $$2; \
 		for (i = 1; i <= NF; i++) { \
@@ -135,7 +150,7 @@ cover-check:
 # Generate HTML coverage report
 cover-html:
 	@echo "==> Generating coverage report..."
-	@go test -coverprofile=cover.out $(PKGS)
+	@go test -coverprofile=cover.out $(GO_TAGS) $(PKGS)
 	@go tool cover -html=cover.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
@@ -146,7 +161,7 @@ fix: check-lint
 	@echo "==> Fixing formatting..."
 	gofmt -w .
 	@echo "==> Fixing lint issues..."
-	golangci-lint run --fix $(LINT_PATHS)
+	golangci-lint run --fix $(if $(TAGS),--build-tags "$(TAGS)") $(LINT_PATHS)
 
 # Remove build artifacts
 clean:

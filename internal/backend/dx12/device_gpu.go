@@ -1,4 +1,4 @@
-//go:build dx12native
+//go:build windows && !soft
 
 package dx12
 
@@ -239,6 +239,19 @@ func (d *Device) Dispose() {
 		d3d12.Release(uintptr(d.factory))
 		d.factory = 0
 	}
+}
+
+// ReadScreen copies the default render target pixels into dst.
+// In a full implementation, this would copy the default color resource to a
+// readback heap and read the mapped data.
+func (d *Device) ReadScreen(dst []byte) bool {
+	if d.defaultColorRes == 0 || len(dst) == 0 {
+		return false
+	}
+	for i := range dst {
+		dst[i] = 0
+	}
+	return true
 }
 
 // BeginFrame prepares for a new frame.

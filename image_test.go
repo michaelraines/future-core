@@ -53,6 +53,7 @@ type mockDevice struct {
 
 func (d *mockDevice) Init(_ backend.DeviceConfig) error { return nil }
 func (d *mockDevice) Dispose()                          {}
+func (d *mockDevice) ReadScreen(_ []byte) bool          { return false }
 func (d *mockDevice) BeginFrame()                       {}
 func (d *mockDevice) EndFrame()                         {}
 func (d *mockDevice) NewTexture(desc backend.TextureDescriptor) (backend.Texture, error) {

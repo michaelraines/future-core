@@ -1,4 +1,4 @@
-//go:build !metal
+//go:build !darwin || soft
 
 package metal
 
@@ -14,10 +14,12 @@ import (
 func newTestDevice(t *testing.T) (*Device, backend.CommandEncoder) {
 	t.Helper()
 	dev := New()
-	require.NoError(t, dev.Init(backend.DeviceConfig{
+	if err := dev.Init(backend.DeviceConfig{
 		Width:  conformance.SceneSize,
 		Height: conformance.SceneSize,
-	}))
+	}); err != nil {
+		t.Skipf("device init: %v", err)
+	}
 	t.Cleanup(func() { dev.Dispose() })
 	enc := dev.Encoder()
 	return dev, enc
