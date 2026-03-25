@@ -4,6 +4,7 @@ package vulkan
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"unsafe"
 
@@ -135,7 +136,7 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	}
 	d.width = cfg.Width
 	d.height = cfg.Height
-	d.debugEnabled = cfg.Debug
+	d.debugEnabled = cfg.Debug || os.Getenv("FUTURE_RENDER_VK_VALIDATION") == "1"
 	d.surfaceFactory = cfg.SurfaceFactory
 
 	// Load Vulkan library.
@@ -174,15 +175,19 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	// Set up validation layers if debug mode.
 	if d.debugEnabled {
 		const validationLayer = "VK_LAYER_KHRONOS_validation"
-		found := false
-		for _, l := range d.instanceInfo.Layers {
+		availLayers, _ := vk.EnumerateInstanceLayerProperties()
+		hasLayer := false
+		for _, l := range availLayers {
 			if l == validationLayer {
-				found = true
+				hasLayer = true
 				break
 			}
 		}
-		if !found {
-			d.instanceInfo.Layers = append(d.instanceInfo.Layers, validationLayer)
+		if hasLayer {
+			d.instanceInfo.Layers = appendUnique(d.instanceInfo.Layers, validationLayer)
+			fmt.Println("[vulkan] validation layer enabled")
+		} else if d.debugEnabled {
+			fmt.Println("[vulkan] validation layer not available")
 		}
 	}
 
@@ -357,8 +362,14 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("vulkan: %w", err)
 	}
 
-	// Create staging buffer for transfers.
-	if err := d.createStagingBuffer(4 * 1024 * 1024); err != nil {
+	// Create staging buffer for transfers. Must be at least as large as the
+	// framebuffer for ReadScreen to work (RGBA8 = 4 bytes per pixel).
+	stagingSize := 4 * 1024 * 1024 // 4 MB minimum
+	framebufferSize := d.width * d.height * 4
+	if framebufferSize > stagingSize {
+		stagingSize = framebufferSize
+	}
+	if err := d.createStagingBuffer(stagingSize); err != nil {
 		return fmt.Errorf("vulkan: staging: %w", err)
 	}
 
@@ -882,12 +893,25 @@ func (d *Device) BeginFrame() {
 		return
 	}
 	_ = vk.WaitForFence(d.device, d.fence, ^uint64(0))
+	// GPU work from the previous frame is complete — safe to free resources.
+	if d.encoder != nil {
+		d.encoder.resetFrame()
+	}
 	_ = vk.ResetFence(d.device, d.fence)
 	_ = vk.ResetCommandBuffer(d.commandBuffer)
 	_ = vk.BeginCommandBuffer(d.commandBuffer, vk.CommandBufferUsageOneTimeSubmit)
 	d.uniformCursor = 0
 
 	if d.hasSwapchain {
+		// Check if the surface size changed (e.g., Retina scale propagated
+		// after Init, or window was resized). Recreate the swapchain if needed.
+		caps, _ := vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(d.physicalDevice, d.surface)
+		if caps.CurrentExtentWidth != d.swapchainExtent[0] || caps.CurrentExtentHeight != d.swapchainExtent[1] {
+			if caps.CurrentExtentWidth > 0 && caps.CurrentExtentHeight > 0 {
+					_ = d.recreateSwapchain(int(caps.CurrentExtentWidth), int(caps.CurrentExtentHeight))
+			}
+		}
+
 		idx, r := vk.AcquireNextImageKHR(d.device, d.swapchain, ^uint64(0), d.imageAvailableSem, 0)
 		if r == vk.ErrorOutOfDateKHR {
 			caps, _ := vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(d.physicalDevice, d.surface)
@@ -1107,10 +1131,19 @@ func (d *Device) NewBuffer(desc backend.BufferDescriptor) (backend.Buffer, error
 		return nil, fmt.Errorf("vulkan: %w", err)
 	}
 
+	// Persistently map to avoid per-frame map/unmap overhead.
+	ptr, err := vk.MapMemory(d.device, mem, 0, uint64(size))
+	if err != nil {
+		vk.FreeMemory(d.device, mem)
+		vk.DestroyBuffer(d.device, buf)
+		return nil, fmt.Errorf("vulkan: map buffer: %w", err)
+	}
+
 	b := &Buffer{
 		dev:     d,
 		buffer:  buf,
 		memory:  mem,
+		mapped:  ptr,
 		size:    size,
 		vkUsage: int(vkUsage),
 	}
@@ -1231,11 +1264,21 @@ func (d *Device) createSwapchain() error {
 	}
 
 	// Prefer B8G8R8A8 SRGB non-linear; fall back to first available.
+	// Prefer R8G8B8A8 so the shader's RGBA output matches the swapchain
+	// without channel swizzling. Fall back to B8G8R8A8 (common on macOS).
 	chosenFmt := formats[0]
 	for _, f := range formats {
-		if f.Format == vk.FormatB8G8R8A8UNorm && f.ColorSpace == vk.ColorSpaceSRGBNonLinearKHR {
+		if f.Format == vk.FormatR8G8B8A8UNorm {
 			chosenFmt = f
 			break
+		}
+	}
+	if chosenFmt.Format != vk.FormatR8G8B8A8UNorm {
+		for _, f := range formats {
+			if f.Format == vk.FormatB8G8R8A8UNorm {
+				chosenFmt = f
+				break
+			}
 		}
 	}
 

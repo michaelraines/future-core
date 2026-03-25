@@ -127,6 +127,13 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 		if classCAMetalLayer != 0 {
 			w.metalLayer = cls(classCAMetalLayer).Send(selAlloc).Send(selInit)
 			w.contentView.Send(objc.RegisterName("setLayer:"), w.metalLayer)
+			// Set contentsScale to the screen's backing scale so the layer
+			// renders at Retina resolution instead of defaulting to 1x.
+			screen := w.nsWindow.Send(objc.RegisterName("screen"))
+			if screen != 0 {
+				scale := objc.Send[float64](screen, objc.RegisterName("backingScaleFactor"))
+				w.metalLayer.Send(objc.RegisterName("setContentsScale:"), scale)
+			}
 		}
 	} else {
 		// Create OpenGL pixel format.

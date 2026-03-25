@@ -87,7 +87,10 @@ func (e *Encoder) EndRenderPass() {
 		e.inRenderPass = false
 		e.currentRenderPass = 0
 	}
-	e.cleanupDescriptors()
+	// NOTE: Do NOT destroy the descriptor pool here! The command buffer
+	// hasn't been submitted yet. Destroying the pool would free the
+	// descriptor sets while the GPU still references them. Cleanup
+	// happens in resetFrame() after the fence signals.
 }
 
 // SetPipeline binds a VkPipeline.
@@ -285,6 +288,18 @@ func (e *Encoder) bindUniforms() {
 	fragOffset := vtxOffset + vtxAligned
 
 	fullBuf := unsafe.Slice((*byte)(e.dev.uniformMapped), e.dev.uniformBufSize)
+
+	// DEBUG: Fill the entire UBO with identity matrices so any offset reads valid data.
+	identity := [64]byte{
+		0x00, 0x00, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // col0: (1,0,0,0)
+		0, 0, 0, 0, 0x00, 0x00, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, // col1: (0,1,0,0)
+		0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x80, 0x3F, 0, 0, 0, 0, // col2: (0,0,1,0)
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x80, 0x3F, // col3: (0,0,0,1)
+	}
+	for off := 0; off+64 <= e.dev.uniformBufSize; off += 64 {
+		copy(fullBuf[off:off+64], identity[:])
+	}
+
 	if vtxSize > 0 {
 		copy(fullBuf[vtxOffset:vtxOffset+vtxSize], vtxBuf)
 	}
@@ -325,15 +340,12 @@ func (e *Encoder) bindUniforms() {
 		PImageInfo:      uintptr(unsafe.Pointer(&imgInfo)),
 	})
 
-	// Binding 1: fragment UBO.
-	fragRange := uint64(uniformAlignOffset)
-	if fragSize > 0 {
-		fragRange = uint64(fragSize)
-	}
+	// Binding 1: fragment UBO. Always use the full aligned range to satisfy
+	// MoltenVK's descriptor validation.
 	fragBufInfo := vk.DescriptorBufferInfo{
 		Buffer_: e.dev.uniformBuffer,
 		Offset:  uint64(fragOffset),
-		Range_:  fragRange,
+		Range_:  uint64(uniformAlignOffset),
 	}
 	writes = append(writes, vk.WriteDescriptorSet{
 		SType:           vk.StructureTypeWriteDescriptorSet,
@@ -344,15 +356,11 @@ func (e *Encoder) bindUniforms() {
 		PBufferInfo:     uintptr(unsafe.Pointer(&fragBufInfo)),
 	})
 
-	// Binding 2: vertex UBO.
-	vtxRange := uint64(uniformAlignOffset)
-	if vtxSize > 0 {
-		vtxRange = uint64(vtxSize)
-	}
+	// Binding 2: vertex UBO. Always use the full aligned range.
 	vtxBufInfo := vk.DescriptorBufferInfo{
 		Buffer_: e.dev.uniformBuffer,
 		Offset:  uint64(vtxOffset),
-		Range_:  vtxRange,
+		Range_:  uint64(uniformAlignOffset),
 	}
 	writes = append(writes, vk.WriteDescriptorSet{
 		SType:           vk.StructureTypeWriteDescriptorSet,
@@ -375,11 +383,13 @@ func (e *Encoder) bindUniforms() {
 // Flush is a no-op for Vulkan — submission happens in EndFrame.
 func (e *Encoder) Flush() {}
 
-// cleanupDescriptors releases per-frame descriptor resources.
-func (e *Encoder) cleanupDescriptors() {
+// resetFrame resets descriptor pool for the next frame.
+// Called from Device.BeginFrame after the fence signals (GPU work complete).
+func (e *Encoder) resetFrame() {
 	if e.descriptorPool != 0 {
-		vk.DestroyDescriptorPool(e.dev.device, e.descriptorPool)
-		e.descriptorPool = 0
+		// Reset is much cheaper than destroy+recreate — keeps the pool
+		// allocated and just frees all sets.
+		vk.ResetDescriptorPool(e.dev.device, e.descriptorPool)
 		e.descriptorSet = 0
 	}
 }

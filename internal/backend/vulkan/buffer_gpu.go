@@ -12,11 +12,13 @@ import (
 // Buffer implements backend.Buffer for Vulkan using VkBuffer + VkDeviceMemory.
 // Uses a ring-buffer write strategy: each Upload appends at an increasing offset
 // so that deferred draw commands reference distinct data. The write cursor resets
-// when it would overflow.
+// when it would overflow. Memory is persistently mapped to avoid per-frame
+// map/unmap overhead.
 type Buffer struct {
 	dev    *Device
 	buffer vk.Buffer
 	memory vk.DeviceMemory
+	mapped unsafe.Pointer // persistently mapped pointer
 	size   int
 
 	vkUsage int
@@ -29,11 +31,10 @@ type Buffer struct {
 // InnerBuffer returns nil for GPU buffers (no soft delegation).
 func (b *Buffer) InnerBuffer() backend.Buffer { return nil }
 
-// Upload appends data to the buffer at an increasing offset. Each Upload
-// occupies a distinct region so Vulkan draw commands recorded between
-// successive Uploads reference different data.
+// Upload appends data to the buffer at an increasing offset via the
+// persistently mapped pointer (no per-frame map/unmap syscalls).
 func (b *Buffer) Upload(data []byte) {
-	if len(data) == 0 || b.memory == 0 {
+	if len(data) == 0 || b.mapped == nil {
 		return
 	}
 	// Wrap to start if remaining space is insufficient.
@@ -42,29 +43,19 @@ func (b *Buffer) Upload(data []byte) {
 	}
 	b.lastWriteOffset = b.writeOffset
 
-	ptr, err := vk.MapMemory(b.dev.device, b.memory, uint64(b.writeOffset), uint64(len(data)))
-	if err != nil {
-		return
-	}
-	dst := unsafe.Slice((*byte)(ptr), len(data))
-	copy(dst, data)
-	vk.UnmapMemory(b.dev.device, b.memory)
+	dst := unsafe.Slice((*byte)(b.mapped), b.size)
+	copy(dst[b.writeOffset:b.writeOffset+len(data)], data)
 
 	b.writeOffset += len(data)
 }
 
 // UploadRegion uploads data to a region of the buffer.
 func (b *Buffer) UploadRegion(data []byte, offset int) {
-	if len(data) == 0 || b.memory == 0 {
+	if len(data) == 0 || b.mapped == nil {
 		return
 	}
-	ptr, err := vk.MapMemory(b.dev.device, b.memory, uint64(offset), uint64(len(data)))
-	if err != nil {
-		return
-	}
-	dst := unsafe.Slice((*byte)(ptr), len(data))
-	copy(dst, data)
-	vk.UnmapMemory(b.dev.device, b.memory)
+	dst := unsafe.Slice((*byte)(b.mapped), b.size)
+	copy(dst[offset:offset+len(data)], data)
 }
 
 // Size returns the buffer size in bytes.
@@ -74,6 +65,10 @@ func (b *Buffer) Size() int { return b.size }
 func (b *Buffer) Dispose() {
 	if b.dev == nil || b.dev.device == 0 {
 		return
+	}
+	if b.mapped != nil {
+		vk.UnmapMemory(b.dev.device, b.memory)
+		b.mapped = nil
 	}
 	if b.buffer != 0 {
 		vk.DestroyBuffer(b.dev.device, b.buffer)
