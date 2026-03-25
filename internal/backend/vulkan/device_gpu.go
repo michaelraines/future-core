@@ -39,14 +39,18 @@ type Device struct {
 	stagingSize   int
 	stagingMapped unsafe.Pointer
 
-	// Default sampler for texture binding.
+	// Default sampler and 1x1 white texture for fallback binding.
 	defaultSampler vk.Sampler
+	defaultTexture *Texture
 
 	// Shared uniform buffer for UBO descriptors (persistently mapped).
-	uniformBuffer  vk.Buffer
-	uniformMemory  vk.DeviceMemory
-	uniformMapped  unsafe.Pointer
-	uniformBufSize int
+	// Uses a ring-buffer write cursor so each draw's UBO data persists
+	// until the command buffer executes.
+	uniformBuffer    vk.Buffer
+	uniformMemory    vk.DeviceMemory
+	uniformMapped    unsafe.Pointer
+	uniformBufSize   int
+	uniformCursor    int // next write offset (advanced per draw, reset per frame)
 
 	// Vulkan-specific state for public API compatibility.
 	instanceInfo       InstanceCreateInfo
@@ -363,6 +367,17 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("vulkan: uniform buffer: %w", err)
 	}
 
+	// Create a 1x1 white default texture for fallback sampler binding.
+	defTex, terr := d.NewTexture(backend.TextureDescriptor{
+		Width: 1, Height: 1,
+		Format: backend.TextureFormatRGBA8,
+		Data:   []byte{255, 255, 255, 255},
+	})
+	if terr != nil {
+		return fmt.Errorf("vulkan: default texture: %w", terr)
+	}
+	d.defaultTexture = defTex.(*Texture)
+
 	// Create encoder.
 	d.encoder = &Encoder{dev: d, cmd: d.commandBuffer}
 
@@ -637,6 +652,9 @@ func (d *Device) Dispose() {
 		vk.DestroySurfaceKHR(d.instance, d.surface)
 	}
 
+	if d.defaultTexture != nil {
+		d.defaultTexture.Dispose()
+	}
 	if d.defaultSampler != 0 {
 		vk.DestroySampler(d.device, d.defaultSampler)
 	}
@@ -867,6 +885,7 @@ func (d *Device) BeginFrame() {
 	_ = vk.ResetFence(d.device, d.fence)
 	_ = vk.ResetCommandBuffer(d.commandBuffer)
 	_ = vk.BeginCommandBuffer(d.commandBuffer, vk.CommandBufferUsageOneTimeSubmit)
+	d.uniformCursor = 0
 
 	if d.hasSwapchain {
 		idx, r := vk.AcquireNextImageKHR(d.device, d.swapchain, ^uint64(0), d.imageAvailableSem, 0)

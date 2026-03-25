@@ -10,6 +10,9 @@ import (
 )
 
 // Buffer implements backend.Buffer for Vulkan using VkBuffer + VkDeviceMemory.
+// Uses a ring-buffer write strategy: each Upload appends at an increasing offset
+// so that deferred draw commands reference distinct data. The write cursor resets
+// when it would overflow.
 type Buffer struct {
 	dev    *Device
 	buffer vk.Buffer
@@ -17,23 +20,37 @@ type Buffer struct {
 	size   int
 
 	vkUsage int
+
+	// Ring-buffer write cursor for deferred command buffers.
+	writeOffset     int // next write position
+	lastWriteOffset int // start of the most recent Upload
 }
 
 // InnerBuffer returns nil for GPU buffers (no soft delegation).
 func (b *Buffer) InnerBuffer() backend.Buffer { return nil }
 
-// Upload uploads data to the buffer via mapped memory.
+// Upload appends data to the buffer at an increasing offset. Each Upload
+// occupies a distinct region so Vulkan draw commands recorded between
+// successive Uploads reference different data.
 func (b *Buffer) Upload(data []byte) {
 	if len(data) == 0 || b.memory == 0 {
 		return
 	}
-	ptr, err := vk.MapMemory(b.dev.device, b.memory, 0, uint64(len(data)))
+	// Wrap to start if remaining space is insufficient.
+	if b.writeOffset+len(data) > b.size {
+		b.writeOffset = 0
+	}
+	b.lastWriteOffset = b.writeOffset
+
+	ptr, err := vk.MapMemory(b.dev.device, b.memory, uint64(b.writeOffset), uint64(len(data)))
 	if err != nil {
 		return
 	}
 	dst := unsafe.Slice((*byte)(ptr), len(data))
 	copy(dst, data)
 	vk.UnmapMemory(b.dev.device, b.memory)
+
+	b.writeOffset += len(data)
 }
 
 // UploadRegion uploads data to a region of the buffer.

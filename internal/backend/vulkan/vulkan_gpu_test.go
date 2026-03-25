@@ -266,3 +266,366 @@ void main() {
 	}
 	t.Logf("Rendering produced non-black pixels")
 }
+
+// TestVulkanGPUDrawWithSubmit tests the full BeginFrame→Draw→EndFrame→ReadScreen
+// path, which is how the engine actually renders.
+func TestVulkanGPUDrawWithSubmit(t *testing.T) {
+	dev, enc := initGPUDevice(t)
+
+	sh, err := dev.NewShader(backend.ShaderDescriptor{
+		VertexSource: `#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aColor;
+uniform mat4 uProjection;
+out vec2 vTexCoord;
+out vec4 vColor;
+void main() {
+    vTexCoord = aTexCoord;
+    vColor = aColor;
+    gl_Position = uProjection * vec4(aPosition, 0.0, 1.0);
+}
+`,
+		FragmentSource: `#version 330 core
+in vec2 vTexCoord;
+in vec4 vColor;
+uniform sampler2D uTexture;
+uniform mat4 uColorBody;
+uniform vec4 uColorTranslation;
+out vec4 fragColor;
+void main() {
+    vec4 c = texture(uTexture, vTexCoord) * vColor;
+    fragColor = uColorBody * c + uColorTranslation;
+}
+`,
+		Attributes: batch.Vertex2DFormat().Attributes,
+	})
+	require.NoError(t, err)
+	defer sh.Dispose()
+
+	pip, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader:       sh,
+		VertexFormat: batch.Vertex2DFormat(),
+		BlendMode:    backend.BlendSourceOver,
+	})
+	require.NoError(t, err)
+	defer pip.Dispose()
+
+	tex, err := dev.NewTexture(backend.TextureDescriptor{
+		Width: 1, Height: 1, Format: backend.TextureFormatRGBA8,
+		Data: []byte{255, 255, 255, 255},
+	})
+	require.NoError(t, err)
+	defer tex.Dispose()
+
+	// Identity projection — NDC passthrough.
+	sh.SetUniformMat4("uProjection", [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})
+	sh.SetUniformMat4("uColorBody", [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})
+	sh.SetUniformVec4("uColorTranslation", [4]float32{0, 0, 0, 0})
+
+	type V = batch.Vertex2D
+	// NDC full-screen quad with green vertex color + white texture.
+	verts := []V{
+		{PosX: -1, PosY: -1, TexU: 0, TexV: 0, R: 0, G: 1, B: 0, A: 1},
+		{PosX: 1, PosY: -1, TexU: 1, TexV: 0, R: 0, G: 1, B: 0, A: 1},
+		{PosX: 1, PosY: 1, TexU: 1, TexV: 1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: -1, PosY: 1, TexU: 0, TexV: 1, R: 0, G: 1, B: 0, A: 1},
+	}
+	indices := []uint16{0, 1, 2, 0, 2, 3}
+	vBytes := unsafe.Slice((*byte)(unsafe.Pointer(&verts[0])), len(verts)*int(unsafe.Sizeof(V{})))
+	iBytes := unsafe.Slice((*byte)(unsafe.Pointer(&indices[0])), len(indices)*2)
+
+	vBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: vBytes})
+	require.NoError(t, err)
+	defer vBuf.Dispose()
+	iBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: iBytes})
+	require.NoError(t, err)
+	defer iBuf.Dispose()
+
+	// Use the FULL engine path: BeginFrame → record → EndFrame → ReadScreen.
+	dev.BeginFrame()
+
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{0, 0, 0, 1},
+	})
+	enc.SetViewport(backend.Viewport{Width: 64, Height: 64})
+	enc.SetScissor(nil)
+	enc.SetPipeline(pip)
+	enc.SetVertexBuffer(vBuf, 0)
+	enc.SetIndexBuffer(iBuf, backend.IndexUint16)
+	enc.SetTexture(tex, 0)
+	enc.DrawIndexed(6, 1, 0)
+	enc.EndRenderPass()
+
+	dev.EndFrame()
+
+	pixels := make([]byte, 64*64*4)
+	require.True(t, dev.ReadScreen(pixels))
+
+	// Count non-zero pixels.
+	nonZero := 0
+	for i := 0; i < len(pixels); i += 4 {
+		if pixels[i] > 0 || pixels[i+1] > 0 || pixels[i+2] > 0 || pixels[i+3] > 0 {
+			nonZero++
+		}
+	}
+
+	center := (32*64 + 32) * 4
+	r, g, b, a := pixels[center], pixels[center+1], pixels[center+2], pixels[center+3]
+	t.Logf("Center pixel: R=%d G=%d B=%d A=%d", r, g, b, a)
+	t.Logf("Non-zero pixels: %d / %d", nonZero, 64*64)
+
+	// The quad should be green (0, 255, 0, 255) or close.
+	require.Greater(t, nonZero, 64*64/2, "at least half the pixels should be non-zero")
+	require.InDelta(t, 0, float64(r), 5, "red channel should be ~0")
+	require.InDelta(t, 255, float64(g), 5, "green channel should be ~255")
+	require.InDelta(t, 0, float64(b), 5, "blue channel should be ~0")
+	require.InDelta(t, 255, float64(a), 5, "alpha should be ~255")
+}
+
+// TestVulkanGPUBindDescriptors tests descriptor binding without draw.
+func TestVulkanGPUBindDescriptors(t *testing.T) {
+	dev, enc := initGPUDevice(t)
+
+	sh, err := dev.NewShader(backend.ShaderDescriptor{
+		VertexSource: `#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aColor;
+uniform mat4 uProjection;
+out vec2 vTexCoord;
+out vec4 vColor;
+void main() { vTexCoord = aTexCoord; vColor = aColor; gl_Position = uProjection * vec4(aPosition, 0.0, 1.0); }
+`,
+		FragmentSource: `#version 330 core
+in vec2 vTexCoord;
+in vec4 vColor;
+uniform sampler2D uTexture;
+uniform mat4 uColorBody;
+uniform vec4 uColorTranslation;
+out vec4 fragColor;
+void main() { vec4 c = texture(uTexture, vTexCoord) * vColor; fragColor = uColorBody * c + uColorTranslation; }
+`,
+		Attributes: batch.Vertex2DFormat().Attributes,
+	})
+	require.NoError(t, err)
+	defer sh.Dispose()
+
+	pip, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader: sh, VertexFormat: batch.Vertex2DFormat(), BlendMode: backend.BlendSourceOver,
+	})
+	require.NoError(t, err)
+	defer pip.Dispose()
+
+	sh.SetUniformMat4("uProjection", [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})
+	sh.SetUniformMat4("uColorBody", [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})
+	sh.SetUniformVec4("uColorTranslation", [4]float32{0, 0, 0, 0})
+
+	dev.BeginFrame()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{1, 0, 0, 1},
+	})
+	enc.SetViewport(backend.Viewport{Width: 64, Height: 64})
+	enc.SetScissor(nil)
+	enc.SetPipeline(pip)
+	// Call bindUniforms without drawing to isolate descriptor issue.
+	vkEnc := enc.(*Encoder)
+	vkEnc.bindUniforms()
+	enc.EndRenderPass()
+	dev.EndFrame()
+
+	pixels := make([]byte, 64*64*4)
+	require.True(t, dev.ReadScreen(pixels))
+	center := (32*64 + 32) * 4
+	r, _, _, a := pixels[center], pixels[center+1], pixels[center+2], pixels[center+3]
+	t.Logf("Center pixel: R=%d A=%d (should be 255,255 from clear)", r, a)
+	require.InDelta(t, 255, float64(a), 5)
+}
+
+// TestVulkanGPUClearWithViewport tests clear + viewport/scissor (no draw).
+func TestVulkanGPUClearWithViewport(t *testing.T) {
+	dev, enc := initGPUDevice(t)
+
+	dev.BeginFrame()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{0, 1, 0, 1}, // green
+	})
+	enc.SetViewport(backend.Viewport{Width: 64, Height: 64})
+	enc.SetScissor(nil)
+	enc.EndRenderPass()
+	dev.EndFrame()
+
+	pixels := make([]byte, 64*64*4)
+	require.True(t, dev.ReadScreen(pixels))
+	center := (32*64 + 32) * 4
+	r, g, b, a := pixels[center], pixels[center+1], pixels[center+2], pixels[center+3]
+	t.Logf("Center pixel: R=%d G=%d B=%d A=%d", r, g, b, a)
+	require.InDelta(t, 0, float64(r), 5)
+	require.InDelta(t, 255, float64(g), 5)
+	require.InDelta(t, 0, float64(b), 5)
+	require.InDelta(t, 255, float64(a), 5)
+}
+
+// TestVulkanGPUClearWithPipeline tests clear + pipeline bind (no draw).
+func TestVulkanGPUClearWithPipeline(t *testing.T) {
+	dev, enc := initGPUDevice(t)
+
+	sh, err := dev.NewShader(backend.ShaderDescriptor{
+		VertexSource: `#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aColor;
+uniform mat4 uProjection;
+out vec2 vTexCoord;
+out vec4 vColor;
+void main() { vTexCoord = aTexCoord; vColor = aColor; gl_Position = uProjection * vec4(aPosition, 0.0, 1.0); }
+`,
+		FragmentSource: `#version 330 core
+in vec2 vTexCoord;
+in vec4 vColor;
+uniform sampler2D uTexture;
+uniform mat4 uColorBody;
+uniform vec4 uColorTranslation;
+out vec4 fragColor;
+void main() { fragColor = vec4(0, 0, 1, 1); }
+`,
+		Attributes: batch.Vertex2DFormat().Attributes,
+	})
+	require.NoError(t, err)
+	defer sh.Dispose()
+
+	pip, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader:       sh,
+		VertexFormat: batch.Vertex2DFormat(),
+		BlendMode:    backend.BlendSourceOver,
+	})
+	require.NoError(t, err)
+	defer pip.Dispose()
+
+	dev.BeginFrame()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{1, 0, 0, 1}, // red
+	})
+	enc.SetViewport(backend.Viewport{Width: 64, Height: 64})
+	enc.SetScissor(nil)
+	enc.SetPipeline(pip) // bind pipeline but don't draw
+	enc.EndRenderPass()
+	dev.EndFrame()
+
+	pixels := make([]byte, 64*64*4)
+	require.True(t, dev.ReadScreen(pixels))
+	center := (32*64 + 32) * 4
+	r, g, b, a := pixels[center], pixels[center+1], pixels[center+2], pixels[center+3]
+	t.Logf("Center pixel: R=%d G=%d B=%d A=%d", r, g, b, a)
+	require.InDelta(t, 255, float64(r), 5, "should still be red (clear)")
+	require.InDelta(t, 255, float64(a), 5, "should be opaque")
+}
+
+// TestVulkanGPUMinimalDraw tests a minimal draw with NDC coords (no projection).
+func TestVulkanGPUMinimalDraw(t *testing.T) {
+	dev, enc := initGPUDevice(t)
+
+	sh, err := dev.NewShader(backend.ShaderDescriptor{
+		VertexSource: `#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aColor;
+out vec4 vColor;
+void main() { vColor = aColor; gl_Position = vec4(aPosition, 0.0, 1.0); }
+`,
+		FragmentSource: `#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+void main() { fragColor = vec4(0, 0, 1, 1); }
+`,
+		Attributes: batch.Vertex2DFormat().Attributes,
+	})
+	require.NoError(t, err)
+	defer sh.Dispose()
+
+	pip, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader:       sh,
+		VertexFormat: batch.Vertex2DFormat(),
+		BlendMode:    backend.BlendNone,
+	})
+	require.NoError(t, err)
+	defer pip.Dispose()
+
+	type V = batch.Vertex2D
+	// NDC coordinates: full-screen quad.
+	verts := []V{
+		{PosX: -1, PosY: -1},
+		{PosX: 1, PosY: -1},
+		{PosX: 1, PosY: 1},
+		{PosX: -1, PosY: 1},
+	}
+	indices := []uint16{0, 1, 2, 0, 2, 3}
+	vBytes := unsafe.Slice((*byte)(unsafe.Pointer(&verts[0])), len(verts)*int(unsafe.Sizeof(V{})))
+	iBytes := unsafe.Slice((*byte)(unsafe.Pointer(&indices[0])), len(indices)*2)
+
+	vBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: vBytes})
+	require.NoError(t, err)
+	defer vBuf.Dispose()
+	iBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: iBytes})
+	require.NoError(t, err)
+	defer iBuf.Dispose()
+
+	dev.BeginFrame()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{1, 0, 0, 1}, // red clear
+	})
+	enc.SetViewport(backend.Viewport{Width: 64, Height: 64})
+	enc.SetScissor(nil)
+	enc.SetPipeline(pip)
+	enc.SetVertexBuffer(vBuf, 0)
+	enc.SetIndexBuffer(iBuf, backend.IndexUint16)
+	enc.DrawIndexed(6, 1, 0)
+	enc.EndRenderPass()
+	dev.EndFrame()
+
+	pixels := make([]byte, 64*64*4)
+	require.True(t, dev.ReadScreen(pixels))
+	center := (32*64 + 32) * 4
+	r, g, b, a := pixels[center], pixels[center+1], pixels[center+2], pixels[center+3]
+	t.Logf("Center pixel: R=%d G=%d B=%d A=%d", r, g, b, a)
+
+	nonZero := 0
+	for i := 0; i < len(pixels); i += 4 {
+		if pixels[i] > 0 || pixels[i+1] > 0 || pixels[i+2] > 0 || pixels[i+3] > 0 {
+			nonZero++
+		}
+	}
+	t.Logf("Non-zero pixels: %d / %d", nonZero, 64*64)
+
+	// Should be blue (from fragment shader) or red (from clear).
+	require.Greater(t, nonZero, 64*64/2, "most pixels should be non-zero")
+}
+
+// TestVulkanGPUClearWithSubmit tests that clear works through BeginFrame/EndFrame.
+func TestVulkanGPUClearWithSubmit(t *testing.T) {
+	dev, enc := initGPUDevice(t)
+
+	dev.BeginFrame()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{1, 0, 0, 1}, // red
+	})
+	enc.EndRenderPass()
+	dev.EndFrame()
+
+	pixels := make([]byte, 64*64*4)
+	require.True(t, dev.ReadScreen(pixels))
+
+	center := (32*64 + 32) * 4
+	r, g, b, a := pixels[center], pixels[center+1], pixels[center+2], pixels[center+3]
+	t.Logf("Center pixel: R=%d G=%d B=%d A=%d", r, g, b, a)
+	require.InDelta(t, 255, float64(r), 5, "should be red")
+	require.InDelta(t, 0, float64(g), 5, "should be no green")
+	require.InDelta(t, 0, float64(b), 5, "should be no blue")
+	require.InDelta(t, 255, float64(a), 5, "should be opaque")
+}

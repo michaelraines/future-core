@@ -121,21 +121,21 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 }
 
-// SetVertexBuffer binds a vertex buffer.
+// SetVertexBuffer binds a vertex buffer at the most recently uploaded offset.
 func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 	if b, ok := buf.(*Buffer); ok {
-		vk.CmdBindVertexBuffer(e.cmd, uint32(slot), b.buffer, 0)
+		vk.CmdBindVertexBuffer(e.cmd, uint32(slot), b.buffer, uint64(b.lastWriteOffset))
 	}
 }
 
-// SetIndexBuffer binds an index buffer.
+// SetIndexBuffer binds an index buffer at the most recently uploaded offset.
 func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat) {
 	if b, ok := buf.(*Buffer); ok {
 		idxType := uint32(vk.IndexTypeUint16)
 		if format == backend.IndexUint32 {
 			idxType = vk.IndexTypeUint32
 		}
-		vk.CmdBindIndexBuffer(e.cmd, b.buffer, 0, idxType)
+		vk.CmdBindIndexBuffer(e.cmd, b.buffer, uint64(b.lastWriteOffset), idxType)
 	}
 }
 
@@ -258,21 +258,40 @@ func (e *Encoder) bindUniforms() {
 		return
 	}
 
-	// Pack vertex uniforms at offset 0 of the uniform buffer.
+	// Pack vertex and fragment uniforms into the ring-buffer at increasing offsets.
+	// Each draw gets its own UBO region so deferred commands read correct data.
 	vtxBuf := e.boundShader.packUniformBuffer(e.boundShader.vertexUniformLayout)
 	vtxSize := len(vtxBuf)
-	if vtxSize > 0 {
-		dst := unsafe.Slice((*byte)(e.dev.uniformMapped), e.dev.uniformBufSize)
-		copy(dst[:vtxSize], vtxBuf)
-	}
-
-	// Pack fragment uniforms at offset uniformAlignOffset (256-byte aligned).
 	fragBuf := e.boundShader.packUniformBuffer(e.boundShader.fragmentUniformLayout)
 	fragSize := len(fragBuf)
-	if fragSize > 0 {
-		dst := unsafe.Slice((*byte)(e.dev.uniformMapped), e.dev.uniformBufSize)
-		copy(dst[uniformAlignOffset:uniformAlignOffset+fragSize], fragBuf)
+
+	// Each draw needs: vtxSize (aligned to 256) + fragSize (aligned to 256).
+	vtxAligned := (vtxSize + uniformAlignOffset - 1) &^ (uniformAlignOffset - 1)
+	if vtxAligned < uniformAlignOffset {
+		vtxAligned = uniformAlignOffset
 	}
+	fragAligned := (fragSize + uniformAlignOffset - 1) &^ (uniformAlignOffset - 1)
+	if fragAligned < uniformAlignOffset {
+		fragAligned = uniformAlignOffset
+	}
+	needed := vtxAligned + fragAligned
+
+	// Wrap if we'd overflow.
+	if e.dev.uniformCursor+needed > e.dev.uniformBufSize {
+		e.dev.uniformCursor = 0
+	}
+
+	vtxOffset := e.dev.uniformCursor
+	fragOffset := vtxOffset + vtxAligned
+
+	fullBuf := unsafe.Slice((*byte)(e.dev.uniformMapped), e.dev.uniformBufSize)
+	if vtxSize > 0 {
+		copy(fullBuf[vtxOffset:vtxOffset+vtxSize], vtxBuf)
+	}
+	if fragSize > 0 {
+		copy(fullBuf[fragOffset:fragOffset+fragSize], fragBuf)
+	}
+	e.dev.uniformCursor += needed
 
 	// Allocate a descriptor set from the pool.
 	set, err := vk.AllocateDescriptorSet(e.dev.device, e.descriptorPool, e.currentPipeline.descSetLayout)
@@ -288,17 +307,14 @@ func (e *Encoder) bindUniforms() {
 	if e.boundSampler == 0 {
 		e.boundSampler = e.dev.ensureDefaultSampler()
 	}
-	var imgInfo vk.DescriptorImageInfo
-	if e.boundTexture != nil {
-		imgInfo = vk.DescriptorImageInfo{
-			Sampler:     e.boundSampler,
-			ImageView:   e.boundTexture.view,
-			ImageLayout: vk.ImageLayoutShaderReadOnlyOptimal,
-		}
-	} else {
-		imgInfo = vk.DescriptorImageInfo{
-			Sampler: e.boundSampler,
-		}
+	tex := e.boundTexture
+	if tex == nil {
+		tex = e.dev.defaultTexture
+	}
+	imgInfo := vk.DescriptorImageInfo{
+		Sampler:     e.boundSampler,
+		ImageView:   tex.view,
+		ImageLayout: vk.ImageLayoutShaderReadOnlyOptimal,
 	}
 	writes = append(writes, vk.WriteDescriptorSet{
 		SType:           vk.StructureTypeWriteDescriptorSet,
@@ -310,13 +326,13 @@ func (e *Encoder) bindUniforms() {
 	})
 
 	// Binding 1: fragment UBO.
-	fragRange := uint64(uniformAlignOffset) // cover the full aligned region
+	fragRange := uint64(uniformAlignOffset)
 	if fragSize > 0 {
 		fragRange = uint64(fragSize)
 	}
 	fragBufInfo := vk.DescriptorBufferInfo{
 		Buffer_: e.dev.uniformBuffer,
-		Offset:  uniformAlignOffset,
+		Offset:  uint64(fragOffset),
 		Range_:  fragRange,
 	}
 	writes = append(writes, vk.WriteDescriptorSet{
@@ -335,7 +351,7 @@ func (e *Encoder) bindUniforms() {
 	}
 	vtxBufInfo := vk.DescriptorBufferInfo{
 		Buffer_: e.dev.uniformBuffer,
-		Offset:  0,
+		Offset:  uint64(vtxOffset),
 		Range_:  vtxRange,
 	}
 	writes = append(writes, vk.WriteDescriptorSet{
