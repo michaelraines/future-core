@@ -1146,6 +1146,7 @@ type XlibSurfaceCreateInfoKHR struct {
 //nolint:unused // populated dynamically
 var (
 	fnEnumerateInstanceExtensionProperties   func(pLayerName uintptr, pPropertyCount *uint32, pProperties uintptr) Result
+	fnEnumerateInstanceLayerProperties       func(pPropertyCount *uint32, pProperties uintptr) Result
 	fnCreateInstance                         func(pCreateInfo uintptr, pAllocator uintptr, pInstance *Instance) Result
 	fnDestroyInstance                        func(instance Instance, pAllocator uintptr)
 	fnEnumeratePhysicalDevices               func(instance Instance, pCount *uint32, pDevices uintptr) Result
@@ -1212,6 +1213,7 @@ var (
 	fnDestroyDescriptorSetLayout func(device Device, layout DescriptorSetLayout, pAllocator uintptr)
 	fnCreateDescriptorPool       func(device Device, pCreateInfo uintptr, pAllocator uintptr, pPool *DescriptorPool) Result
 	fnDestroyDescriptorPool      func(device Device, pool DescriptorPool, pAllocator uintptr)
+	fnResetDescriptorPool        func(device Device, pool DescriptorPool, flags uint32) Result
 	fnAllocateDescriptorSets     func(device Device, pAllocateInfo uintptr, pSets *DescriptorSet) Result
 	fnUpdateDescriptorSets       func(device Device, writeCount uint32, pWrites uintptr, copyCount uint32, pCopies uintptr)
 
@@ -1290,6 +1292,39 @@ func EnumerateInstanceExtensionProperties() ([]string, error) {
 			n++
 		}
 		names[i] = string(p.ExtensionName[:n])
+	}
+	return names, nil
+}
+
+// LayerProperties mirrors VkLayerProperties (partial).
+type LayerProperties struct {
+	LayerName [256]byte
+	// remaining fields omitted
+	_pad [260]byte //nolint:unused // specVersion, implementationVersion, description
+}
+
+// EnumerateInstanceLayerProperties returns available instance layer names.
+func EnumerateInstanceLayerProperties() ([]string, error) {
+	var count uint32
+	r := fnEnumerateInstanceLayerProperties(&count, 0)
+	if r != Success {
+		return nil, fmt.Errorf("vkEnumerateInstanceLayerProperties (count): %w", r)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	props := make([]LayerProperties, count)
+	r = fnEnumerateInstanceLayerProperties(&count, uintptr(unsafe.Pointer(&props[0])))
+	if r != Success {
+		return nil, fmt.Errorf("vkEnumerateInstanceLayerProperties: %w", r)
+	}
+	names := make([]string, count)
+	for i, p := range props[:count] {
+		n := 0
+		for n < len(p.LayerName) && p.LayerName[n] != 0 {
+			n++
+		}
+		names[i] = string(p.LayerName[:n])
 	}
 	return names, nil
 }
@@ -1785,6 +1820,12 @@ func DestroyDescriptorPool(dev Device, pool DescriptorPool) {
 	fnDestroyDescriptorPool(dev, pool, 0)
 }
 
+// ResetDescriptorPool wraps vkResetDescriptorPool. Frees all descriptor sets
+// allocated from the pool without destroying the pool itself.
+func ResetDescriptorPool(dev Device, pool DescriptorPool) {
+	fnResetDescriptorPool(dev, pool, 0)
+}
+
 // AllocateDescriptorSet wraps vkAllocateDescriptorSets for a single set.
 func AllocateDescriptorSet(dev Device, pool DescriptorPool, layout DescriptorSetLayout) (DescriptorSet, error) {
 	info := DescriptorSetAllocateInfo{
@@ -1876,6 +1917,7 @@ func Init() error {
 		name string
 	}{
 		{&fnEnumerateInstanceExtensionProperties, "vkEnumerateInstanceExtensionProperties"},
+		{&fnEnumerateInstanceLayerProperties, "vkEnumerateInstanceLayerProperties"},
 		{&fnCreateInstance, "vkCreateInstance"},
 		{&fnDestroyInstance, "vkDestroyInstance"},
 		{&fnEnumeratePhysicalDevices, "vkEnumeratePhysicalDevices"},
@@ -1974,6 +2016,7 @@ func Init() error {
 		{&fnDestroyDescriptorSetLayout, "vkDestroyDescriptorSetLayout"},
 		{&fnCreateDescriptorPool, "vkCreateDescriptorPool"},
 		{&fnDestroyDescriptorPool, "vkDestroyDescriptorPool"},
+		{&fnResetDescriptorPool, "vkResetDescriptorPool"},
 		{&fnAllocateDescriptorSets, "vkAllocateDescriptorSets"},
 		{&fnUpdateDescriptorSets, "vkUpdateDescriptorSets"},
 	} {

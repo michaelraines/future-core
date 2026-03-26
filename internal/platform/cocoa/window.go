@@ -264,9 +264,18 @@ func (w *Window) Size() (int, int) {
 }
 
 // FramebufferSize returns the framebuffer size in physical pixels.
+// When NoGL is set (Vulkan presentation), returns the logical window size to
+// match the GL path's behavior. The swapchain/CAMetalLayer handles Retina
+// upscaling automatically during presentation.
 func (w *Window) FramebufferSize() (int, int) {
 	if w.contentView == 0 {
 		return 0, 0
+	}
+	if w.noGL {
+		// Match GL path: use logical size. The presentation layer handles
+		// Retina scaling. This keeps the projection/viewport math consistent
+		// across backends.
+		return w.Size()
 	}
 	frame := objc.Send[CGRect](w.contentView, selFrame)
 	backing := objc.Send[CGRect](w.contentView, selConvertRectToBacking, frame)

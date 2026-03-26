@@ -606,6 +606,287 @@ void main() { fragColor = vec4(0, 0, 1, 1); }
 	require.Greater(t, nonZero, 64*64/2, "most pixels should be non-zero")
 }
 
+// TestVulkanGPUDrawVColorOnly tests vColor passthrough (no texture/UBO reads).
+// This isolates whether the issue is with descriptor binding or the data itself.
+func TestVulkanGPUDrawVColorOnly(t *testing.T) {
+	dev, enc := initGPUDevice(t)
+
+	// Fragment shader outputs vColor directly — doesn't read any UBOs or textures.
+	// But the descriptor set layout still has all 3 bindings (same pipeline path).
+	sh, err := dev.NewShader(backend.ShaderDescriptor{
+		VertexSource: `#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aColor;
+uniform mat4 uProjection;
+out vec4 vColor;
+void main() { vColor = aColor; gl_Position = vec4(aPosition, 0.0, 1.0); }
+`,
+		FragmentSource: `#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+void main() { fragColor = vColor; }
+`,
+		Attributes: batch.Vertex2DFormat().Attributes,
+	})
+	require.NoError(t, err)
+	defer sh.Dispose()
+
+	pip, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader: sh, VertexFormat: batch.Vertex2DFormat(), BlendMode: backend.BlendNone,
+	})
+	require.NoError(t, err)
+	defer pip.Dispose()
+
+	// Set uProjection so packUniformBuffer produces data.
+	sh.SetUniformMat4("uProjection", [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})
+
+	type V = batch.Vertex2D
+	verts := []V{
+		{PosX: -1, PosY: -1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: 1, PosY: -1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: 1, PosY: 1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: -1, PosY: 1, R: 0, G: 1, B: 0, A: 1},
+	}
+	indices := []uint16{0, 1, 2, 0, 2, 3}
+	vBytes := unsafe.Slice((*byte)(unsafe.Pointer(&verts[0])), len(verts)*int(unsafe.Sizeof(V{})))
+	iBytes := unsafe.Slice((*byte)(unsafe.Pointer(&indices[0])), len(indices)*2)
+
+	vBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: vBytes})
+	require.NoError(t, err)
+	defer vBuf.Dispose()
+	iBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: iBytes})
+	require.NoError(t, err)
+	defer iBuf.Dispose()
+
+	dev.BeginFrame()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{0, 0, 0, 1},
+	})
+	enc.SetViewport(backend.Viewport{Width: 64, Height: 64})
+	enc.SetScissor(nil)
+	enc.SetPipeline(pip)
+	enc.SetVertexBuffer(vBuf, 0)
+	enc.SetIndexBuffer(iBuf, backend.IndexUint16)
+	enc.DrawIndexed(6, 1, 0)
+	enc.EndRenderPass()
+	dev.EndFrame()
+
+	pixels := make([]byte, 64*64*4)
+	require.True(t, dev.ReadScreen(pixels))
+	center := (32*64 + 32) * 4
+	r, g, b, a := pixels[center], pixels[center+1], pixels[center+2], pixels[center+3]
+	t.Logf("Center pixel: R=%d G=%d B=%d A=%d", r, g, b, a)
+
+	// Should be green from vertex color.
+	require.InDelta(t, 0, float64(r), 5, "red should be ~0")
+	require.InDelta(t, 255, float64(g), 5, "green should be ~255")
+	require.InDelta(t, 0, float64(b), 5, "blue should be ~0")
+	require.InDelta(t, 255, float64(a), 5, "alpha should be ~255")
+}
+
+// TestVulkanGPUDrawVertexUBO tests that the vertex UBO is actually readable.
+func TestVulkanGPUDrawVertexUBO(t *testing.T) {
+	dev, enc := initGPUDevice(t)
+
+	sh, err := dev.NewShader(backend.ShaderDescriptor{
+		VertexSource: `#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aColor;
+uniform mat4 uProjection;
+out vec4 vColor;
+void main() { vColor = aColor; gl_Position = uProjection * vec4(aPosition, 0.0, 1.0); }
+`,
+		FragmentSource: `#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+void main() { fragColor = vColor; }
+`,
+		Attributes: batch.Vertex2DFormat().Attributes,
+	})
+	require.NoError(t, err)
+	defer sh.Dispose()
+
+	pip, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader: sh, VertexFormat: batch.Vertex2DFormat(), BlendMode: backend.BlendNone,
+	})
+	require.NoError(t, err)
+	defer pip.Dispose()
+
+	// Identity projection — should produce same result as no projection.
+	sh.SetUniformMat4("uProjection", [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})
+
+	type V = batch.Vertex2D
+	verts := []V{
+		{PosX: -1, PosY: -1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: 1, PosY: -1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: 1, PosY: 1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: -1, PosY: 1, R: 0, G: 1, B: 0, A: 1},
+	}
+	indices := []uint16{0, 1, 2, 0, 2, 3}
+	vBytes := unsafe.Slice((*byte)(unsafe.Pointer(&verts[0])), len(verts)*int(unsafe.Sizeof(V{})))
+	iBytes := unsafe.Slice((*byte)(unsafe.Pointer(&indices[0])), len(indices)*2)
+	vBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: vBytes})
+	require.NoError(t, err)
+	defer vBuf.Dispose()
+	iBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: iBytes})
+	require.NoError(t, err)
+	defer iBuf.Dispose()
+
+	dev.BeginFrame()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{0, 0, 0, 1},
+	})
+	enc.SetViewport(backend.Viewport{Width: 64, Height: 64})
+	enc.SetScissor(nil)
+	enc.SetPipeline(pip)
+	enc.SetVertexBuffer(vBuf, 0)
+	enc.SetIndexBuffer(iBuf, backend.IndexUint16)
+	enc.DrawIndexed(6, 1, 0)
+	enc.EndRenderPass()
+	dev.EndFrame()
+
+	pixels := make([]byte, 64*64*4)
+	require.True(t, dev.ReadScreen(pixels))
+	center := (32*64 + 32) * 4
+	r, g, b, a := pixels[center], pixels[center+1], pixels[center+2], pixels[center+3]
+	t.Logf("Center pixel: R=%d G=%d B=%d A=%d", r, g, b, a)
+	require.InDelta(t, 0, float64(r), 5)
+	require.InDelta(t, 255, float64(g), 5, "should be green if uProjection identity is read correctly")
+}
+
+// TestVulkanGPUDrawUBOOnly tests UBO reading without texture (fragColor = uColorBody * vColor).
+func TestVulkanGPUDrawUBOOnly(t *testing.T) {
+	dev, enc := initGPUDevice(t)
+
+	sh, err := dev.NewShader(backend.ShaderDescriptor{
+		VertexSource: `#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aColor;
+out vec4 vColor;
+void main() { vColor = aColor; gl_Position = vec4(aPosition, 0.0, 1.0); }
+`,
+		FragmentSource: `#version 330 core
+in vec4 vColor;
+uniform mat4 uColorBody;
+uniform vec4 uColorTranslation;
+out vec4 fragColor;
+void main() { fragColor = uColorBody * vColor + uColorTranslation; }
+`,
+		Attributes: batch.Vertex2DFormat().Attributes,
+	})
+	require.NoError(t, err)
+	defer sh.Dispose()
+
+	pip, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader: sh, VertexFormat: batch.Vertex2DFormat(), BlendMode: backend.BlendNone,
+	})
+	require.NoError(t, err)
+	defer pip.Dispose()
+
+	sh.SetUniformMat4("uColorBody", [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})
+	sh.SetUniformVec4("uColorTranslation", [4]float32{0, 0, 0, 0})
+
+	type V = batch.Vertex2D
+	verts := []V{
+		{PosX: -1, PosY: -1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: 1, PosY: -1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: 1, PosY: 1, R: 0, G: 1, B: 0, A: 1},
+		{PosX: -1, PosY: 1, R: 0, G: 1, B: 0, A: 1},
+	}
+	indices := []uint16{0, 1, 2, 0, 2, 3}
+	vBytes := unsafe.Slice((*byte)(unsafe.Pointer(&verts[0])), len(verts)*int(unsafe.Sizeof(V{})))
+	iBytes := unsafe.Slice((*byte)(unsafe.Pointer(&indices[0])), len(indices)*2)
+
+	vBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: vBytes})
+	require.NoError(t, err)
+	defer vBuf.Dispose()
+	iBuf, err := dev.NewBuffer(backend.BufferDescriptor{Data: iBytes})
+	require.NoError(t, err)
+	defer iBuf.Dispose()
+
+	dev.BeginFrame()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{0, 0, 0, 1},
+	})
+	enc.SetViewport(backend.Viewport{Width: 64, Height: 64})
+	enc.SetScissor(nil)
+	enc.SetPipeline(pip)
+
+	// Verify fragment layout was populated by compile().
+	vkSh := sh.(*Shader)
+	t.Logf("Fragment uniform layout after compile: %+v", vkSh.fragmentUniformLayout)
+	t.Logf("Uniforms map: %v", vkSh.uniforms)
+
+	enc.SetVertexBuffer(vBuf, 0)
+	enc.SetIndexBuffer(iBuf, backend.IndexUint16)
+	enc.DrawIndexed(6, 1, 0)
+	enc.EndRenderPass()
+	dev.EndFrame()
+
+	pixels := make([]byte, 64*64*4)
+	require.True(t, dev.ReadScreen(pixels))
+	center := (32*64 + 32) * 4
+	r, g, b, a := pixels[center], pixels[center+1], pixels[center+2], pixels[center+3]
+	t.Logf("Center pixel: R=%d G=%d B=%d A=%d", r, g, b, a)
+	require.InDelta(t, 0, float64(r), 5, "red should be ~0")
+	require.InDelta(t, 255, float64(g), 5, "green should be ~255")
+}
+
+// TestVulkanGPUUBODataVerify checks that uniform data is actually written to the buffer.
+func TestVulkanGPUUBODataVerify(t *testing.T) {
+	dev, _ := initGPUDevice(t)
+
+	sh, err := dev.NewShader(backend.ShaderDescriptor{
+		FragmentSource: `#version 330 core
+uniform mat4 uColorBody;
+uniform vec4 uColorTranslation;
+out vec4 fragColor;
+void main() { fragColor = uColorBody[0]; }
+`,
+		Attributes: batch.Vertex2DFormat().Attributes,
+	})
+	require.NoError(t, err)
+
+	// Set identity matrix.
+	identity := [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}
+	sh.SetUniformMat4("uColorBody", identity)
+	sh.SetUniformVec4("uColorTranslation", [4]float32{0, 0, 0, 0})
+
+	// Pack the fragment UBO.
+	vkSh := sh.(*Shader)
+	t.Logf("Fragment layout: %+v", vkSh.fragmentUniformLayout)
+	buf := vkSh.packUniformBuffer(vkSh.fragmentUniformLayout)
+	t.Logf("Packed UBO (%d bytes): first 16 bytes = %v", len(buf), buf[:min(16, len(buf))])
+
+	// Verify the first 4 bytes are float32(1.0) = 0x3F800000.
+	if len(buf) >= 4 {
+		val := uint32(buf[0]) | uint32(buf[1])<<8 | uint32(buf[2])<<16 | uint32(buf[3])<<24
+		t.Logf("First float32 value: 0x%08X (expected 0x3F800000 = 1.0)", val)
+		require.Equal(t, uint32(0x3F800000), val, "first float should be 1.0")
+	}
+
+	// Write to uniform buffer and verify the mapped memory.
+	if dev.uniformMapped != nil && len(buf) > 0 {
+		dst := unsafe.Slice((*byte)(dev.uniformMapped), dev.uniformBufSize)
+		copy(dst[:len(buf)], buf)
+
+		// Read back immediately.
+		readback := make([]byte, len(buf))
+		src := unsafe.Slice((*byte)(dev.uniformMapped), dev.uniformBufSize)
+		copy(readback, src[:len(buf)])
+		t.Logf("Readback first 16 bytes: %v", readback[:min(16, len(readback))])
+		require.Equal(t, buf, readback, "mapped memory should match written data")
+	}
+
+	sh.Dispose()
+}
+
 // TestVulkanGPUClearWithSubmit tests that clear works through BeginFrame/EndFrame.
 func TestVulkanGPUClearWithSubmit(t *testing.T) {
 	dev, enc := initGPUDevice(t)

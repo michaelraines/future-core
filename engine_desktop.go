@@ -260,7 +260,9 @@ func (e *engine) run() error {
 	// whether the window needs an OpenGL context.
 	preferred := preferredBackends()
 	resolvedName := resolveBackendName(backendName(), preferred)
-	needsNoGL := resolvedName == "vulkan" || resolvedName == "metal" || resolvedName == "dx12"
+	// Only Vulkan has its own swapchain presentation. Metal and DX12 still
+	// use the GL presenter (soft-delegation → ReadScreen → GL blit).
+	needsNoGL := resolvedName == "vulkan"
 	e.noGL = needsNoGL
 
 	// Create platform window (selected per OS via build tags).

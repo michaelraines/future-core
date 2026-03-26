@@ -246,7 +246,17 @@ func (s *Shader) SetUniformVec2(name string, v [2]float32) { s.uniforms[name] = 
 func (s *Shader) SetUniformVec4(name string, v [4]float32) { s.uniforms[name] = v }
 
 // SetUniformMat4 records a mat4 uniform.
-func (s *Shader) SetUniformMat4(name string, v [16]float32) { s.uniforms[name] = v }
+// For the projection matrix, negates row 1 (Y) to account for Vulkan's Y-down
+// clip space vs OpenGL's Y-up.
+func (s *Shader) SetUniformMat4(name string, v [16]float32) {
+	if name == "uProjection" {
+		v[1] = -v[1]
+		v[5] = -v[5]
+		v[9] = -v[9]
+		v[13] = -v[13]
+	}
+	s.uniforms[name] = v
+}
 
 // SetUniformInt records an int uniform.
 func (s *Shader) SetUniformInt(name string, v int32) { s.uniforms[name] = v }

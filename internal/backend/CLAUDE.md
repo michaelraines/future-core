@@ -179,6 +179,25 @@ API-specific values are already defined and tested.
 - **Don't modify `conformance/` golden images** unless the soft rasterizer
   itself changes. All backends must produce identical output.
 
+## Vulkan GPU Development Gotchas
+
+- **Descriptor pool lifetime**: Pools must survive until `BeginFrame`'s fence
+  wait confirms the GPU finished. Use `vkResetDescriptorPool` (not destroy)
+  for performance.
+- **Buffer ring-buffers**: Vertex, index, and uniform buffers use persistently
+  mapped memory with ring-buffer write cursors. Each `Upload` appends at an
+  increasing offset; `SetVertexBuffer`/`SetIndexBuffer` bind at `lastWriteOffset`.
+- **UBO alignment**: Descriptor buffer offsets must be multiples of 256
+  (`uniformAlignOffset`). Use the full aligned range in descriptor writes.
+- **Y-flip**: Vulkan Y-down vs OpenGL Y-up. The Vulkan `SetUniformMat4`
+  negates row 1 of `uProjection` (column-major indices 1, 5, 9, 13).
+- **Cocoa NoGL path**: `FramebufferSize()` returns logical (not physical)
+  size to match GL behavior. Don't set `contentsScale` on the CAMetalLayer.
+- **Struct sizes**: All Vulkan FFI structs verified against C equivalents in
+  `internal/vk/vk_test.go`. Run `TestStructSizes` after adding new structs.
+- **Swapchain format**: MoltenVK typically offers B8G8R8A8. Vulkan handles
+  the RGBA→BGRA mapping in hardware — no shader swizzle needed.
+
 ## Coverage Requirements
 
 - Minimum: 80% (CI-enforced via `make cover-check`)
