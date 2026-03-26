@@ -327,9 +327,22 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
 - **Don't request Vulkan extensions without checking availability** — on macOS
   (MoltenVK), `VK_KHR_portability_enumeration` may not be present. Always use
   `vk.EnumerateInstanceExtensionProperties()` to check before requesting.
-- **Known test failures**: Vulkan GPU conformance tests SIGSEGV in
-  `CreateGraphicsPipelines` (struct layout issue), and WebGPU tests fail
-  without `libwgpu_native.dylib` installed. These are pre-existing.
+- **Vulkan deferred execution** — unlike OpenGL/soft where draws execute
+  immediately, Vulkan records into command buffers. Vertex/index/uniform
+  buffers must use ring-buffer offsets so each draw references distinct data.
+  Overwriting a buffer between recording and submission corrupts all draws.
+- **Vulkan descriptor pools must outlive GPU execution** — don't destroy/reset
+  the pool in `EndRenderPass`. Defer to `BeginFrame` (after fence wait).
+  Destroying early causes the GPU to read freed descriptors (zeros).
+- **Never leave debug code in `bindUniforms`** — filling the UBO with identity
+  matrices or debug patterns overwrites actual uniform data every frame.
+- **Only Vulkan uses `NoGL`** — Metal and DX12 still use the GL presenter
+  (soft-delegation → ReadScreen → GL blit). Setting `needsNoGL` for non-Vulkan
+  backends breaks their display path.
+- **Always use `scripts/visual-test.sh`** for rendering validation, not
+  `go run` directly. The script handles headless capture via env vars.
+- **Known test failures**: WebGPU tests fail without `libwgpu_native.dylib`
+  installed. This is pre-existing.
 - **Use `make build` not `go build ./...`** — the repo has CGo GLFW source
   files that require build tag filtering handled by the Makefile.
 

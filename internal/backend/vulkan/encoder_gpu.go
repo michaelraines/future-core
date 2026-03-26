@@ -288,18 +288,6 @@ func (e *Encoder) bindUniforms() {
 	fragOffset := vtxOffset + vtxAligned
 
 	fullBuf := unsafe.Slice((*byte)(e.dev.uniformMapped), e.dev.uniformBufSize)
-
-	// DEBUG: Fill the entire UBO with identity matrices so any offset reads valid data.
-	identity := [64]byte{
-		0x00, 0x00, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // col0: (1,0,0,0)
-		0, 0, 0, 0, 0x00, 0x00, 0x80, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, // col1: (0,1,0,0)
-		0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x80, 0x3F, 0, 0, 0, 0, // col2: (0,0,1,0)
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x80, 0x3F, // col3: (0,0,0,1)
-	}
-	for off := 0; off+64 <= e.dev.uniformBufSize; off += 64 {
-		copy(fullBuf[off:off+64], identity[:])
-	}
-
 	if vtxSize > 0 {
 		copy(fullBuf[vtxOffset:vtxOffset+vtxSize], vtxBuf)
 	}
