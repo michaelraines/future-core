@@ -118,10 +118,10 @@ func initGLFWAPI() error {
 	// Vulkan surface creation via GLFW.
 	fnGlfwCreateWindowSurface = func(instance uintptr, window uintptr, allocator uintptr, surface *uintptr) int32 {
 		return int32(C.glfwCreateWindowSurface(
-			(C.VkInstance)(instance),                              //nolint:govet // CGo interop
-			(*C.GLFWwindow)(unsafe.Pointer(window)),               //nolint:govet // CGo interop
-			(*C.VkAllocationCallbacks)(unsafe.Pointer(allocator)), //nolint:govet // CGo interop
-			(*C.VkSurfaceKHR)(unsafe.Pointer(surface)),            //nolint:govet // CGo interop
+			(C.VkInstance)(unsafe.Pointer(instance)),   //nolint:govet // CGo interop: VkInstance is void*
+			(*C.GLFWwindow)(unsafe.Pointer(window)),    //nolint:govet // CGo interop
+			unsafe.Pointer(allocator),                  //nolint:govet // CGo interop: VkAllocationCallbacks is incomplete type
+			(*C.VkSurfaceKHR)(unsafe.Pointer(surface)), //nolint:govet // CGo interop
 		))
 	}
 
