@@ -49,13 +49,19 @@ func (rt *mockRenderTarget) Dispose()                      { rt.disposed = true 
 type mockDevice struct {
 	textures      []*mockTexture
 	renderTargets []*mockRenderTarget
+	readScreenFn  func([]byte) bool
 }
 
 func (d *mockDevice) Init(_ backend.DeviceConfig) error { return nil }
 func (d *mockDevice) Dispose()                          {}
-func (d *mockDevice) ReadScreen(_ []byte) bool          { return false }
-func (d *mockDevice) BeginFrame()                       {}
-func (d *mockDevice) EndFrame()                         {}
+func (d *mockDevice) ReadScreen(pixels []byte) bool {
+	if d.readScreenFn != nil {
+		return d.readScreenFn(pixels)
+	}
+	return false
+}
+func (d *mockDevice) BeginFrame() {}
+func (d *mockDevice) EndFrame()   {}
 func (d *mockDevice) NewTexture(desc backend.TextureDescriptor) (backend.Texture, error) {
 	t := &mockTexture{w: desc.Width, h: desc.Height, fmt: desc.Format}
 	d.textures = append(d.textures, t)
