@@ -11,9 +11,9 @@ package metal
 import (
 	"fmt"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/backend/soft"
-	"github.com/michaelraines/future-render/internal/backend/softdelegate"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend/soft"
+	"github.com/michaelraines/future-core/internal/backend/softdelegate"
 )
 
 // Device implements backend.Device for Metal.

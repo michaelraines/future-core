@@ -8,7 +8,7 @@ package main
 import (
 	"log"
 
-	futurerender "github.com/michaelraines/future-render"
+	futurerender "github.com/michaelraines/future-core"
 )
 
 type clearGame struct{}

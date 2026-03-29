@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 // Vertex2D represents a single vertex in a 2D draw call.

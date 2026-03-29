@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/gl"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/gl"
 )
 
 // Device implements backend.Device for OpenGL 3.3 core profile.

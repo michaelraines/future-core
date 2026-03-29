@@ -103,7 +103,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/michaelraines/future-render
+        - github.com/michaelraines/future-core
 
 issues:
   max-issues-per-linter: 0

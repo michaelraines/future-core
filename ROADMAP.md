@@ -288,7 +288,7 @@ Goal: remaining Ebitengine 2D feature parity.
 | High-DPI / device scale factor | Done | Already working from M3 |
 | Multiple windows (stretch goal) | Deferred | Phase 2 |
 | Context loss recovery (mobile/web) | Done | `ResourceTracker` with command replay for textures and shaders |
-| `FUTURE_RENDER_BACKEND` env var selection | Done | `Backend()` reads FUTURE_RENDER_BACKEND, defaults to "auto" |
+| `FUTURE_CORE_BACKEND` env var selection | Done | `Backend()` reads FUTURE_CORE_BACKEND, defaults to "auto" |
 | Vsync toggle at runtime | Done | `SetVsyncEnabled`/`IsVsyncEnabled` already in M3 |
 | `Image.Clear()` | Done | Fills with transparent black |
 
@@ -300,7 +300,7 @@ image FBOs created alongside textures. Batcher sorts by TargetID first, then
 sprite pass iterates render target groups with BeginRenderPass/EndRenderPass
 per target. ReadPixels via `glGetTexImage` in OpenGL backend. ColorM wired to
 fragment shader via `uColorBody` (mat4) and `uColorTranslation` (vec4) uniforms
-set per-batch. SetScreenClearedEveryFrame as atomic bool. FUTURE_RENDER_BACKEND
+set per-batch. SetScreenClearedEveryFrame as atomic bool. FUTURE_CORE_BACKEND
 env var for backend selection. `ResourceTracker` for context loss recovery:
 Godot-inspired command replay records texture/shader creation parameters and
 replays them against a new Device after context loss. Coverage: root 94.5%,
@@ -328,7 +328,7 @@ suite before it is considered complete.
 | Golden-image snapshot tests (`internal/backend/conformance/`) | Done | 10 reference scenes with PNG golden images; per-pixel RGBA tolerance comparison; diff artifact generation on failure; auto-generates goldens on first run |
 | CPU rasterizer (`internal/backend/soft/rasterizer.go`) | Done | Half-space triangle rasterization, vertex transform (MVP), barycentric interpolation, nearest/linear texture sampling, 5 blend modes, depth test, scissor, color matrix |
 | Software rasterizer (`internal/backend/soft/`) | Done | Pure Go, CPU-only Device impl; headless CI, auto-registers as "soft" backend |
-| `FUTURE_RENDER_BACKEND` env var expansion | Done | Accept `opengl`, `webgl`, `vulkan`, `metal`, `webgpu`, `dx12`, `soft`, `auto` |
+| `FUTURE_CORE_BACKEND` env var expansion | Done | Accept `opengl`, `webgl`, `vulkan`, `metal`, `webgpu`, `dx12`, `soft`, `auto` |
 | Backend registry + factory | Done | `internal/backend/registry.go` — `Register(name, factory)`, `Create(name) (Device, error)`; build tags control compiled backends |
 
 ### 9b — WebGL2 Backend (Done)

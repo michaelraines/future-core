@@ -3,8 +3,8 @@
 package dx12
 
 import (
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/d3d12"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/d3d12"
 )
 
 // RenderTarget implements backend.RenderTarget for DX12.

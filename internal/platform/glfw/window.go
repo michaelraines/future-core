@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/platform"
+	"github.com/michaelraines/future-core/internal/platform"
 )
 
 func init() {

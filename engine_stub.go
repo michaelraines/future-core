@@ -5,7 +5,7 @@ package futurerender
 import (
 	"errors"
 
-	"github.com/michaelraines/future-render/internal/input"
+	"github.com/michaelraines/future-core/internal/input"
 )
 
 type engine struct {

@@ -3,8 +3,8 @@
 package futurerender
 
 import (
-	"github.com/michaelraines/future-render/internal/platform"
-	"github.com/michaelraines/future-render/internal/platform/win32"
+	"github.com/michaelraines/future-core/internal/platform"
+	"github.com/michaelraines/future-core/internal/platform/win32"
 )
 
 // newPlatformWindow creates the native Win32 window (no GLFW needed).

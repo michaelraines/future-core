@@ -2,7 +2,7 @@
 
 package vulkan
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // RenderTarget implements backend.RenderTarget for Vulkan.
 // Models a VkFramebuffer + VkRenderPass pair.

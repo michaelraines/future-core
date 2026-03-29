@@ -2,7 +2,7 @@
 
 package webgl
 
-import "github.com/michaelraines/future-render/internal/backend/softdelegate"
+import "github.com/michaelraines/future-core/internal/backend/softdelegate"
 
 // Encoder implements backend.CommandEncoder for WebGL2.
 // Delegates all commands to the soft rasterizer via the embedded

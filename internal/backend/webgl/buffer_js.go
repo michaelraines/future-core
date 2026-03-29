@@ -5,7 +5,7 @@ package webgl
 import (
 	"syscall/js"
 
-	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 // Buffer implements backend.Buffer for WebGL2.

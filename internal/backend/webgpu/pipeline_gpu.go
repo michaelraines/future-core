@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/wgpu"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/wgpu"
 )
 
 // Pipeline implements backend.Pipeline for WebGPU.

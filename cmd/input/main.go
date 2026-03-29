@@ -10,9 +10,9 @@ import (
 	"log"
 	"strings"
 
-	futurerender "github.com/michaelraines/future-render"
-	fmath "github.com/michaelraines/future-render/math"
-	"github.com/michaelraines/future-render/text"
+	futurerender "github.com/michaelraines/future-core"
+	fmath "github.com/michaelraines/future-core/math"
+	"github.com/michaelraines/future-core/text"
 	"golang.org/x/image/font/gofont/goregular"
 )
 

@@ -2,7 +2,7 @@
 
 package webgpu
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Buffer implements backend.Buffer for WebGPU.
 // Models a GPUBuffer object.

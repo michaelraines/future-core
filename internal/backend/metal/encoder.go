@@ -2,7 +2,7 @@
 
 package metal
 
-import "github.com/michaelraines/future-render/internal/backend/softdelegate"
+import "github.com/michaelraines/future-core/internal/backend/softdelegate"
 
 // Encoder implements backend.CommandEncoder for Metal.
 // Models an MTLRenderCommandEncoder. Delegates all commands to the

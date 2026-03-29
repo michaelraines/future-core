@@ -2,7 +2,7 @@
 
 package webgl
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Buffer implements backend.Buffer for WebGL2.
 // Wraps a soft.Buffer and adds the WebGL2 buffer target.

@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/backend/conformance"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend/conformance"
 )
 
 func newTestDevice(t *testing.T) (*Device, backend.CommandEncoder) {

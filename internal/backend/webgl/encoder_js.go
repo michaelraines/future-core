@@ -5,7 +5,7 @@ package webgl
 import (
 	"syscall/js"
 
-	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 // Encoder implements backend.CommandEncoder for WebGL2 using syscall/js.

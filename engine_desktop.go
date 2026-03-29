@@ -9,21 +9,21 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/batch"
-	"github.com/michaelraines/future-render/internal/gl"
-	"github.com/michaelraines/future-render/internal/input"
-	"github.com/michaelraines/future-render/internal/pipeline"
-	"github.com/michaelraines/future-render/internal/platform"
-	fmath "github.com/michaelraines/future-render/math"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/batch"
+	"github.com/michaelraines/future-core/internal/gl"
+	"github.com/michaelraines/future-core/internal/input"
+	"github.com/michaelraines/future-core/internal/pipeline"
+	"github.com/michaelraines/future-core/internal/platform"
+	fmath "github.com/michaelraines/future-core/math"
 
 	// Register backends so they are available for selection.
-	_ "github.com/michaelraines/future-render/internal/backend/dx12"
-	_ "github.com/michaelraines/future-render/internal/backend/metal"
-	_ "github.com/michaelraines/future-render/internal/backend/opengl"
-	_ "github.com/michaelraines/future-render/internal/backend/soft"
-	_ "github.com/michaelraines/future-render/internal/backend/vulkan"
-	_ "github.com/michaelraines/future-render/internal/backend/webgpu"
+	_ "github.com/michaelraines/future-core/internal/backend/dx12"
+	_ "github.com/michaelraines/future-core/internal/backend/metal"
+	_ "github.com/michaelraines/future-core/internal/backend/opengl"
+	_ "github.com/michaelraines/future-core/internal/backend/soft"
+	_ "github.com/michaelraines/future-core/internal/backend/vulkan"
+	_ "github.com/michaelraines/future-core/internal/backend/webgpu"
 )
 
 const (

@@ -5,9 +5,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/batch"
-	"github.com/michaelraines/future-render/internal/shaderir"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/batch"
+	"github.com/michaelraines/future-core/internal/shaderir"
 )
 
 // ResourceTracker records GPU resource creation commands so that all

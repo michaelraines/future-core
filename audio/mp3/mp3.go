@@ -15,7 +15,7 @@ import (
 
 	gomp3 "github.com/hajimehoshi/go-mp3"
 
-	"github.com/michaelraines/future-render/audio/internal/pcm"
+	"github.com/michaelraines/future-core/audio/internal/pcm"
 )
 
 // Stream is a decoded MP3 audio stream. It provides signed 16-bit

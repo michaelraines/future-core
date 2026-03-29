@@ -2,7 +2,7 @@
 
 package dx12
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // RenderTarget implements backend.RenderTarget for DirectX 12.
 // Models RTV (render target view) and DSV (depth stencil view) descriptors.

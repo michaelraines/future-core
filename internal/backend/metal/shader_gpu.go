@@ -8,9 +8,9 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/mtl"
-	"github.com/michaelraines/future-render/internal/shadertranslate"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/mtl"
+	"github.com/michaelraines/future-core/internal/shadertranslate"
 )
 
 // Shader implements backend.Shader for Metal.

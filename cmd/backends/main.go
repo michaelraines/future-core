@@ -12,15 +12,15 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend"
 
 	// Import all backends so their init() functions register them.
-	_ "github.com/michaelraines/future-render/internal/backend/dx12"
-	_ "github.com/michaelraines/future-render/internal/backend/metal"
-	_ "github.com/michaelraines/future-render/internal/backend/soft"
-	_ "github.com/michaelraines/future-render/internal/backend/vulkan"
-	_ "github.com/michaelraines/future-render/internal/backend/webgl"
-	_ "github.com/michaelraines/future-render/internal/backend/webgpu"
+	_ "github.com/michaelraines/future-core/internal/backend/dx12"
+	_ "github.com/michaelraines/future-core/internal/backend/metal"
+	_ "github.com/michaelraines/future-core/internal/backend/soft"
+	_ "github.com/michaelraines/future-core/internal/backend/vulkan"
+	_ "github.com/michaelraines/future-core/internal/backend/webgl"
+	_ "github.com/michaelraines/future-core/internal/backend/webgpu"
 )
 
 func main() {

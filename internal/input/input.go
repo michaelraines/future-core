@@ -3,7 +3,7 @@
 package input
 
 import (
-	"github.com/michaelraines/future-render/internal/platform"
+	"github.com/michaelraines/future-core/internal/platform"
 )
 
 // State tracks the current and previous frame's input state.

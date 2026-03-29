@@ -29,7 +29,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 // Tolerance is the maximum per-channel difference allowed between actual

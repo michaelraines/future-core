@@ -7,8 +7,8 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/vk"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/vk"
 )
 
 // Pipeline implements backend.Pipeline for Vulkan with a real VkPipeline.

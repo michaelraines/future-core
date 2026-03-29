@@ -1,6 +1,6 @@
 package soft
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // RenderTarget implements backend.RenderTarget with CPU-side textures.
 type RenderTarget struct {

@@ -9,9 +9,9 @@ import (
 	"regexp"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/shaderc"
-	"github.com/michaelraines/future-render/internal/vk"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/shaderc"
+	"github.com/michaelraines/future-core/internal/vk"
 )
 
 // uniformField describes a uniform variable's layout in a packed buffer.

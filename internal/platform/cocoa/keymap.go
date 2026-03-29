@@ -2,7 +2,7 @@
 
 package cocoa
 
-import "github.com/michaelraines/future-render/internal/platform"
+import "github.com/michaelraines/future-core/internal/platform"
 
 // macOS virtual key codes → platform.Key.
 // Reference: Events.h (Carbon) / HIToolbox/Events.h

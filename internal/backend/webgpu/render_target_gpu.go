@@ -2,7 +2,7 @@
 
 package webgpu
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // RenderTarget implements backend.RenderTarget for WebGPU.
 type RenderTarget struct {

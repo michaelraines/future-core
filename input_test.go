@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/michaelraines/future-render/internal/input"
-	"github.com/michaelraines/future-render/internal/platform"
+	"github.com/michaelraines/future-core/internal/input"
+	"github.com/michaelraines/future-core/internal/platform"
 )
 
 // withNilEngine is defined in engine_test.go.

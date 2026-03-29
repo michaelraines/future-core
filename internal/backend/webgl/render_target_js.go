@@ -5,7 +5,7 @@ package webgl
 import (
 	"syscall/js"
 
-	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 // RenderTarget implements backend.RenderTarget for WebGL2.

@@ -8,9 +8,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/batch"
-	fmath "github.com/michaelraines/future-render/math"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/batch"
+	fmath "github.com/michaelraines/future-core/math"
 )
 
 // --- Mock device for testing GPU texture lifecycle ---

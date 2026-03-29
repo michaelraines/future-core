@@ -2,7 +2,7 @@
 
 package vulkan
 
-import "github.com/michaelraines/future-render/internal/backend/softdelegate"
+import "github.com/michaelraines/future-core/internal/backend/softdelegate"
 
 // Encoder implements backend.CommandEncoder for Vulkan.
 // Models a VkCommandBuffer recording. Delegates all commands to the

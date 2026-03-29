@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/image/font/gofont/goregular"
 
-	futurerender "github.com/michaelraines/future-render"
-	fmath "github.com/michaelraines/future-render/math"
+	futurerender "github.com/michaelraines/future-core"
+	fmath "github.com/michaelraines/future-core/math"
 )
 
 func cleanupAtlases(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/wgpu"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/wgpu"
 )
 
 // Device implements backend.Device for WebGPU via wgpu-native.

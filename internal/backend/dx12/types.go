@@ -1,6 +1,6 @@
 package dx12
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // DXGI_FORMAT equivalents.
 const (

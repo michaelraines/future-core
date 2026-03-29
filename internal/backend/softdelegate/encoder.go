@@ -1,6 +1,6 @@
 package softdelegate
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Compile-time assertion that Encoder implements backend.CommandEncoder.
 var _ backend.CommandEncoder = (*Encoder)(nil)

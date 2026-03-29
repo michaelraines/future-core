@@ -1,6 +1,6 @@
 package webgl
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // WebGL2 constant equivalents. These mirror the real WebGL2 GLenum values
 // that a syscall/js implementation would use.

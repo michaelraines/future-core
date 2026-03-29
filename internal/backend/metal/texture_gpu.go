@@ -5,8 +5,8 @@ package metal
 import (
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/mtl"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/mtl"
 )
 
 // Texture implements backend.Texture for Metal via MTLTexture.

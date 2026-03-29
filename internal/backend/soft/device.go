@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 var nextID uint64

@@ -41,7 +41,7 @@ communication uses interfaces, not concrete types.
 ### Package Structure
 
 ```
-future-render/
+future-core/
 ├── engine.go               # Public Game interface, RunGame(), global state
 ├── image.go                # Public Image type, DrawImage, DrawTriangles
 ├── input.go                # Public input query API
@@ -145,7 +145,7 @@ soft-delegation fallback (compiled in CI or with `-tags soft`). See
 Selection is compile-time via OS-based build constraints and runtime via
 environment variable:
 ```
-FUTURE_RENDER_BACKEND=opengl|webgl|vulkan|metal|webgpu|dx12|soft|auto
+FUTURE_CORE_BACKEND=opengl|webgl|vulkan|metal|webgpu|dx12|soft|auto
 ```
 
 The `backend.Create(name)` function looks up the named factory in the registry.
@@ -153,7 +153,7 @@ The `backend.Create(name)` function looks up the named factory in the registry.
 
 ### Auto-Detection
 
-When `FUTURE_RENDER_BACKEND=auto` (the default), `backend.Resolve` iterates a
+When `FUTURE_CORE_BACKEND=auto` (the default), `backend.Resolve` iterates a
 platform-specific preference list and returns the first registered backend:
 
 | Platform | Preference Order |

@@ -13,11 +13,11 @@ import (
 	"log"
 	"math"
 
-	futurerender "github.com/michaelraines/future-render"
-	"github.com/michaelraines/future-render/audio"
-	"github.com/michaelraines/future-render/audio/wav"
-	fmath "github.com/michaelraines/future-render/math"
-	"github.com/michaelraines/future-render/text"
+	futurerender "github.com/michaelraines/future-core"
+	"github.com/michaelraines/future-core/audio"
+	"github.com/michaelraines/future-core/audio/wav"
+	fmath "github.com/michaelraines/future-core/math"
+	"github.com/michaelraines/future-core/text"
 	"golang.org/x/image/font/gofont/goregular"
 )
 

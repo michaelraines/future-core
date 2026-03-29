@@ -2,7 +2,7 @@
 
 package vulkan
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Buffer implements backend.Buffer for Vulkan.
 // Models a VkBuffer + VkDeviceMemory pair.

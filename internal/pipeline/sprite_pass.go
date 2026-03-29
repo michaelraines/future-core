@@ -3,8 +3,8 @@ package pipeline
 import (
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/batch"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/batch"
 )
 
 // TextureResolver maps a batcher texture ID to a backend.Texture.

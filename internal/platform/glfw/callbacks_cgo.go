@@ -40,7 +40,7 @@ import "C"
 import (
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/platform"
+	"github.com/michaelraines/future-core/internal/platform"
 )
 
 //export goGLFWKeyCallback

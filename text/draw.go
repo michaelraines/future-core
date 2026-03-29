@@ -5,8 +5,8 @@ import (
 	"sync"
 	"unicode"
 
-	futurerender "github.com/michaelraines/future-render"
-	fmath "github.com/michaelraines/future-render/math"
+	futurerender "github.com/michaelraines/future-core"
+	fmath "github.com/michaelraines/future-core/math"
 )
 
 // Align specifies horizontal text alignment.

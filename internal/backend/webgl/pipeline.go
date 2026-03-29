@@ -2,7 +2,7 @@
 
 package webgl
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Pipeline implements backend.Pipeline for WebGL2.
 // In WebGL2, pipeline state is set imperatively (glEnable, glBlendFunc, etc.)

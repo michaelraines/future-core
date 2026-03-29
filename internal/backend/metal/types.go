@@ -1,6 +1,6 @@
 package metal
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // MTLPixelFormat equivalents.
 const (

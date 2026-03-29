@@ -2,7 +2,7 @@
 
 package dx12
 
-import "github.com/michaelraines/future-render/internal/backend/softdelegate"
+import "github.com/michaelraines/future-core/internal/backend/softdelegate"
 
 // Encoder implements backend.CommandEncoder for DirectX 12.
 // Models an ID3D12GraphicsCommandList. Delegates all commands to the

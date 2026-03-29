@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/michaelraines/future-render/internal/platform"
+	"github.com/michaelraines/future-core/internal/platform"
 )
 
 func TestNew(t *testing.T) {

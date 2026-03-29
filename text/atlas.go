@@ -1,8 +1,8 @@
 package text
 
 import (
-	futurerender "github.com/michaelraines/future-render"
-	fmath "github.com/michaelraines/future-render/math"
+	futurerender "github.com/michaelraines/future-core"
+	fmath "github.com/michaelraines/future-core/math"
 )
 
 const (

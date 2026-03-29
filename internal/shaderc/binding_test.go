@@ -59,7 +59,9 @@ func dumpBindings(spv []byte) {
 	for i < len(words) {
 		op := words[i] & 0xFFFF
 		wc := words[i] >> 16
-		if wc == 0 { break }
+		if wc == 0 {
+			break
+		}
 		if op == 5 && wc >= 3 {
 			id := words[i+1]
 			var bs []byte
@@ -67,7 +69,9 @@ func dumpBindings(spv []byte) {
 				b := words[w]
 				for shift := 0; shift < 32; shift += 8 {
 					c := byte(b >> shift)
-					if c == 0 { goto done }
+					if c == 0 {
+						goto done
+					}
 					bs = append(bs, c)
 				}
 			}
@@ -80,12 +84,16 @@ func dumpBindings(spv []byte) {
 			val := words[i+3]
 			dn := ""
 			switch dec {
-			case 33: dn = "Binding"
-			case 34: dn = "DescriptorSet"
+			case 33:
+				dn = "Binding"
+			case 34:
+				dn = "DescriptorSet"
 			}
 			if dn != "" {
 				name := names[id]
-				if name == "" { name = fmt.Sprintf("%%id%d", id) }
+				if name == "" {
+					name = fmt.Sprintf("%%id%d", id)
+				}
 				fmt.Printf("  %s: %s = %d\n", name, dn, val)
 			}
 		}

@@ -2,7 +2,7 @@
 
 package webgl
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // RenderTarget implements backend.RenderTarget for WebGL2.
 // Wraps a soft.RenderTarget, representing a WebGL2 framebuffer object (FBO).

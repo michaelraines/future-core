@@ -2,7 +2,7 @@
 
 package metal
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Texture implements backend.Texture for Metal.
 // Models an MTLTexture object.

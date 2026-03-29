@@ -59,8 +59,8 @@ backend init, render loop, frame capture). On headless Linux environments
 Screenshots are saved to `testdata/visual/<mode>_<example>.png` (gitignored).
 
 **How it works**: the engine supports headless capture via environment variables:
-- `FUTURE_RENDER_HEADLESS=N` — capture after N frames and exit
-- `FUTURE_RENDER_HEADLESS_OUTPUT=path.png` — output file path
+- `FUTURE_CORE_HEADLESS=N` — capture after N frames and exit
+- `FUTURE_CORE_HEADLESS_OUTPUT=path.png` — output file path
 
 GPU mode needs ~60 frames for macOS OpenGL context initialization;
 soft mode works with fewer frames. The script defaults to 60.
@@ -153,7 +153,7 @@ development guidance.
 
 All backends self-register via `init()` in their `register.go` files using
 `backend.Register(name, factory)`. The engine selects a backend via the
-`FUTURE_RENDER_BACKEND` env var (values: `opengl`, `webgl`, `vulkan`,
+`FUTURE_CORE_BACKEND` env var (values: `opengl`, `webgl`, `vulkan`,
 `metal`, `webgpu`, `dx12`, `soft`, `auto`).
 
 ### Soft-Delegation Pattern
