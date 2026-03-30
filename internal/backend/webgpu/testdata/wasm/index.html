@@ -1,23 +1,37 @@
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>WebGPU WASM Test</title></head>
+<head>
+<meta charset="utf-8">
+<title>WebGPU WASM Render Test</title>
+<style>
+  body { background: #1a1a2e; color: #eee; font-family: monospace; text-align: center; }
+  canvas { image-rendering: pixelated; }
+  pre { text-align: left; max-width: 600px; margin: 10px auto; font-size: 12px; }
+</style>
+</head>
 <body>
-<pre id="output">Loading...</pre>
+<h2>WebGPU WASM Render Test</h2>
+<pre id="output">Loading WASM...</pre>
 <script src="wasm_exec.js"></script>
 <script>
   const go = new Go();
-  WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then(async (result) => {
-    await go.run(result.instance);
-    const out = document.getElementById("output");
-    const r = window.__webgpu_result;
-    if (r) {
-      out.textContent = r;
-      const parsed = JSON.parse(r);
-      document.title = parsed.ok ? "PASS" : "FAIL: " + parsed.error;
-    } else {
-      out.textContent = '{"ok":false,"stage":"wasm","error":"no result set"}';
-      document.title = "FAIL: no result";
+  WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then((result) => {
+    // Start Go — it won't return (select{} keeps it alive for WebGPU).
+    go.run(result.instance);
+
+    // Poll for result (Go sets __webgpu_result synchronously before select{}).
+    function checkResult() {
+      const r = window.__webgpu_result;
+      if (r) {
+        const out = document.getElementById("output");
+        out.textContent = r;
+        const parsed = JSON.parse(r);
+        document.title = parsed.ok ? "PASS" : "FAIL: " + parsed.error;
+      } else {
+        setTimeout(checkResult, 50);
+      }
     }
+    checkResult();
   }).catch((err) => {
     const out = document.getElementById("output");
     out.textContent = JSON.stringify({ok: false, stage: "wasm_load", error: err.toString()});

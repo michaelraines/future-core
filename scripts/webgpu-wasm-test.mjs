@@ -127,7 +127,7 @@ try {
   }
 
   if (result.ok) {
-    log(`PASS — WebGPU device initialized successfully in browser`);
+    log(`PASS — WebGPU rendered successfully in browser`);
     if (result.caps) {
       log(`  Capabilities: ${result.caps}`);
     }
@@ -136,6 +136,14 @@ try {
     log(`FAIL at stage "${result.stage}": ${result.error}`);
     exitCode = 1;
   }
+
+  // Wait for browser to composite the WebGPU canvas content.
+  await page.waitForTimeout(500);
+
+  // Save a screenshot of the rendered output.
+  const screenshotPath = resolve("testdata/visual/webgpu_wasm_browser.png");
+  await page.screenshot({ path: screenshotPath, fullPage: true });
+  log(`Screenshot saved to ${screenshotPath}`);
 } catch (e) {
   if (e.message && e.message.includes("playwright")) {
     log(`SKIP: Playwright not installed. Run: npx playwright install chromium`);
