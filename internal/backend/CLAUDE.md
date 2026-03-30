@@ -79,7 +79,7 @@ provide real GPU API implementations. Each backend has:
 |---|---|---|---|
 | Vulkan | `internal/vk/` | 91 | GLSL→SPIR-V via `internal/shaderc/` (purego libshaderc) |
 | Metal | `internal/mtl/` | 56 | GLSL→MSL via `internal/shadertranslate/msl.go` (pure Go) |
-| WebGPU | `internal/wgpu/` | 53 | Planned (WGSL) |
+| WebGPU | `internal/wgpu/` | 60 | GLSL→WGSL via `internal/shadertranslate/wgsl.go` (pure Go) |
 | DX12 | `internal/d3d12/` | 39 | Planned (HLSL) |
 
 See `BACKENDS.md` at the project root for detailed per-backend status and roadmap.

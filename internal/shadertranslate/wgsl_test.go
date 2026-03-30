@@ -158,6 +158,81 @@ void main() {
 	require.Nil(t, result.Uniforms)
 }
 
+func TestWGSLModCallReplace(t *testing.T) {
+	input := "float r = mod(x, 1.0);"
+	result := replaceWGSLModCall(input)
+	require.Equal(t, "float r = (x % 1.0);", result)
+}
+
+func TestWGSLModCallNested(t *testing.T) {
+	input := "float r = mod(x + 0.5, 1.0) * 2.0;"
+	result := replaceWGSLModCall(input)
+	require.Contains(t, result, "(x + 0.5 % 1.0)")
+}
+
+func TestStripLineComment(t *testing.T) {
+	require.Equal(t, "float x = 1.0;", stripLineComment("float x = 1.0; // initialize"))
+	require.Equal(t, "float x = 1.0;", stripLineComment("float x = 1.0;"))
+	require.Equal(t, "", stripLineComment("// full line comment"))
+}
+
+func TestGLSLToWGSLFragmentWithBuiltins(t *testing.T) {
+	glsl := `#version 330 core
+in vec2 vTexCoord;
+uniform float uTime;
+out vec4 fragColor;
+void main() {
+    float r = 0.5 + 0.5 * sin(uTime + vTexCoord.x * 6.2831); // red channel
+    float g = clamp(cos(uTime), 0.0, 1.0);
+    float b = mod(uTime, 1.0);
+    fragColor = vec4(r, g, b, 1.0);
+}
+`
+	result, err := GLSLToWGSLFragment(glsl)
+	require.NoError(t, err)
+
+	src := result.Source
+	t.Logf("Translated fragment WGSL with builtins:\n%s", src)
+
+	// sin/cos/clamp pass through unchanged.
+	require.Contains(t, src, "sin(uniforms.uTime")
+	require.Contains(t, src, "clamp(cos(uniforms.uTime)")
+
+	// mod(x, y) → (x % y)
+	require.Contains(t, src, "(uniforms.uTime % 1.0)")
+	require.NotContains(t, src, "mod(")
+
+	// Comment stripped.
+	require.NotContains(t, src, "// red channel")
+
+	// Local vars converted.
+	require.Contains(t, src, "var r: f32 =")
+	require.Contains(t, src, "var g: f32 =")
+	require.Contains(t, src, "var b: f32 =")
+}
+
+func TestGLSLToWGSLFragmentWithControlFlow(t *testing.T) {
+	glsl := `#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+void main() {
+    if (vColor.a < 0.01) {
+        discard;
+    }
+    fragColor = vColor;
+}
+`
+	result, err := GLSLToWGSLFragment(glsl)
+	require.NoError(t, err)
+
+	src := result.Source
+	t.Logf("Translated fragment WGSL with control flow:\n%s", src)
+
+	// if/discard pass through (identical in WGSL).
+	require.Contains(t, src, "if (in.vColor.a < 0.01)")
+	require.Contains(t, src, "discard;")
+}
+
 func TestGLSLToWGSLFragmentNoSamplers(t *testing.T) {
 	glsl := `#version 330 core
 in vec4 vColor;

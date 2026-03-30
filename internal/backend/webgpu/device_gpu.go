@@ -355,7 +355,18 @@ func (d *Device) BeginFrame() {
 	// Acquire the next surface texture for rendering.
 	var surfTex wgpu.SurfaceTexture
 	wgpu.SurfaceGetCurrentTexture(d.surface, &surfTex)
-	if surfTex.Status != 0 || surfTex.Texture_ == 0 {
+
+	// Status 0 = success. Non-zero means lost, outdated, or timeout.
+	// Reconfigure the surface and retry once.
+	if surfTex.Status != 0 {
+		d.reconfigureSurface()
+		wgpu.SurfaceGetCurrentTexture(d.surface, &surfTex)
+		if surfTex.Status != 0 || surfTex.Texture_ == 0 {
+			return
+		}
+	}
+
+	if surfTex.Texture_ == 0 {
 		return
 	}
 
@@ -376,6 +387,67 @@ func (d *Device) EndFrame() {
 	if d.currentTexView != 0 {
 		wgpu.TextureViewRelease(d.currentTexView)
 		d.currentTexView = 0
+	}
+}
+
+// Resize updates the device dimensions and reconfigures the surface.
+// Called by the platform layer when the window is resized.
+func (d *Device) Resize(width, height int) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+	d.width = width
+	d.height = height
+
+	if d.hasSurface {
+		d.reconfigureSurface()
+	} else {
+		// Offscreen path: recreate the default color texture.
+		d.recreateDefaultTexture()
+	}
+}
+
+// reconfigureSurface reconfigures the surface with current dimensions.
+func (d *Device) reconfigureSurface() {
+	if d.surface == 0 || d.device == 0 {
+		return
+	}
+	surfaceCfg := wgpu.SurfaceConfiguration{
+		Device:      d.device,
+		Format:      d.surfaceFormat,
+		Usage:       wgpu.TextureUsageRenderAttachment,
+		AlphaMode:   wgpu.CompositeAlphaModeAuto,
+		Width:       uint32(d.width),
+		Height:      uint32(d.height),
+		PresentMode: wgpu.PresentModeFifo,
+	}
+	wgpu.SurfaceConfigure(d.surface, &surfaceCfg)
+}
+
+// recreateDefaultTexture rebuilds the offscreen color texture after resize.
+func (d *Device) recreateDefaultTexture() {
+	if d.defaultColorView != 0 {
+		wgpu.TextureViewRelease(d.defaultColorView)
+		d.defaultColorView = 0
+	}
+	if d.defaultColorTex != 0 {
+		wgpu.TextureRelease(d.defaultColorTex)
+		d.defaultColorTex = 0
+	}
+	if d.device == 0 {
+		return
+	}
+	texDesc := wgpu.TextureDescriptor{
+		Usage:         wgpu.TextureUsage(wgpu.TextureUsageTextureBinding | wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageCopyDst | wgpu.TextureUsageCopySrc),
+		Dimension:     1,
+		Size:          wgpu.Extent3D{Width: uint32(d.width), Height: uint32(d.height), DepthOrArrayLayers: 1},
+		Format:        wgpu.TextureFormatRGBA8Unorm,
+		MipLevelCount: 1,
+		SampleCount:   1,
+	}
+	d.defaultColorTex = wgpu.DeviceCreateTexture(d.device, &texDesc)
+	if d.defaultColorTex != 0 {
+		d.defaultColorView = wgpu.TextureCreateView(d.defaultColorTex)
 	}
 }
 

@@ -411,6 +411,9 @@ both desktop and web targets.
 | Native WebGPU path (`//go:build !js`) | Done | All `_gpu.go` files compile with full GPU API calls |
 | Surface/presentation | Done | `SurfaceFactory`→`wgpuSurfaceConfigure`; BeginFrame acquires texture, EndFrame presents; VSync via FIFO present mode |
 | Uniform ring buffer | Done | 16 KB persistent GPU buffer with 256B-aligned cursor; reset per-frame, advances per-draw; eliminates per-draw alloc |
+| Resize handling | Done | `Resize(w,h)` reconfigures surface or recreates offscreen texture; BeginFrame auto-detects stale surfaces and retries |
+| WGSL translator: mod()+comments | Done | `mod(x,y)` → `(x % y)`; comment stripping; bool type; built-in math functions verified (sin, cos, mix, clamp pass through) |
+| GPU testing documentation | Done | `GPU_TESTING.md` with 7-tier validation checklist from device init through visual testing |
 | Browser WebGPU path (`//go:build js`) | Planned | `syscall/js` bindings to `navigator.gpu` |
 | Build tag `//go:build !soft` | Done | GPU files on desktop; soft fallback with `-tags soft` |
 

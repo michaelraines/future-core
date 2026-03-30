@@ -24,6 +24,7 @@ var glslToWGSLType = map[string]string{
 	"ivec2":     "vec2<i32>",
 	"ivec3":     "vec3<i32>",
 	"ivec4":     "vec4<i32>",
+	"bool":      "bool",
 	"sampler2D": "texture_2d<f32>",
 }
 
@@ -255,13 +256,16 @@ func GLSLToWGSLFragment(glsl string) (WGSLResult, error) {
 
 // translateWGSLVertexLine translates a single line of vertex shader body to WGSL.
 func translateWGSLVertexLine(line string, attrs []attribute, uniforms []uniform, varyings []varying) string {
-	s := line
+	s := stripLineComment(line)
 
 	// Local variable declarations (before type constructors).
 	s = replaceWGSLLocalVarDecl(s)
 
 	// Type constructors.
 	s = replaceWGSLTypes(s)
+
+	// GLSL built-in translations.
+	s = replaceWGSLModCall(s)
 
 	// gl_Position → out.position
 	s = strings.ReplaceAll(s, "gl_Position", "out.position")
@@ -288,13 +292,16 @@ func translateWGSLVertexLine(line string, attrs []attribute, uniforms []uniform,
 
 // translateWGSLFragmentLine translates a single line of fragment shader body to WGSL.
 func translateWGSLFragmentLine(line string, uniforms []uniform, varyings []varying, samplers []uniform, fragOutName string) string {
-	s := line
+	s := stripLineComment(line)
 
 	// Local variable declarations (before type constructors).
 	s = replaceWGSLLocalVarDecl(s)
 
 	// Type constructors.
 	s = replaceWGSLTypes(s)
+
+	// GLSL built-in translations.
+	s = replaceWGSLModCall(s)
 
 	// texture(sampler, uv) → textureSample(sampler, sampler_sampler, uv)
 	for _, samp := range samplers {
@@ -323,7 +330,7 @@ func translateWGSLFragmentLine(line string, uniforms []uniform, varyings []varyi
 }
 
 // reLocalVar matches GLSL local variable declarations: type name = expr;
-var reLocalVar = regexp.MustCompile(`^(\s*)(vec[234]|mat[34]|float|int|ivec[234])\s+(\w+)\s*=`)
+var reLocalVar = regexp.MustCompile(`^(\s*)(vec[234]|mat[34]|float|int|ivec[234]|bool)\s+(\w+)\s*=`)
 
 // replaceWGSLLocalVarDecl converts "type name = expr" to "var name: type = expr".
 func replaceWGSLLocalVarDecl(s string) string {
@@ -338,6 +345,25 @@ func replaceWGSLLocalVarDecl(s string) string {
 	// Replace the matched "type name =" portion.
 	old := m[0]
 	return strings.Replace(s, old, prefix+"var "+varName+": "+wT+" =", 1)
+}
+
+// reModCall matches GLSL mod(a, b) calls.
+var reModCall = regexp.MustCompile(`\bmod\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)`)
+
+// replaceWGSLModCall translates GLSL mod(a, b) to WGSL (a % b).
+// WGSL does not have a mod() function; the % operator provides the same
+// behavior for float operands.
+func replaceWGSLModCall(s string) string {
+	return reModCall.ReplaceAllString(s, "($1 % $2)")
+}
+
+// stripLineComment removes trailing // comments from a line.
+func stripLineComment(s string) string {
+	// Don't strip inside string literals (rare in shaders, but be safe).
+	if idx := strings.Index(s, "//"); idx >= 0 {
+		return strings.TrimRight(s[:idx], " \t")
+	}
+	return s
 }
 
 // replaceWGSLTypeConstructor replaces a GLSL type name at word boundaries,

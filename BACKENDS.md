@@ -218,6 +218,9 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
   texture view into `RenderPassDepthStencilAttachment`
 - **Sampler cache**: device caches samplers by `FilterMode` (nearest/linear);
   `SetTextureFilter` records per-slot filter, used when binding textures
+- **Resize handling**: `Resize(w, h)` reconfigures the surface (or recreates
+  the offscreen texture); `BeginFrame` detects stale/lost surfaces and
+  reconfigures automatically before retry
 - **Surface/presentation**: `SurfaceFactory`-driven surface creation,
   `wgpuSurfaceConfigure` for presentation mode (VSync/FIFO), per-frame
   texture acquisition via `SurfaceGetCurrentTexture`, present in `EndFrame`
@@ -231,8 +234,8 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 ### Known Issues
 - No GPU tests yet — requires `libwgpu_native.{so,dylib,dll}` at runtime
 - SetStencil and SetColorWrite are no-ops (state baked into pipeline)
-- GLSL→WGSL translator covers common patterns but may miss edge cases
-  (e.g., complex control flow, array uniforms)
+- GLSL→WGSL translator covers core sprite/text patterns and built-in
+  math functions; does not support array uniforms or custom functions
 
 ### Roadmap
 1. Validate clear + readback cycle on GPU hardware
