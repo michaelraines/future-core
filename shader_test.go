@@ -346,6 +346,103 @@ func TestDrawTrianglesShaderDisposed(t *testing.T) {
 	require.Empty(t, batches)
 }
 
+func TestDrawRectShaderWithUniforms(t *testing.T) {
+	dev := withShaderRenderer(t)
+
+	shader, err := NewShaderFromGLSL([]byte("v"), []byte("f"))
+	require.NoError(t, err)
+
+	img := &Image{width: 100, height: 100}
+	opts := &DrawRectShaderOptions{
+		Uniforms: map[string]any{
+			"time":  float32(1.5),
+			"scale": float64(2.0),
+		},
+	}
+	img.DrawRectShader(50, 50, shader, opts)
+
+	batches := getRenderer().batcher.Flush()
+	require.Len(t, batches, 1)
+	// Verify uniforms were applied to the shader backend.
+	require.InDelta(t, 1.5, dev.shaders[0].floatUniforms["time"], 1e-6)
+	require.InDelta(t, 2.0, dev.shaders[0].floatUniforms["scale"], 1e-6)
+}
+
+func TestDrawRectShaderWithSourceImages(t *testing.T) {
+	dev := withShaderRenderer(t)
+
+	shader, err := NewShaderFromGLSL([]byte("v"), []byte("f"))
+	require.NoError(t, err)
+
+	srcImg := &Image{width: 64, height: 64, textureID: 42, texture: &mockTexture{w: 64, h: 64}}
+	dstImg := &Image{width: 100, height: 100}
+	opts := &DrawRectShaderOptions{}
+	opts.Images[0] = srcImg
+	dstImg.DrawRectShader(50, 50, shader, opts)
+
+	batches := getRenderer().batcher.Flush()
+	require.Len(t, batches, 1)
+	require.Equal(t, uint32(42), batches[0].TextureID)
+	// Verify texture uniform was set.
+	require.Equal(t, int32(0), dev.shaders[0].intUniforms["uTexture0"])
+}
+
+func TestDrawRectShaderNilRenderer(t *testing.T) {
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
+
+	shader := &Shader{id: 1, backend: newMockShader(), pipeline: &mockPipeline{}}
+	img := &Image{width: 100, height: 100}
+	// Should not panic.
+	img.DrawRectShader(50, 50, shader, nil)
+}
+
+func TestDrawTrianglesShaderNilShader(t *testing.T) {
+	_ = withShaderRenderer(t)
+	img := &Image{width: 100, height: 100}
+	img.DrawTrianglesShader(nil, nil, nil, nil)
+	batches := getRenderer().batcher.Flush()
+	require.Empty(t, batches)
+}
+
+func TestDrawTrianglesShaderNilRenderer(t *testing.T) {
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
+
+	shader := &Shader{id: 1, backend: newMockShader(), pipeline: &mockPipeline{}}
+	img := &Image{width: 100, height: 100}
+	img.DrawTrianglesShader(nil, nil, shader, nil)
+}
+
+func TestDrawTrianglesShaderWithOptions(t *testing.T) {
+	_ = withShaderRenderer(t)
+
+	shader, err := NewShaderFromGLSL([]byte("v"), []byte("f"))
+	require.NoError(t, err)
+
+	img := &Image{width: 100, height: 100}
+	srcImg := &Image{width: 64, height: 64, textureID: 99, texture: &mockTexture{w: 64, h: 64}}
+	verts := []Vertex{
+		{DstX: 0, DstY: 0, SrcX: 0, SrcY: 0, ColorR: 1, ColorG: 0, ColorB: 0, ColorA: 1},
+		{DstX: 100, DstY: 0, SrcX: 1, SrcY: 0, ColorR: 0, ColorG: 1, ColorB: 0, ColorA: 1},
+		{DstX: 50, DstY: 100, SrcX: 0.5, SrcY: 1, ColorR: 0, ColorG: 0, ColorB: 1, ColorA: 1},
+	}
+	indices := []uint16{0, 1, 2}
+
+	opts := &DrawTrianglesShaderOptions{
+		Uniforms: map[string]any{"brightness": float32(0.8)},
+	}
+	opts.Images[0] = srcImg
+	img.DrawTrianglesShader(verts, indices, shader, opts)
+
+	batches := getRenderer().batcher.Flush()
+	require.Len(t, batches, 1)
+	require.Equal(t, uint32(99), batches[0].TextureID)
+	require.Equal(t, shader.id, batches[0].ShaderID)
+}
+
 // Ensure we don't break existing test helpers.
 func TestShaderIDReserved(t *testing.T) {
 	// Shader IDs should start above 0 (0 is reserved for default sprite shader).
