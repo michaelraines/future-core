@@ -192,7 +192,7 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 **Package**: `internal/backend/webgpu/`
 **Status**: GPU pipeline wired — needs GPU hardware validation
 **Platform**: Cross-platform (desktop via wgpu-native, browser via JS API)
-**Bindings**: `internal/wgpu/wgpu.go` — 53 purego-bound functions
+**Bindings**: `internal/wgpu/wgpu.go` — 60 purego-bound functions
 **Shader**: `internal/shadertranslate/wgsl.go` — pure-Go GLSL→WGSL translator
 **GPU Tests**: None (needs wgpu-native library at runtime)
 
@@ -207,8 +207,9 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 - **GLSL→WGSL shader translation** (`shadertranslate/wgsl.go`): vertex
   attributes, uniforms, varyings, texture sampling, local variable
   declarations, type constructor mapping
-- **Uniform buffer management**: recorded uniforms packed into GPU buffer
-  using std140-compatible layout, bound to group 0 at draw time
+- **Uniform ring buffer**: 16 KB persistent GPU buffer with 256-byte-aligned
+  cursor; reset per-frame in `BeginFrame`, advances per-draw. Eliminates
+  per-draw buffer creation/destruction
 - **Bind group layout caching**: pipeline creates group 0 (uniforms) and
   group 1 (texture + sampler) layouts once; encoder reuses them
 - **Depth/stencil pipeline state**: `DepthStencilState` built from
@@ -217,6 +218,11 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
   texture view into `RenderPassDepthStencilAttachment`
 - **Sampler cache**: device caches samplers by `FilterMode` (nearest/linear);
   `SetTextureFilter` records per-slot filter, used when binding textures
+- **Surface/presentation**: `SurfaceFactory`-driven surface creation,
+  `wgpuSurfaceConfigure` for presentation mode (VSync/FIFO), per-frame
+  texture acquisition via `SurfaceGetCurrentTexture`, present in `EndFrame`
+- **Frame lifecycle**: `BeginFrame` acquires surface texture + resets
+  uniform cursor; `EndFrame` presents and releases the surface view
 - Texture creation, upload, readback (staging buffer + map)
 - Buffer creation, upload, sub-region upload
 - Viewport, scissor, draw, drawIndexed
@@ -224,8 +230,6 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 
 ### Known Issues
 - No GPU tests yet — requires `libwgpu_native.{so,dylib,dll}` at runtime
-- Uniform binding uses per-draw temporary buffers; a ring buffer would
-  reduce allocations for multi-draw frames
 - SetStencil and SetColorWrite are no-ops (state baked into pipeline)
 - GLSL→WGSL translator covers common patterns but may miss edge cases
   (e.g., complex control flow, array uniforms)
@@ -234,9 +238,7 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 1. Validate clear + readback cycle on GPU hardware
 2. Validate full sprite rendering pipeline with visual test
 3. Run conformance suite against GPU mode
-4. Surface/swapchain integration for presentation
-5. Ring-buffer uniform allocation for multi-draw frames
-6. Browser path via `syscall/js` (`navigator.gpu`)
+4. Browser path via `syscall/js` (`navigator.gpu`)
 
 ---
 

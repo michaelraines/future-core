@@ -564,6 +564,91 @@ type RenderPassColorAttachment struct {
 	ClearValue    Color
 }
 
+// PresentMode mirrors WGPUPresentMode.
+type PresentMode uint32
+
+const (
+	PresentModeFifo    PresentMode = 0
+	PresentModeMailbox PresentMode = 2
+)
+
+// CompositeAlphaMode mirrors WGPUCompositeAlphaMode.
+type CompositeAlphaMode uint32
+
+const (
+	CompositeAlphaModeAuto CompositeAlphaMode = 0
+)
+
+// SurfaceConfiguration is WGPUSurfaceConfiguration.
+type SurfaceConfiguration struct {
+	NextInChain     uintptr
+	Device          Device
+	Format          TextureFormat
+	Usage           TextureUsage
+	ViewFormatCount uint32
+	_               [4]byte
+	ViewFormats     uintptr
+	AlphaMode       CompositeAlphaMode
+	Width           uint32
+	Height          uint32
+	PresentMode     PresentMode
+	_               [4]byte
+}
+
+// SurfaceTexture is WGPUSurfaceTexture (returned by GetCurrentTexture).
+type SurfaceTexture struct {
+	Texture_   Texture
+	Suboptimal uint32
+	Status     uint32
+}
+
+// SurfaceCapabilities is WGPUSurfaceCapabilities.
+type SurfaceCapabilities struct {
+	NextInChain      uintptr
+	FormatCount      uint32
+	_                [4]byte
+	Formats          uintptr
+	PresentModeCount uint32
+	_2               [4]byte
+	PresentModes     uintptr
+	AlphaModeCount   uint32
+	_3               [4]byte
+	AlphaModes       uintptr
+}
+
+// SurfaceDescriptorFromMetalLayer for creating a surface from a CAMetalLayer.
+type SurfaceDescriptorFromMetalLayer struct {
+	Chain SChainedStruct
+	Layer uintptr
+}
+
+// SurfaceDescriptorFromWindowsHWND for creating a surface from an HWND.
+type SurfaceDescriptorFromWindowsHWND struct {
+	Chain     SChainedStruct
+	Hinstance uintptr
+	Hwnd      uintptr
+}
+
+// SurfaceDescriptorFromXlibWindow for creating a surface from an X11 window.
+type SurfaceDescriptorFromXlibWindow struct {
+	Chain   SChainedStruct
+	Display uintptr
+	Window  uint64
+}
+
+// SurfaceDescriptor is WGPUSurfaceDescriptor.
+type SurfaceDescriptor struct {
+	NextInChain uintptr
+	Label       uintptr
+}
+
+// SType constants for surface chained structs.
+const (
+	STypeSurfaceDescriptorFromMetalLayer  uint32 = 1
+	STypeSurfaceDescriptorFromWindowsHWND uint32 = 2
+	STypeSurfaceDescriptorFromXlibWindow  uint32 = 3
+)
+
 // RenderPassDescriptor is WGPURenderPassDescriptor.
 type RenderPassDescriptor struct {
 	NextInChain            uintptr
@@ -620,6 +705,15 @@ var (
 	fnInstanceRelease                  func(Instance)
 	fnAdapterRelease                   func(Adapter)
 	fnDeviceRelease                    func(Device)
+
+	// Surface / presentation functions.
+	fnInstanceCreateSurface    func(Instance, uintptr) Surface
+	fnSurfaceConfigure         func(Surface, *SurfaceConfiguration)
+	fnSurfaceGetCurrentTexture func(Surface, *SurfaceTexture)
+	fnSurfacePresent           func(Surface)
+	fnSurfaceUnconfigure       func(Surface)
+	fnSurfaceRelease           func(Surface)
+	fnSurfaceGetCapabilities   func(Surface, Adapter, *SurfaceCapabilities)
 
 	// Pipeline / bind group / readback functions.
 	fnDeviceCreateBindGroupLayout       func(Device, *BindGroupLayoutDescriptor) BindGroupLayout
@@ -969,6 +1063,41 @@ func DeviceRelease(dev Device) {
 	fnDeviceRelease(dev)
 }
 
+// InstanceCreateSurface creates a presentation surface.
+func InstanceCreateSurface(inst Instance, desc *SurfaceDescriptor) Surface {
+	return fnInstanceCreateSurface(inst, uintptr(unsafe.Pointer(desc)))
+}
+
+// SurfaceConfigure configures a surface for presentation.
+func SurfaceConfigure(surface Surface, config *SurfaceConfiguration) {
+	fnSurfaceConfigure(surface, config)
+}
+
+// SurfaceGetCurrentTexture gets the current texture for rendering.
+func SurfaceGetCurrentTexture(surface Surface, out *SurfaceTexture) {
+	fnSurfaceGetCurrentTexture(surface, out)
+}
+
+// SurfacePresent presents the current texture to the screen.
+func SurfacePresent(surface Surface) {
+	fnSurfacePresent(surface)
+}
+
+// SurfaceUnconfigure unconfigures a surface.
+func SurfaceUnconfigure(surface Surface) {
+	fnSurfaceUnconfigure(surface)
+}
+
+// SurfaceRelease releases a surface.
+func SurfaceRelease(surface Surface) {
+	fnSurfaceRelease(surface)
+}
+
+// SurfaceGetCapabilities queries surface capabilities.
+func SurfaceGetCapabilities(surface Surface, adapter Adapter, caps *SurfaceCapabilities) {
+	fnSurfaceGetCapabilities(surface, adapter, caps)
+}
+
 // ---------------------------------------------------------------------------
 // Init loads libwgpu_native and resolves all function symbols
 // ---------------------------------------------------------------------------
@@ -1057,6 +1186,13 @@ func Init() error {
 	reg(&fnDevicePoll, "wgpuDevicePoll")
 	reg(&fnDeviceCreateSampler, "wgpuDeviceCreateSampler")
 	reg(&fnSamplerRelease, "wgpuSamplerRelease")
+	reg(&fnInstanceCreateSurface, "wgpuInstanceCreateSurface")
+	reg(&fnSurfaceConfigure, "wgpuSurfaceConfigure")
+	reg(&fnSurfaceGetCurrentTexture, "wgpuSurfaceGetCurrentTexture")
+	reg(&fnSurfacePresent, "wgpuSurfacePresent")
+	reg(&fnSurfaceUnconfigure, "wgpuSurfaceUnconfigure")
+	reg(&fnSurfaceRelease, "wgpuSurfaceRelease")
+	reg(&fnSurfaceGetCapabilities, "wgpuSurfaceGetCapabilities")
 
 	return err
 }

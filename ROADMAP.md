@@ -409,7 +409,8 @@ both desktop and web targets.
 | Sampler cache + SetTextureFilter | Done | Device caches samplers by filter mode; encoder records per-slot filter |
 | WebGPU render pipeline | Done | Full pipeline creation: shader modules, vertex layout, blend, depth/stencil, pipeline layout |
 | Native WebGPU path (`//go:build !js`) | Done | All `_gpu.go` files compile with full GPU API calls |
-| WebGPU swapchain / surface | Planned | `wgpu::Surface` for native; `GPUCanvasContext` for browser |
+| Surface/presentation | Done | `SurfaceFactory`→`wgpuSurfaceConfigure`; BeginFrame acquires texture, EndFrame presents; VSync via FIFO present mode |
+| Uniform ring buffer | Done | 16 KB persistent GPU buffer with 256B-aligned cursor; reset per-frame, advances per-draw; eliminates per-draw alloc |
 | Browser WebGPU path (`//go:build js`) | Planned | `syscall/js` bindings to `navigator.gpu` |
 | Build tag `//go:build !soft` | Done | GPU files on desktop; soft fallback with `-tags soft` |
 

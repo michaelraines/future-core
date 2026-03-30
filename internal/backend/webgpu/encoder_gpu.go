@@ -30,7 +30,11 @@ type Encoder struct {
 func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	e.cmdEncoder = wgpu.DeviceCreateCommandEncoder(e.dev.device)
 
+	// Use surface texture if presenting, otherwise offscreen default.
 	view := e.dev.defaultColorView
+	if e.dev.hasSurface && e.dev.currentTexView != 0 {
+		view = e.dev.currentTexView
+	}
 	w, h := uint32(e.width), uint32(e.height)
 	var depthView wgpu.TextureView
 	if desc.Target != nil {
@@ -129,8 +133,8 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	e.bindUniforms()
 }
 
-// bindUniforms creates a GPU buffer from the shader's recorded uniforms
-// and binds it to group 0.
+// bindUniforms writes the shader's recorded uniforms into the ring buffer
+// and binds the region to group 0.
 func (e *Encoder) bindUniforms() {
 	if e.currentPipeline == nil || e.passEncoder == 0 || e.dev.device == 0 {
 		return
@@ -157,27 +161,19 @@ func (e *Encoder) bindUniforms() {
 		return
 	}
 
-	// Create a temporary buffer for this frame's uniform data.
-	alignedSize := uint64((len(data) + 3) &^ 3)
-	bufDesc := wgpu.BufferDescriptor{
-		Usage: wgpu.BufferUsageUniform | wgpu.BufferUsageCopyDst,
-		Size:  alignedSize,
-	}
-	uboBuf := wgpu.DeviceCreateBuffer(e.dev.device, &bufDesc)
-	if uboBuf == 0 {
+	// Write into the ring buffer at the current cursor.
+	offset, size := e.dev.writeUniformRing(data)
+	if size == 0 {
 		return
 	}
-	wgpu.QueueWriteBuffer(e.dev.queue, uboBuf, 0,
-		unsafe.Pointer(&data[0]), uint64(len(data)))
-	runtime.KeepAlive(data)
 
-	// Create bind group with the uniform buffer.
+	// Create bind group referencing the ring buffer region.
 	bgEntries := []wgpu.BindGroupEntry{
 		{
 			Binding: 0,
-			Buffer_: uboBuf,
-			Offset:  0,
-			Size:    alignedSize,
+			Buffer_: e.dev.uniformBuf,
+			Offset:  uint64(offset),
+			Size:    uint64(size),
 		},
 	}
 	bgDesc := wgpu.BindGroupDescriptor{
@@ -191,8 +187,6 @@ func (e *Encoder) bindUniforms() {
 		wgpu.RenderPassSetBindGroup(e.passEncoder, 0, bg)
 		wgpu.BindGroupRelease(bg)
 	}
-	// Release the temporary buffer (GPU retains it until submission completes).
-	wgpu.BufferRelease(uboBuf)
 }
 
 // SetVertexBuffer binds a vertex buffer to a slot.
