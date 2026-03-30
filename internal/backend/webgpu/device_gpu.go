@@ -4,11 +4,19 @@ package webgpu
 
 import (
 	"fmt"
+	"runtime"
 	"unsafe"
 
 	"github.com/michaelraines/future-core/internal/backend"
 	"github.com/michaelraines/future-core/internal/wgpu"
 )
+
+// uniformRingBufSize is the size of the persistent uniform ring buffer (16 KB).
+const uniformRingBufSize = 16 * 1024
+
+// uniformAlignOffset is the minimum offset alignment for uniform buffers.
+// WebGPU requires 256-byte alignment for dynamic buffer offsets.
+const uniformAlignOffset = 256
 
 // Device implements backend.Device for WebGPU via wgpu-native.
 type Device struct {
@@ -20,13 +28,25 @@ type Device struct {
 	width  int
 	height int
 
-	// Default render target for screen rendering.
+	// Default render target for screen rendering (offscreen path).
 	defaultColorTex  wgpu.Texture
 	defaultColorView wgpu.TextureView
 
-	adapterInfo    AdapterInfo
-	limits         Limits
-	defaultSampler wgpu.Sampler
+	// Surface/presentation support.
+	surface        wgpu.Surface
+	hasSurface     bool
+	surfaceFormat  wgpu.TextureFormat
+	currentTexView wgpu.TextureView // view for this frame's surface texture
+
+	// Persistent uniform ring buffer.
+	uniformBuf    wgpu.Buffer
+	uniformCursor int
+
+	adapterInfo AdapterInfo
+	limits      Limits
+
+	// Sampler cache: keyed by filter mode.
+	samplers map[wgpu.FilterMode]wgpu.Sampler
 }
 
 // New creates a new WebGPU device.
@@ -35,7 +55,8 @@ func New() *Device {
 		adapterInfo: AdapterInfo{
 			BackendType: BackendTypeNull,
 		},
-		limits: DefaultLimits(),
+		limits:   DefaultLimits(),
+		samplers: make(map[wgpu.FilterMode]wgpu.Sampler),
 	}
 }
 
@@ -57,75 +78,170 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("webgpu: failed to create instance")
 	}
 
-	// Request adapter (synchronous via callback).
-	var adapterErr error
-	var adapterResult wgpu.Adapter
-	adapterCallback := func(status uint32, adapter wgpu.Adapter, msg uintptr, userdata uintptr) {
-		if status != 0 {
-			adapterErr = fmt.Errorf("webgpu: adapter request failed (status %d)", status)
-			return
-		}
-		adapterResult = adapter
+	// Request adapter (synchronous — wgpu-native calls callback inline).
+	adapter, err := wgpu.InstanceRequestAdapterSync(d.instance)
+	if err != nil {
+		wgpu.InstanceRelease(d.instance)
+		d.instance = 0
+		return fmt.Errorf("webgpu: %w", err)
 	}
-	_ = adapterCallback // In real usage, passed via C callback mechanism
-	// For now, set adapter directly — full callback integration requires
-	// purego callback support.
-	d.adapter = adapterResult
+	d.adapter = adapter
 
-	// Request device (synchronous via callback).
-	var deviceErr error
-	var deviceResult wgpu.Device
-	deviceCallback := func(status uint32, device wgpu.Device, msg uintptr, userdata uintptr) {
-		if status != 0 {
-			deviceErr = fmt.Errorf("webgpu: device request failed (status %d)", status)
-			return
-		}
-		deviceResult = device
+	// Request device (synchronous — wgpu-native calls callback inline).
+	device, err := wgpu.AdapterRequestDeviceSync(d.adapter)
+	if err != nil {
+		wgpu.AdapterRelease(d.adapter)
+		d.adapter = 0
+		wgpu.InstanceRelease(d.instance)
+		d.instance = 0
+		return fmt.Errorf("webgpu: %w", err)
 	}
-	_ = deviceCallback
-	d.device = deviceResult
-
-	if adapterErr != nil {
-		return adapterErr
-	}
-	if deviceErr != nil {
-		return deviceErr
-	}
+	d.device = device
 
 	if d.device != 0 {
 		d.queue = wgpu.DeviceGetQueue(d.device)
 
-		// Create default color texture for screen rendering.
-		texDesc := wgpu.TextureDescriptor{
-			Usage:         wgpu.TextureUsage(wgpu.TextureUsageTextureBinding | wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageCopyDst | wgpu.TextureUsageCopySrc),
-			Dimension:     1, // 2D
-			Size:          wgpu.Extent3D{Width: uint32(d.width), Height: uint32(d.height), DepthOrArrayLayers: 1},
-			Format:        wgpu.TextureFormatRGBA8Unorm,
-			MipLevelCount: 1,
-			SampleCount:   1,
+		// Create surface if a factory is provided.
+		if cfg.SurfaceFactory != nil {
+			if err := d.createSurface(cfg); err != nil {
+				// Non-fatal: fall back to offscreen rendering.
+				d.hasSurface = false
+			}
 		}
-		d.defaultColorTex = wgpu.DeviceCreateTexture(d.device, &texDesc)
-		if d.defaultColorTex != 0 {
-			d.defaultColorView = wgpu.TextureCreateView(d.defaultColorTex)
+
+		if !d.hasSurface {
+			// Offscreen path: create default color texture.
+			texDesc := wgpu.TextureDescriptor{
+				Usage:         wgpu.TextureUsage(wgpu.TextureUsageTextureBinding | wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageCopyDst | wgpu.TextureUsageCopySrc),
+				Dimension:     1, // 2D
+				Size:          wgpu.Extent3D{Width: uint32(d.width), Height: uint32(d.height), DepthOrArrayLayers: 1},
+				Format:        wgpu.TextureFormatRGBA8Unorm,
+				MipLevelCount: 1,
+				SampleCount:   1,
+			}
+			d.defaultColorTex = wgpu.DeviceCreateTexture(d.device, &texDesc)
+			if d.defaultColorTex != 0 {
+				d.defaultColorView = wgpu.TextureCreateView(d.defaultColorTex)
+			}
 		}
+
+		// Create persistent uniform ring buffer.
+		d.createUniformRingBuffer()
 	}
 
 	return nil
 }
 
-// ensureDefaultSampler creates a default nearest-filter sampler if needed.
-func (d *Device) ensureDefaultSampler() wgpu.Sampler {
-	if d.defaultSampler == 0 && d.device != 0 {
-		d.defaultSampler = wgpu.DeviceCreateSampler(d.device)
+// createSurface creates a presentation surface from the SurfaceFactory.
+func (d *Device) createSurface(cfg backend.DeviceConfig) error {
+	surfaceHandle, err := cfg.SurfaceFactory(uintptr(d.instance))
+	if err != nil {
+		return fmt.Errorf("surface factory: %w", err)
 	}
-	return d.defaultSampler
+	d.surface = wgpu.Surface(surfaceHandle)
+	if d.surface == 0 {
+		return fmt.Errorf("surface factory returned nil")
+	}
+
+	// Configure the surface for presentation.
+	d.surfaceFormat = wgpu.TextureFormatRGBA8Unorm
+	surfaceCfg := wgpu.SurfaceConfiguration{
+		Device:      d.device,
+		Format:      d.surfaceFormat,
+		Usage:       wgpu.TextureUsageRenderAttachment,
+		AlphaMode:   wgpu.CompositeAlphaModeAuto,
+		Width:       uint32(d.width),
+		Height:      uint32(d.height),
+		PresentMode: wgpu.PresentModeFifo, // VSync
+	}
+	wgpu.SurfaceConfigure(d.surface, &surfaceCfg)
+	d.hasSurface = true
+	return nil
+}
+
+// createUniformRingBuffer creates a persistent GPU buffer for uniforms.
+func (d *Device) createUniformRingBuffer() {
+	if d.device == 0 {
+		return
+	}
+	bufDesc := wgpu.BufferDescriptor{
+		Usage: wgpu.BufferUsageUniform | wgpu.BufferUsageCopyDst,
+		Size:  uniformRingBufSize,
+	}
+	d.uniformBuf = wgpu.DeviceCreateBuffer(d.device, &bufDesc)
+	d.uniformCursor = 0
+}
+
+// writeUniformRing writes data into the ring buffer and returns (offset, alignedSize).
+// Returns (0, 0) if the ring buffer is not available.
+func (d *Device) writeUniformRing(data []byte) (offset, alignedSize int) {
+	if d.uniformBuf == 0 || d.queue == 0 || len(data) == 0 {
+		return 0, 0
+	}
+
+	// Align size to uniformAlignOffset (256 bytes).
+	alignedSize = (len(data) + uniformAlignOffset - 1) &^ (uniformAlignOffset - 1)
+
+	// Wrap if we'd exceed the buffer.
+	if d.uniformCursor+alignedSize > uniformRingBufSize {
+		d.uniformCursor = 0
+	}
+
+	offset = d.uniformCursor
+	wgpu.QueueWriteBuffer(d.queue, d.uniformBuf, uint64(offset),
+		unsafe.Pointer(&data[0]), uint64(len(data)))
+	runtime.KeepAlive(data)
+
+	d.uniformCursor += alignedSize
+	return offset, alignedSize
+}
+
+// getSampler returns a cached sampler for the given filter mode, creating one if needed.
+func (d *Device) getSampler(filter wgpu.FilterMode) wgpu.Sampler {
+	if d.device == 0 {
+		return 0
+	}
+	if s, ok := d.samplers[filter]; ok {
+		return s
+	}
+	desc := wgpu.SamplerDescriptor{
+		AddressModeU:  wgpu.AddressModeClampToEdge,
+		AddressModeV:  wgpu.AddressModeClampToEdge,
+		AddressModeW:  wgpu.AddressModeClampToEdge,
+		MagFilter:     filter,
+		MinFilter:     filter,
+		MipmapFilter:  filter,
+		LodMinClamp:   0,
+		LodMaxClamp:   32,
+		Compare:       0, // undefined — no comparison
+		MaxAnisotropy: 1,
+	}
+	s := wgpu.DeviceCreateSamplerWithDescriptor(d.device, &desc)
+	if s != 0 {
+		d.samplers[filter] = s
+	}
+	return s
 }
 
 // Dispose releases all WebGPU resources.
 func (d *Device) Dispose() {
-	if d.defaultSampler != 0 {
-		wgpu.SamplerRelease(d.defaultSampler)
-		d.defaultSampler = 0
+	for k, s := range d.samplers {
+		wgpu.SamplerRelease(s)
+		delete(d.samplers, k)
+	}
+	if d.uniformBuf != 0 {
+		wgpu.BufferDestroy(d.uniformBuf)
+		wgpu.BufferRelease(d.uniformBuf)
+		d.uniformBuf = 0
+	}
+	if d.currentTexView != 0 {
+		wgpu.TextureViewRelease(d.currentTexView)
+		d.currentTexView = 0
+	}
+	if d.surface != 0 {
+		wgpu.SurfaceUnconfigure(d.surface)
+		wgpu.SurfaceRelease(d.surface)
+		d.surface = 0
 	}
 	if d.defaultColorView != 0 {
 		wgpu.TextureViewRelease(d.defaultColorView)
@@ -228,10 +344,112 @@ func (d *Device) ReadScreen(dst []byte) bool {
 }
 
 // BeginFrame prepares for a new frame.
-func (d *Device) BeginFrame() {}
+func (d *Device) BeginFrame() {
+	// Reset uniform ring buffer cursor for the new frame.
+	d.uniformCursor = 0
 
-// EndFrame finalizes the frame by submitting any pending work.
-func (d *Device) EndFrame() {}
+	if !d.hasSurface {
+		return
+	}
+
+	// Acquire the next surface texture for rendering.
+	var surfTex wgpu.SurfaceTexture
+	wgpu.SurfaceGetCurrentTexture(d.surface, &surfTex)
+
+	// Status 0 = success. Non-zero means lost, outdated, or timeout.
+	// Reconfigure the surface and retry once.
+	if surfTex.Status != 0 {
+		d.reconfigureSurface()
+		wgpu.SurfaceGetCurrentTexture(d.surface, &surfTex)
+		if surfTex.Status != 0 || surfTex.Texture_ == 0 {
+			return
+		}
+	}
+
+	if surfTex.Texture_ == 0 {
+		return
+	}
+
+	// Release previous frame's view if still held.
+	if d.currentTexView != 0 {
+		wgpu.TextureViewRelease(d.currentTexView)
+	}
+	d.currentTexView = wgpu.TextureCreateView(surfTex.Texture_)
+}
+
+// EndFrame finalizes the frame and presents to the surface.
+func (d *Device) EndFrame() {
+	if !d.hasSurface {
+		return
+	}
+	wgpu.SurfacePresent(d.surface)
+	// Release the view — the surface texture is owned by the surface.
+	if d.currentTexView != 0 {
+		wgpu.TextureViewRelease(d.currentTexView)
+		d.currentTexView = 0
+	}
+}
+
+// Resize updates the device dimensions and reconfigures the surface.
+// Called by the platform layer when the window is resized.
+func (d *Device) Resize(width, height int) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+	d.width = width
+	d.height = height
+
+	if d.hasSurface {
+		d.reconfigureSurface()
+	} else {
+		// Offscreen path: recreate the default color texture.
+		d.recreateDefaultTexture()
+	}
+}
+
+// reconfigureSurface reconfigures the surface with current dimensions.
+func (d *Device) reconfigureSurface() {
+	if d.surface == 0 || d.device == 0 {
+		return
+	}
+	surfaceCfg := wgpu.SurfaceConfiguration{
+		Device:      d.device,
+		Format:      d.surfaceFormat,
+		Usage:       wgpu.TextureUsageRenderAttachment,
+		AlphaMode:   wgpu.CompositeAlphaModeAuto,
+		Width:       uint32(d.width),
+		Height:      uint32(d.height),
+		PresentMode: wgpu.PresentModeFifo,
+	}
+	wgpu.SurfaceConfigure(d.surface, &surfaceCfg)
+}
+
+// recreateDefaultTexture rebuilds the offscreen color texture after resize.
+func (d *Device) recreateDefaultTexture() {
+	if d.defaultColorView != 0 {
+		wgpu.TextureViewRelease(d.defaultColorView)
+		d.defaultColorView = 0
+	}
+	if d.defaultColorTex != 0 {
+		wgpu.TextureRelease(d.defaultColorTex)
+		d.defaultColorTex = 0
+	}
+	if d.device == 0 {
+		return
+	}
+	texDesc := wgpu.TextureDescriptor{
+		Usage:         wgpu.TextureUsage(wgpu.TextureUsageTextureBinding | wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageCopyDst | wgpu.TextureUsageCopySrc),
+		Dimension:     1,
+		Size:          wgpu.Extent3D{Width: uint32(d.width), Height: uint32(d.height), DepthOrArrayLayers: 1},
+		Format:        wgpu.TextureFormatRGBA8Unorm,
+		MipLevelCount: 1,
+		SampleCount:   1,
+	}
+	d.defaultColorTex = wgpu.DeviceCreateTexture(d.device, &texDesc)
+	if d.defaultColorTex != 0 {
+		d.defaultColorView = wgpu.TextureCreateView(d.defaultColorTex)
+	}
+}
 
 // NewTexture creates a WebGPU texture (GPUTexture).
 func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, error) {

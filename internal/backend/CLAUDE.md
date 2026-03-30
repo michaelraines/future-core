@@ -24,8 +24,9 @@ internal/backend/
 
 ## Dual-Mode Architecture
 
-Four backends (vulkan, metal, webgpu, dx12) have **dual-mode** implementations
-controlled by build tags. WebGL remains soft-delegating only.
+Four backends (vulkan, metal, webgpu, dx12) have **GPU mode** implementations
+controlled by build tags. WebGPU additionally has a **browser mode** via
+`syscall/js`. WebGL has separate `_js.go` files for browser rendering.
 
 ### Soft-Delegation Mode (CI)
 
@@ -66,12 +67,22 @@ provide real GPU API implementations. Each backend has:
 
 **Build tags**:
 
-| Backend | GPU mode | Soft fallback |
-|---|---|---|
-| Vulkan | `(darwin \|\| linux \|\| freebsd \|\| windows) && !soft` | `!(darwin \|\| linux \|\| freebsd \|\| windows) \|\| soft` |
-| Metal | `darwin && !soft` | `!darwin \|\| soft` |
-| WebGPU | `(darwin \|\| linux \|\| freebsd \|\| windows) && !soft` | opposite |
-| DX12 | `windows && !soft` | `!windows \|\| soft` |
+| Backend | GPU mode | Browser mode | Soft fallback |
+|---|---|---|---|
+| Vulkan | `(darwin \|\| linux \|\| freebsd \|\| windows) && !soft` | — | `!(desktop) \|\| soft` |
+| Metal | `darwin && !soft` | — | `!darwin \|\| soft` |
+| WebGPU | `desktop && !soft` | `js && !soft` | `(!(desktop) && !js) \|\| soft` |
+| DX12 | `windows && !soft` | — | `!windows \|\| soft` |
+| WebGL | — | `js` (only) | `!js` |
+
+WebGPU is the only backend with **three** build modes. The `_js.go` files use
+`syscall/js` to call the browser `navigator.gpu` API directly. Verify all
+three compile when modifying the webgpu package:
+```bash
+go build -tags soft ./internal/backend/webgpu/         # Soft
+go build ./internal/backend/webgpu/                    # Native GPU
+GOOS=js GOARCH=wasm go build ./internal/backend/webgpu/ # Browser
+```
 
 **Native API bindings** (all purego, no CGo):
 
@@ -79,7 +90,7 @@ provide real GPU API implementations. Each backend has:
 |---|---|---|---|
 | Vulkan | `internal/vk/` | 91 | GLSL→SPIR-V via `internal/shaderc/` (purego libshaderc) |
 | Metal | `internal/mtl/` | 56 | GLSL→MSL via `internal/shadertranslate/msl.go` (pure Go) |
-| WebGPU | `internal/wgpu/` | 53 | Planned (WGSL) |
+| WebGPU | `internal/wgpu/` | 60 | GLSL→WGSL via `internal/shadertranslate/wgsl.go` (pure Go) |
 | DX12 | `internal/d3d12/` | 39 | Planned (HLSL) |
 
 See `BACKENDS.md` at the project root for detailed per-backend status and roadmap.
@@ -197,6 +208,32 @@ API-specific values are already defined and tested.
   `internal/vk/vk_test.go`. Run `TestStructSizes` after adding new structs.
 - **Swapchain format**: MoltenVK typically offers B8G8R8A8. Vulkan handles
   the RGBA→BGRA mapping in hardware — no shader swizzle needed.
+
+## WebGPU GPU Development Notes
+
+The WebGPU backend has the most complete GPU pipeline after OpenGL. Key
+implementation details:
+
+- **Shader translation**: GLSL→WGSL via `internal/shadertranslate/wgsl.go`.
+  The translator extracts uniform layout for std140 packing. Most GLSL
+  built-ins (`sin`, `cos`, `mix`, `clamp`, etc.) pass through unchanged.
+  `mod(x, y)` is translated to `(x % y)`.
+- **Bind group architecture**: Group 0 = uniforms (vertex+fragment visibility),
+  Group 1 = texture + sampler (fragment visibility). Layouts are cached on
+  the Pipeline; the Encoder reuses them.
+- **Uniform ring buffer** (native path): 16 KB persistent GPU buffer with
+  256-byte-aligned cursor. Reset per-frame in `BeginFrame`, advances per-draw.
+  Eliminates per-draw buffer allocation.
+- **Surface/presentation** (native path): `DeviceConfig.SurfaceFactory` creates
+  a `wgpu::Surface`; configured with FIFO present mode. `BeginFrame` acquires
+  surface texture; `EndFrame` presents. Auto-reconfigures on stale/lost surface.
+- **Browser path**: `_js.go` files use `syscall/js` to call `navigator.gpu`.
+  Async adapter/device creation via Promise callbacks. `GPUCanvasContext` for
+  presentation. Per-draw uniform buffers (JS GC handles cleanup).
+- **Resize**: `Device.Resize(w, h)` reconfigures the surface or recreates
+  the offscreen texture.
+- **GPU testing checklist**: See `internal/backend/webgpu/GPU_TESTING.md` for
+  the 7-tier validation plan (device init → visual presentation).
 
 ## Coverage Requirements
 

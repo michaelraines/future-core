@@ -183,8 +183,76 @@ const (
 type CompareFunction uint32
 
 const (
-	CompareFunctionAlways CompareFunction = 8
+	CompareFunctionNever        CompareFunction = 1
+	CompareFunctionLess         CompareFunction = 2
+	CompareFunctionLessEqual    CompareFunction = 3
+	CompareFunctionEqual        CompareFunction = 4
+	CompareFunctionGreaterEqual CompareFunction = 5
+	CompareFunctionGreater      CompareFunction = 6
+	CompareFunctionNotEqual     CompareFunction = 7
+	CompareFunctionAlways       CompareFunction = 8
 )
+
+// StencilOperation mirrors WGPUStencilOperation.
+type StencilOperation uint32
+
+const (
+	StencilOperationKeep           StencilOperation = 0
+	StencilOperationZero           StencilOperation = 1
+	StencilOperationReplace        StencilOperation = 2
+	StencilOperationInvert         StencilOperation = 3
+	StencilOperationIncrementClamp StencilOperation = 4
+	StencilOperationDecrementClamp StencilOperation = 5
+	StencilOperationIncrementWrap  StencilOperation = 6
+	StencilOperationDecrementWrap  StencilOperation = 7
+)
+
+// AddressMode mirrors WGPUAddressMode.
+type AddressMode uint32
+
+const (
+	AddressModeRepeat       AddressMode = 0
+	AddressModeMirrorRepeat AddressMode = 1
+	AddressModeClampToEdge  AddressMode = 2
+)
+
+// FilterMode mirrors WGPUFilterMode.
+type FilterMode uint32
+
+const (
+	FilterModeNearest FilterMode = 0
+	FilterModeLinear  FilterMode = 1
+)
+
+// RenderPassDepthStencilAttachment is WGPURenderPassDepthStencilAttachment.
+type RenderPassDepthStencilAttachment struct {
+	View              TextureView
+	DepthLoadOp       LoadOp
+	DepthStoreOp      StoreOp
+	DepthClearValue   float32
+	DepthReadOnly     uint32
+	StencilLoadOp     LoadOp
+	StencilStoreOp    StoreOp
+	StencilClearValue uint32
+	StencilReadOnly   uint32
+}
+
+// SamplerDescriptor is WGPUSamplerDescriptor.
+type SamplerDescriptor struct {
+	NextInChain   uintptr
+	Label         uintptr
+	AddressModeU  AddressMode
+	AddressModeV  AddressMode
+	AddressModeW  AddressMode
+	MagFilter     FilterMode
+	MinFilter     FilterMode
+	MipmapFilter  FilterMode
+	LodMinClamp   float32
+	LodMaxClamp   float32
+	Compare       CompareFunction
+	MaxAnisotropy uint16
+	_             [2]byte // padding
+}
 
 // ---------------------------------------------------------------------------
 // Pipeline creation structs (C-compatible layout)
@@ -496,6 +564,91 @@ type RenderPassColorAttachment struct {
 	ClearValue    Color
 }
 
+// PresentMode mirrors WGPUPresentMode.
+type PresentMode uint32
+
+const (
+	PresentModeFifo    PresentMode = 0
+	PresentModeMailbox PresentMode = 2
+)
+
+// CompositeAlphaMode mirrors WGPUCompositeAlphaMode.
+type CompositeAlphaMode uint32
+
+const (
+	CompositeAlphaModeAuto CompositeAlphaMode = 0
+)
+
+// SurfaceConfiguration is WGPUSurfaceConfiguration.
+type SurfaceConfiguration struct {
+	NextInChain     uintptr
+	Device          Device
+	Format          TextureFormat
+	Usage           TextureUsage
+	ViewFormatCount uint32
+	_               [4]byte
+	ViewFormats     uintptr
+	AlphaMode       CompositeAlphaMode
+	Width           uint32
+	Height          uint32
+	PresentMode     PresentMode
+	_               [4]byte
+}
+
+// SurfaceTexture is WGPUSurfaceTexture (returned by GetCurrentTexture).
+type SurfaceTexture struct {
+	Texture_   Texture
+	Suboptimal uint32
+	Status     uint32
+}
+
+// SurfaceCapabilities is WGPUSurfaceCapabilities.
+type SurfaceCapabilities struct {
+	NextInChain      uintptr
+	FormatCount      uint32
+	_                [4]byte
+	Formats          uintptr
+	PresentModeCount uint32
+	_2               [4]byte
+	PresentModes     uintptr
+	AlphaModeCount   uint32
+	_3               [4]byte
+	AlphaModes       uintptr
+}
+
+// SurfaceDescriptorFromMetalLayer for creating a surface from a CAMetalLayer.
+type SurfaceDescriptorFromMetalLayer struct {
+	Chain SChainedStruct
+	Layer uintptr
+}
+
+// SurfaceDescriptorFromWindowsHWND for creating a surface from an HWND.
+type SurfaceDescriptorFromWindowsHWND struct {
+	Chain     SChainedStruct
+	Hinstance uintptr
+	Hwnd      uintptr
+}
+
+// SurfaceDescriptorFromXlibWindow for creating a surface from an X11 window.
+type SurfaceDescriptorFromXlibWindow struct {
+	Chain   SChainedStruct
+	Display uintptr
+	Window  uint64
+}
+
+// SurfaceDescriptor is WGPUSurfaceDescriptor.
+type SurfaceDescriptor struct {
+	NextInChain uintptr
+	Label       uintptr
+}
+
+// SType constants for surface chained structs.
+const (
+	STypeSurfaceDescriptorFromMetalLayer  uint32 = 1
+	STypeSurfaceDescriptorFromWindowsHWND uint32 = 2
+	STypeSurfaceDescriptorFromXlibWindow  uint32 = 3
+)
+
 // RenderPassDescriptor is WGPURenderPassDescriptor.
 type RenderPassDescriptor struct {
 	NextInChain            uintptr
@@ -552,6 +705,15 @@ var (
 	fnInstanceRelease                  func(Instance)
 	fnAdapterRelease                   func(Adapter)
 	fnDeviceRelease                    func(Device)
+
+	// Surface / presentation functions.
+	fnInstanceCreateSurface    func(Instance, uintptr) Surface
+	fnSurfaceConfigure         func(Surface, *SurfaceConfiguration)
+	fnSurfaceGetCurrentTexture func(Surface, *SurfaceTexture)
+	fnSurfacePresent           func(Surface)
+	fnSurfaceUnconfigure       func(Surface)
+	fnSurfaceRelease           func(Surface)
+	fnSurfaceGetCapabilities   func(Surface, Adapter, *SurfaceCapabilities)
 
 	// Pipeline / bind group / readback functions.
 	fnDeviceCreateBindGroupLayout       func(Device, *BindGroupLayoutDescriptor) BindGroupLayout
@@ -827,9 +989,60 @@ func DeviceCreateSampler(dev Device) Sampler {
 	return fnDeviceCreateSampler(dev, 0)
 }
 
+// DeviceCreateSamplerWithDescriptor creates a sampler with the given descriptor.
+func DeviceCreateSamplerWithDescriptor(dev Device, desc *SamplerDescriptor) Sampler {
+	return fnDeviceCreateSampler(dev, uintptr(unsafe.Pointer(desc)))
+}
+
 // SamplerRelease releases a sampler.
 func SamplerRelease(s Sampler) {
 	fnSamplerRelease(s)
+}
+
+// InstanceRequestAdapterSync synchronously requests an adapter from the instance.
+// wgpu-native calls the callback inline before returning.
+func InstanceRequestAdapterSync(inst Instance) (Adapter, error) {
+	var result Adapter
+	var resultErr error
+
+	cb := purego.NewCallback(func(status uint32, adapter uintptr, msg uintptr, userdata uintptr) {
+		if status != 0 {
+			resultErr = fmt.Errorf("adapter request failed (status %d)", status)
+			return
+		}
+		result = Adapter(adapter)
+	})
+	fnInstanceRequestAdapter(inst, 0, cb, 0)
+	if resultErr != nil {
+		return 0, resultErr
+	}
+	if result == 0 {
+		return 0, fmt.Errorf("adapter request returned nil")
+	}
+	return result, nil
+}
+
+// AdapterRequestDeviceSync synchronously requests a device from the adapter.
+// wgpu-native calls the callback inline before returning.
+func AdapterRequestDeviceSync(adapter Adapter) (Device, error) {
+	var result Device
+	var resultErr error
+
+	cb := purego.NewCallback(func(status uint32, device uintptr, msg uintptr, userdata uintptr) {
+		if status != 0 {
+			resultErr = fmt.Errorf("device request failed (status %d)", status)
+			return
+		}
+		result = Device(device)
+	})
+	fnAdapterRequestDevice(adapter, 0, cb, 0)
+	if resultErr != nil {
+		return 0, resultErr
+	}
+	if result == 0 {
+		return 0, fmt.Errorf("device request returned nil")
+	}
+	return result, nil
 }
 
 // MapModeRead is the read mode for buffer mapping.
@@ -848,6 +1061,41 @@ func AdapterRelease(adapter Adapter) {
 // DeviceRelease releases a device.
 func DeviceRelease(dev Device) {
 	fnDeviceRelease(dev)
+}
+
+// InstanceCreateSurface creates a presentation surface.
+func InstanceCreateSurface(inst Instance, desc *SurfaceDescriptor) Surface {
+	return fnInstanceCreateSurface(inst, uintptr(unsafe.Pointer(desc)))
+}
+
+// SurfaceConfigure configures a surface for presentation.
+func SurfaceConfigure(surface Surface, config *SurfaceConfiguration) {
+	fnSurfaceConfigure(surface, config)
+}
+
+// SurfaceGetCurrentTexture gets the current texture for rendering.
+func SurfaceGetCurrentTexture(surface Surface, out *SurfaceTexture) {
+	fnSurfaceGetCurrentTexture(surface, out)
+}
+
+// SurfacePresent presents the current texture to the screen.
+func SurfacePresent(surface Surface) {
+	fnSurfacePresent(surface)
+}
+
+// SurfaceUnconfigure unconfigures a surface.
+func SurfaceUnconfigure(surface Surface) {
+	fnSurfaceUnconfigure(surface)
+}
+
+// SurfaceRelease releases a surface.
+func SurfaceRelease(surface Surface) {
+	fnSurfaceRelease(surface)
+}
+
+// SurfaceGetCapabilities queries surface capabilities.
+func SurfaceGetCapabilities(surface Surface, adapter Adapter, caps *SurfaceCapabilities) {
+	fnSurfaceGetCapabilities(surface, adapter, caps)
 }
 
 // ---------------------------------------------------------------------------
@@ -938,6 +1186,13 @@ func Init() error {
 	reg(&fnDevicePoll, "wgpuDevicePoll")
 	reg(&fnDeviceCreateSampler, "wgpuDeviceCreateSampler")
 	reg(&fnSamplerRelease, "wgpuSamplerRelease")
+	reg(&fnInstanceCreateSurface, "wgpuInstanceCreateSurface")
+	reg(&fnSurfaceConfigure, "wgpuSurfaceConfigure")
+	reg(&fnSurfaceGetCurrentTexture, "wgpuSurfaceGetCurrentTexture")
+	reg(&fnSurfacePresent, "wgpuSurfacePresent")
+	reg(&fnSurfaceUnconfigure, "wgpuSurfaceUnconfigure")
+	reg(&fnSurfaceRelease, "wgpuSurfaceRelease")
+	reg(&fnSurfaceGetCapabilities, "wgpuSurfaceGetCapabilities")
 
 	return err
 }
