@@ -87,8 +87,12 @@ type engine struct {
 	windowW     int
 	windowH     int
 
+	// Canvas presentation (2D readback path).
+	pixelBuf []byte
+	ctx2d    js.Value
+
 	// Frame timing.
-	lastTime    time.Time
+	lastTime time.Time
 	accumulator time.Duration
 	frameCount  int
 	tickCount   int
@@ -134,7 +138,7 @@ func (e *engine) run() error {
 
 	// Resolve and create backend.
 	preferred := []string{"webgpu", "soft"}
-	dev, _, err := backend.Resolve("auto", preferred)
+	dev, _, err := backend.Resolve(backendName(), preferred)
 	if err != nil {
 		return err
 	}
@@ -358,6 +362,12 @@ func (e *engine) frame() {
 
 	e.device.EndFrame()
 
+	// Present rendered pixels to the visible canvas via 2D ImageData.
+	// This is the browser equivalent of the desktop GL presenter —
+	// ReadScreen copies the soft/WebGPU offscreen buffer to CPU, then
+	// putImageData blits it to the canvas.
+	e.presentToCanvas()
+
 	// FPS tracking.
 	e.frameCount++
 	if time.Since(e.fpsTimer) >= time.Second {
@@ -367,6 +377,37 @@ func (e *engine) frame() {
 		e.tickCount = 0
 		e.fpsTimer = time.Now()
 	}
+}
+
+// presentToCanvas copies rendered pixels to the visible canvas via ReadScreen + putImageData.
+func (e *engine) presentToCanvas() {
+	w, h := e.windowW, e.windowH
+	size := w * h * 4
+	if len(e.pixelBuf) != size {
+		e.pixelBuf = make([]byte, size)
+	}
+
+	if !e.device.ReadScreen(e.pixelBuf) {
+		return
+	}
+
+	// Lazy-init 2D context for the canvas.
+	if e.ctx2d.IsUndefined() || e.ctx2d.IsNull() {
+		canvas := js.Global().Get("document").Call("getElementById", "game-canvas")
+		if canvas.IsNull() || canvas.IsUndefined() {
+			return
+		}
+		e.ctx2d = canvas.Call("getContext", "2d")
+		if e.ctx2d.IsNull() || e.ctx2d.IsUndefined() {
+			return
+		}
+	}
+
+	imgData := e.ctx2d.Call("createImageData", w, h)
+	arr := js.Global().Get("Uint8ClampedArray").New(size)
+	js.CopyBytesToJS(arr, e.pixelBuf)
+	imgData.Get("data").Call("set", arr)
+	e.ctx2d.Call("putImageData", imgData, 0, 0)
 }
 
 func (e *engine) setWindowSize(w, h int) {

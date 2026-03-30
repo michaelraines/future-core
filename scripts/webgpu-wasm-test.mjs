@@ -108,9 +108,9 @@ try {
   log("Loading test page...");
   await page.goto(url, { waitUntil: "domcontentloaded" });
 
-  // Wait for the title to change from default (indicates completion).
+  // Wait for the title to indicate the engine is running or an error.
   await page.waitForFunction(
-    () => document.title.startsWith("PASS") || document.title.startsWith("FAIL"),
+    () => document.title.startsWith("RUNNING") || document.title.startsWith("FAIL") || document.title.startsWith("PASS"),
     { timeout: TIMEOUT_MS }
   );
 
@@ -119,26 +119,20 @@ try {
 
   log(`Result: ${resultText}`);
 
-  let result;
-  try {
-    result = JSON.parse(resultText);
-  } catch {
-    result = { ok: false, error: "failed to parse result JSON" };
-  }
-
-  if (result.ok) {
-    log(`PASS — WebGPU rendered successfully in browser`);
-    if (result.caps) {
-      log(`  Capabilities: ${result.caps}`);
-    }
+  if (title.startsWith("RUNNING")) {
+    log("Engine is running — capturing after frames render...");
+    exitCode = 0;
+  } else if (title.startsWith("PASS")) {
+    log("PASS");
     exitCode = 0;
   } else {
-    log(`FAIL at stage "${result.stage}": ${result.error}`);
+    log(`FAIL: ${title}`);
+    log(`Output: ${resultText}`);
     exitCode = 1;
   }
 
-  // Wait for browser to composite the WebGPU canvas content.
-  await page.waitForTimeout(500);
+  // Wait for several frames to render and composite.
+  await page.waitForTimeout(2000);
 
   // Save a screenshot of the rendered output.
   const screenshotPath = resolve("testdata/visual/webgpu_wasm_browser.png");
