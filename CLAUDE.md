@@ -183,7 +183,7 @@ tolerance). Golden images are auto-generated on first run. See
 | WebGL2 | `internal/backend/webgl/` | 92% | 10/10 |
 | Vulkan | `internal/backend/vulkan/` | 92% | 10/10 |
 | Metal | `internal/backend/metal/` | 90% | 10/10 |
-| WebGPU | `internal/backend/webgpu/` | 91% | 10/10 |
+| WebGPU | `internal/backend/webgpu/` | 92% | 10/10 |
 | DirectX 12 | `internal/backend/dx12/` | 90% | 10/10 |
 
 ## Development Workflow
@@ -362,8 +362,22 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   backends breaks their display path.
 - **Always use `scripts/visual-test.sh`** for rendering validation, not
   `go run` directly. The script handles headless capture via env vars.
-- **Known test failures**: WebGPU tests fail without `libwgpu_native.dylib`
-  installed. This is pre-existing.
+- **WebGPU has three build modes** — soft (CI), native GPU (`_gpu.go` via
+  wgpu-native/purego), and browser (`_js.go` via `syscall/js`/`navigator.gpu`).
+  Soft files use tag `(!(desktop) && !js) || soft`; GPU files use
+  `desktop && !soft`; JS files use `js && !soft`. All three must compile when
+  modifying the webgpu package. Verify with: `go build -tags soft`,
+  `go build`, `GOOS=js GOARCH=wasm go build`.
+- **WebGPU uniform ring buffer** — the native GPU path uses a 16 KB persistent
+  buffer with 256-byte-aligned cursor, reset per-frame in `BeginFrame`. The
+  browser path creates per-draw temporary buffers (JS GC handles cleanup).
+- **WebGPU shader translation** — GLSL→WGSL via `internal/shadertranslate/wgsl.go`.
+  Most GLSL built-ins pass through unchanged (WGSL has identical names).
+  `mod(x, y)` needs active translation to `(x % y)`. The translator does not
+  support array uniforms or custom function definitions.
+- **Known test requirement**: WebGPU native GPU tests require `libwgpu_native`
+  at runtime. See `internal/backend/webgpu/GPU_TESTING.md` for the 7-tier
+  validation checklist.
 - **Use `make build` not `go build ./...`** — the repo has CGo GLFW source
   files that require build tag filtering handled by the Makefile.
 
@@ -391,7 +405,7 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
 | `internal/backend/webgl/` | 80% | 100% | WebGL2 soft-delegating backend; conformance + unit tests |
 | `internal/backend/vulkan/` | 80% | 100% | Vulkan soft-delegating backend; conformance + unit tests |
 | `internal/backend/metal/` | 80% | 100% | Metal soft-delegating backend; conformance + unit tests |
-| `internal/backend/webgpu/` | 80% | 100% | WebGPU soft-delegating backend; conformance + unit tests |
+| `internal/backend/webgpu/` | 80% | 100% | WebGPU triple-mode backend (soft/native GPU/browser JS); conformance + unit tests; see `GPU_TESTING.md` |
 | `internal/backend/dx12/` | 80% | 100% | DirectX 12 soft-delegating backend; conformance + unit tests |
 | `internal/platform/` | Excluded | — | Interface definitions only; implementations tested via integration |
 | Public API (root) | 80% | 100% | Image, GeoM, DrawImage, options, type mapping |

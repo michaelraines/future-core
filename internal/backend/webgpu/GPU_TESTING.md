@@ -145,6 +145,36 @@ Validates resize handling:
 2. Resize the window manually
 3. Rendering should adapt without crash (surface reconfigured)
 
+### Tier 8 — Browser WebGPU (WASM)
+
+Validates the `_js.go` browser path via `GOOS=js GOARCH=wasm`:
+
+```bash
+# 1. Build WASM binary
+GOOS=js GOARCH=wasm go build -o main.wasm ./cmd/yourapp/
+
+# 2. Copy the Go WASM exec support JS
+cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" .
+
+# 3. Serve with a local HTTP server (WebGPU requires HTTPS or localhost)
+# 4. Open in Chrome/Edge (WebGPU enabled by default) or Firefox Nightly
+```
+
+**What this validates:**
+- `navigator.gpu` availability detection
+- Async `requestAdapter()` / `requestDevice()` via Promise callbacks
+- `GPUCanvasContext.configure()` for presentation
+- GLSL→WGSL shader translation + `device.createShaderModule()`
+- `GPURenderPipeline` creation with bind group layouts
+- Texture/buffer creation and upload via `queue.writeTexture/writeBuffer`
+- Full render pass: command encoder → render pass → draw → submit
+- Canvas presentation
+
+**Browser requirements:**
+- Chrome 113+ or Edge 113+ (WebGPU enabled by default)
+- Firefox Nightly with `dom.webgpu.enabled` flag
+- Safari Technology Preview (partial support)
+
 ## Known Limitations
 
 - **Conformance golden images**: GPU mode may produce slightly different
