@@ -1,4 +1,4 @@
-//go:build (darwin || linux || freebsd || windows) && !soft
+//go:build (darwin || linux || freebsd || windows || android) && !soft
 
 // Package vk provides pure Go Vulkan 1.2 bindings loaded at runtime via purego.
 // No CGo is required. The shared library (libvulkan.so on Linux,
@@ -108,11 +108,12 @@ const (
 	StructureTypePipelineShaderStageCreateInfo        = 18
 
 	// KHR extension structure types.
-	StructureTypeSwapchainCreateInfoKHR    = 1000001000
-	StructureTypePresentInfoKHR            = 1000001001
-	StructureTypeMetalSurfaceCreateInfoEXT = 1000217000
-	StructureTypeWin32SurfaceCreateInfoKHR = 1000009000
-	StructureTypeXlibSurfaceCreateInfoKHR  = 1000004000
+	StructureTypeSwapchainCreateInfoKHR      = 1000001000
+	StructureTypePresentInfoKHR              = 1000001001
+	StructureTypeMetalSurfaceCreateInfoEXT   = 1000217000
+	StructureTypeWin32SurfaceCreateInfoKHR   = 1000009000
+	StructureTypeXlibSurfaceCreateInfoKHR    = 1000004000
+	StructureTypeAndroidSurfaceCreateInfoKHR = 1000008000
 )
 
 // VkFormat constants.
@@ -1139,6 +1140,14 @@ type XlibSurfaceCreateInfoKHR struct {
 	Window  uintptr // Window (X11)
 }
 
+// AndroidSurfaceCreateInfoKHR mirrors VkAndroidSurfaceCreateInfoKHR.
+type AndroidSurfaceCreateInfoKHR struct {
+	SType  uint32
+	PNext  uintptr
+	Flags  uint32
+	Window uintptr // ANativeWindow*
+}
+
 // ---------------------------------------------------------------------------
 // Internal function variables — populated by Init()
 // ---------------------------------------------------------------------------
@@ -1255,6 +1264,7 @@ var (
 	fnCreateMetalSurfaceEXT                   func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
 	fnCreateWin32SurfaceKHR                   func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
 	fnCreateXlibSurfaceKHR                    func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
+	fnCreateAndroidSurfaceKHR                 func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
 )
 
 // lib holds the loaded Vulkan library handle.
@@ -2097,6 +2107,7 @@ func InitSwapchainFunctions(instance Instance) error {
 	_ = resolve(&fnCreateMetalSurfaceEXT, "vkCreateMetalSurfaceEXT")
 	_ = resolve(&fnCreateWin32SurfaceKHR, "vkCreateWin32SurfaceKHR")
 	_ = resolve(&fnCreateXlibSurfaceKHR, "vkCreateXlibSurfaceKHR")
+	_ = resolve(&fnCreateAndroidSurfaceKHR, "vkCreateAndroidSurfaceKHR")
 
 	return nil
 }
@@ -2246,6 +2257,19 @@ func CreateXlibSurfaceKHR(instance Instance, info *XlibSurfaceCreateInfoKHR) (Su
 	r := fnCreateXlibSurfaceKHR(instance, uintptr(unsafe.Pointer(info)), 0, &surface)
 	if r != Success {
 		return 0, fmt.Errorf("vkCreateXlibSurfaceKHR: %w", r)
+	}
+	return surface, nil
+}
+
+// CreateAndroidSurfaceKHR creates a Vulkan surface from an ANativeWindow (Android).
+func CreateAndroidSurfaceKHR(instance Instance, info *AndroidSurfaceCreateInfoKHR) (SurfaceKHR, error) {
+	if fnCreateAndroidSurfaceKHR == nil {
+		return 0, fmt.Errorf("vk: vkCreateAndroidSurfaceKHR not available")
+	}
+	var surface SurfaceKHR
+	r := fnCreateAndroidSurfaceKHR(instance, uintptr(unsafe.Pointer(info)), 0, &surface)
+	if r != Success {
+		return 0, fmt.Errorf("vkCreateAndroidSurfaceKHR: %w", r)
 	}
 	return surface, nil
 }

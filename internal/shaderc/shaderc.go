@@ -1,4 +1,4 @@
-//go:build (darwin || linux || freebsd || windows) && !soft
+//go:build (darwin || linux || freebsd || windows || android) && !soft
 
 // Package shaderc provides pure-Go bindings to libshaderc for compiling
 // GLSL to SPIR-V bytecode. Loaded at runtime via purego — no CGo required.

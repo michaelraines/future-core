@@ -1,4 +1,4 @@
-//go:build (darwin || linux || freebsd || windows) && !soft
+//go:build (darwin || linux || freebsd || windows || android) && !soft
 
 package shaderc
 
