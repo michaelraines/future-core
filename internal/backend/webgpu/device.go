@@ -1,4 +1,4 @@
-//go:build !(darwin || linux || freebsd || windows) || soft
+//go:build (!(darwin || linux || freebsd || windows) && !js) || soft
 
 // Package webgpu implements backend.Device targeting the WebGPU API.
 //

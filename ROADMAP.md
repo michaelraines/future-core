@@ -414,7 +414,7 @@ both desktop and web targets.
 | Resize handling | Done | `Resize(w,h)` reconfigures surface or recreates offscreen texture; BeginFrame auto-detects stale surfaces and retries |
 | WGSL translator: mod()+comments | Done | `mod(x,y)` → `(x % y)`; comment stripping; bool type; built-in math functions verified (sin, cos, mix, clamp pass through) |
 | GPU testing documentation | Done | `GPU_TESTING.md` with 7-tier validation checklist from device init through visual testing |
-| Browser WebGPU path (`//go:build js`) | Planned | `syscall/js` bindings to `navigator.gpu` |
+| Browser WebGPU path (`//go:build js`) | Done | 7 `_js.go` files via `syscall/js`; `navigator.gpu` → GPUDevice/Queue/Encoder; GPUCanvasContext for presentation; shared GLSL→WGSL translator; async Promise callbacks |
 | Build tag `//go:build !soft` | Done | GPU files on desktop; soft fallback with `-tags soft` |
 
 ### 9f — DirectX 12 Backend (Done)

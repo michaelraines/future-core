@@ -230,6 +230,11 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 - Buffer creation, upload, sub-region upload
 - Viewport, scissor, draw, drawIndexed
 - ReadScreen via texture-to-buffer copy
+- **Browser path** (`//go:build js`): full `syscall/js` implementation
+  targeting the browser `navigator.gpu` API — `GPUDevice`, `GPUQueue`,
+  `GPUCommandEncoder`, `GPURenderPassEncoder`, `GPUCanvasContext` for
+  presentation, async adapter/device via Promise callbacks, GLSL→WGSL
+  translation shared with native path
 
 ### Known Issues
 - No GPU tests yet — requires `libwgpu_native.{so,dylib,dll}` at runtime
@@ -238,10 +243,10 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
   math functions; does not support array uniforms or custom functions
 
 ### Roadmap
-1. Validate clear + readback cycle on GPU hardware
+1. Validate clear + readback cycle on GPU hardware (native + browser)
 2. Validate full sprite rendering pipeline with visual test
 3. Run conformance suite against GPU mode
-4. Browser path via `syscall/js` (`navigator.gpu`)
+4. HTML harness example for browser WebGPU
 
 ---
 
