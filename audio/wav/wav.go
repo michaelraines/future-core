@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/michaelraines/future-render/audio/internal/pcm"
+	"github.com/michaelraines/future-core/audio/internal/pcm"
 )
 
 // Stream is a decoded WAV audio stream. It provides signed 16-bit LE stereo

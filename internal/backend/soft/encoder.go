@@ -3,7 +3,7 @@ package soft
 import (
 	"math"
 
-	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 // DrawRecord captures the parameters of a single draw call. For testing and

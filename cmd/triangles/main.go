@@ -14,7 +14,7 @@ import (
 	"log"
 	"math"
 
-	futurerender "github.com/michaelraines/future-render"
+	futurerender "github.com/michaelraines/future-core"
 )
 
 const (

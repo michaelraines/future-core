@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/gl"
+	"github.com/michaelraines/future-core/internal/gl"
 )
 
 // headlessConfig holds screenshot-and-exit configuration from env vars.
@@ -19,8 +19,8 @@ import (
 //
 // Environment variables:
 //
-//	FUTURE_RENDER_HEADLESS=N       Capture after N frames and exit.
-//	FUTURE_RENDER_HEADLESS_OUTPUT  Output PNG path (default: headless_output.png).
+//	FUTURE_CORE_HEADLESS=N       Capture after N frames and exit.
+//	FUTURE_CORE_HEADLESS_OUTPUT  Output PNG path (default: headless_output.png).
 type headlessConfig struct {
 	frames int
 	output string
@@ -29,7 +29,7 @@ type headlessConfig struct {
 // getHeadlessConfig reads headless configuration from the environment.
 // Returns nil if headless mode is not enabled.
 func getHeadlessConfig() *headlessConfig {
-	v := os.Getenv("FUTURE_RENDER_HEADLESS")
+	v := os.Getenv("FUTURE_CORE_HEADLESS")
 	if v == "" {
 		return nil
 	}
@@ -37,7 +37,7 @@ func getHeadlessConfig() *headlessConfig {
 	if err != nil || n <= 0 {
 		return nil
 	}
-	output := os.Getenv("FUTURE_RENDER_HEADLESS_OUTPUT")
+	output := os.Getenv("FUTURE_CORE_HEADLESS_OUTPUT")
 	if output == "" {
 		output = "headless_output.png"
 	}

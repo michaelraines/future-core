@@ -2,7 +2,7 @@
 
 package webgl
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Shader implements backend.Shader for WebGL2.
 // Wraps a soft.Shader and stores the GLSL ES 3.00 source that a real

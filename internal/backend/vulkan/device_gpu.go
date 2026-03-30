@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/vk"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/vk"
 )
 
 // Device implements backend.Device for Vulkan with real GPU bindings.
@@ -47,11 +47,11 @@ type Device struct {
 	// Shared uniform buffer for UBO descriptors (persistently mapped).
 	// Uses a ring-buffer write cursor so each draw's UBO data persists
 	// until the command buffer executes.
-	uniformBuffer    vk.Buffer
-	uniformMemory    vk.DeviceMemory
-	uniformMapped    unsafe.Pointer
-	uniformBufSize   int
-	uniformCursor    int // next write offset (advanced per draw, reset per frame)
+	uniformBuffer  vk.Buffer
+	uniformMemory  vk.DeviceMemory
+	uniformMapped  unsafe.Pointer
+	uniformBufSize int
+	uniformCursor  int // next write offset (advanced per draw, reset per frame)
 
 	// Vulkan-specific state for public API compatibility.
 	instanceInfo       InstanceCreateInfo
@@ -121,8 +121,8 @@ type PhysicalDeviceInfo struct {
 func New() *Device {
 	return &Device{
 		instanceInfo: InstanceCreateInfo{
-			AppName:    "future-render",
-			EngineName: "future-render",
+			AppName:    "future-core",
+			EngineName: "future-core",
 			APIVersion: vkAPIVersion1_2,
 		},
 	}
@@ -136,7 +136,7 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	}
 	d.width = cfg.Width
 	d.height = cfg.Height
-	d.debugEnabled = cfg.Debug || os.Getenv("FUTURE_RENDER_VK_VALIDATION") == "1"
+	d.debugEnabled = cfg.Debug || os.Getenv("FUTURE_CORE_VK_VALIDATION") == "1"
 	d.surfaceFactory = cfg.SurfaceFactory
 
 	// Load Vulkan library.
@@ -908,7 +908,7 @@ func (d *Device) BeginFrame() {
 		caps, _ := vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(d.physicalDevice, d.surface)
 		if caps.CurrentExtentWidth != d.swapchainExtent[0] || caps.CurrentExtentHeight != d.swapchainExtent[1] {
 			if caps.CurrentExtentWidth > 0 && caps.CurrentExtentHeight > 0 {
-					_ = d.recreateSwapchain(int(caps.CurrentExtentWidth), int(caps.CurrentExtentHeight))
+				_ = d.recreateSwapchain(int(caps.CurrentExtentWidth), int(caps.CurrentExtentHeight))
 			}
 		}
 

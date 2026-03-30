@@ -159,9 +159,9 @@ setup_virtual_display
 
 # Run the binary with headless capture enabled.
 echo "==> Running $EXAMPLE (mode=$MODE, backend=$BACKEND, frames=$FRAMES)..."
-FUTURE_RENDER_BACKEND="$BACKEND" \
-  FUTURE_RENDER_HEADLESS="$FRAMES" \
-  FUTURE_RENDER_HEADLESS_OUTPUT="$OUTPUT" \
+FUTURE_CORE_BACKEND="$BACKEND" \
+  FUTURE_CORE_HEADLESS="$FRAMES" \
+  FUTURE_CORE_HEADLESS_OUTPUT="$OUTPUT" \
   "$BINARY" 2>&1
 
 # Verify output was created.

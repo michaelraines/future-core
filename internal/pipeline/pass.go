@@ -1,7 +1,7 @@
 package pipeline
 
 import (
-	"github.com/michaelraines/future-render/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 // Pass represents a single render pass in the pipeline.

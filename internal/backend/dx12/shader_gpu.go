@@ -2,7 +2,7 @@
 
 package dx12
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Shader implements backend.Shader for DX12.
 // Stores HLSL source for later compilation into DXBC/DXIL bytecode.

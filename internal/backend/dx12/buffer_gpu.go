@@ -5,8 +5,8 @@ package dx12
 import (
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/d3d12"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/d3d12"
 )
 
 // Buffer implements backend.Buffer for DX12 via ID3D12Resource.

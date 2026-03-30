@@ -2,7 +2,7 @@
 
 package win32
 
-import "github.com/michaelraines/future-render/internal/platform"
+import "github.com/michaelraines/future-core/internal/platform"
 
 // Win32 virtual key codes → platform.Key.
 var vkKeyMap = [256]platform.Key{

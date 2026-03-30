@@ -3,8 +3,8 @@ package futurerender
 import (
 	"sync/atomic"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/batch"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/batch"
 )
 
 // renderer holds internal rendering state shared between the engine loop

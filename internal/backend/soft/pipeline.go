@@ -1,6 +1,6 @@
 package soft
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Pipeline implements backend.Pipeline as a stored descriptor.
 type Pipeline struct {

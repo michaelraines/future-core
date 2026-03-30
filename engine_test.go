@@ -255,12 +255,12 @@ func TestScreenClearedEveryFrameDefault(t *testing.T) {
 }
 
 func TestBackendDefault(t *testing.T) {
-	t.Setenv("FUTURE_RENDER_BACKEND", "")
+	t.Setenv("FUTURE_CORE_BACKEND", "")
 	require.Equal(t, "auto", Backend())
 }
 
 func TestBackendEnvVar(t *testing.T) {
-	t.Setenv("FUTURE_RENDER_BACKEND", "opengl")
+	t.Setenv("FUTURE_CORE_BACKEND", "opengl")
 	require.Equal(t, "opengl", Backend())
 }
 
@@ -276,7 +276,7 @@ func TestBackendResolvedTakesPrecedence(t *testing.T) {
 	old := resolvedBackend.Load()
 	defer resolvedBackend.Store(old)
 
-	t.Setenv("FUTURE_RENDER_BACKEND", "vulkan")
+	t.Setenv("FUTURE_CORE_BACKEND", "vulkan")
 	resolvedBackend.Store("opengl")
 	require.Equal(t, "opengl", Backend())
 }

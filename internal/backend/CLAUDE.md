@@ -143,7 +143,7 @@ func init() {
 }
 ```
 
-The engine selects backends via `FUTURE_RENDER_BACKEND` env var or
+The engine selects backends via `FUTURE_CORE_BACKEND` env var or
 `backend.Create(name)`. `backend.Available()` lists all registered backends.
 
 **Important**: Each backend's `register.go` must be imported (directly or

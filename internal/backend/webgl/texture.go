@@ -2,7 +2,7 @@
 
 package webgl
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Texture implements backend.Texture for WebGL2.
 // Wraps a soft.Texture and adds WebGL2-specific metadata (GL target, format).

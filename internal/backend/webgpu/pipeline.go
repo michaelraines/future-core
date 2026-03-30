@@ -2,7 +2,7 @@
 
 package webgpu
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Pipeline implements backend.Pipeline for WebGPU.
 // Models a GPURenderPipeline object.

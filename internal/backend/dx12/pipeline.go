@@ -2,7 +2,7 @@
 
 package dx12
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Pipeline implements backend.Pipeline for DirectX 12.
 // Models an ID3D12PipelineState (graphics PSO) with an associated

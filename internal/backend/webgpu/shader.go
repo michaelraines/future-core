@@ -2,7 +2,7 @@
 
 package webgpu
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Shader implements backend.Shader for WebGPU.
 // Models a GPUShaderModule compiled from WGSL source.

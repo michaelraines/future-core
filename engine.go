@@ -149,7 +149,7 @@ const (
 
 // Backend returns the current rendering backend name.
 // Before the engine is running, this returns the value of the
-// FUTURE_RENDER_BACKEND environment variable (or "auto").
+// FUTURE_CORE_BACKEND environment variable (or "auto").
 // After the engine starts, it returns the actual resolved backend name
 // (e.g. "opengl", "soft").
 func Backend() string {
@@ -161,7 +161,7 @@ func Backend() string {
 
 // backendName returns the backend name from the environment or default.
 func backendName() string {
-	if v := os.Getenv("FUTURE_RENDER_BACKEND"); v != "" {
+	if v := os.Getenv("FUTURE_CORE_BACKEND"); v != "" {
 		return v
 	}
 	return "auto"

@@ -1,6 +1,6 @@
 package webgpu
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // WGPUTextureFormat equivalents (matching wgpu-native enum values).
 const (

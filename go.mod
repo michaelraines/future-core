@@ -1,4 +1,4 @@
-module github.com/michaelraines/future-render
+module github.com/michaelraines/future-core
 
 go 1.24.7
 

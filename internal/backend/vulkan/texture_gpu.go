@@ -5,8 +5,8 @@ package vulkan
 import (
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/vk"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/vk"
 )
 
 // Texture implements backend.Texture for Vulkan using VkImage + VkImageView.

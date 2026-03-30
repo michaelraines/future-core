@@ -3,8 +3,8 @@
 package webgpu
 
 import (
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/wgpu"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/wgpu"
 )
 
 // Shader implements backend.Shader for WebGPU.

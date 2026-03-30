@@ -2,7 +2,7 @@
 
 package vulkan
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Shader implements backend.Shader for Vulkan.
 // Models a pair of VkShaderModule (vertex + fragment) plus a SPIR-V blob.

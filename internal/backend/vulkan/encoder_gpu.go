@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/vk"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/vk"
 )
 
 // Encoder implements backend.CommandEncoder for Vulkan by recording into
@@ -20,12 +20,12 @@ type Encoder struct {
 	inRenderPass      bool
 	currentRenderPass vk.RenderPass
 	currentPipeline   *Pipeline
-	boundTexture    *Texture
-	boundShader     *Shader
-	boundSampler    vk.Sampler
-	descriptorPool  vk.DescriptorPool
-	descriptorSet   vk.DescriptorSet
-	colorWriteOn    bool
+	boundTexture      *Texture
+	boundShader       *Shader
+	boundSampler      vk.Sampler
+	descriptorPool    vk.DescriptorPool
+	descriptorSet     vk.DescriptorSet
+	colorWriteOn      bool
 }
 
 // BeginRenderPass begins a Vulkan render pass.

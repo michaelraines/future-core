@@ -4,7 +4,7 @@ package futurerender
 // with user-friendly functions matching Ebitengine's API.
 
 import (
-	"github.com/michaelraines/future-render/internal/platform"
+	"github.com/michaelraines/future-core/internal/platform"
 )
 
 // IsKeyPressed returns whether the given key is currently pressed.

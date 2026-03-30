@@ -11,9 +11,9 @@ package vulkan
 import (
 	"fmt"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/backend/soft"
-	"github.com/michaelraines/future-render/internal/backend/softdelegate"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/backend/soft"
+	"github.com/michaelraines/future-core/internal/backend/softdelegate"
 )
 
 // Device implements backend.Device for Vulkan.
@@ -52,8 +52,8 @@ func New() *Device {
 	return &Device{
 		inner: soft.New(),
 		instanceInfo: InstanceCreateInfo{
-			AppName:    "future-render",
-			EngineName: "future-render",
+			AppName:    "future-core",
+			EngineName: "future-core",
 			APIVersion: vkAPIVersion1_2,
 		},
 		physicalDevice: PhysicalDeviceInfo{

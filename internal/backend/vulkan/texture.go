@@ -2,7 +2,7 @@
 
 package vulkan
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Texture implements backend.Texture for Vulkan.
 // Models a VkImage + VkImageView + VkDeviceMemory triple.

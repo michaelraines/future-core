@@ -3,8 +3,8 @@
 package futurerender
 
 import (
-	"github.com/michaelraines/future-render/internal/platform"
-	glfwplatform "github.com/michaelraines/future-render/internal/platform/glfw"
+	"github.com/michaelraines/future-core/internal/platform"
+	glfwplatform "github.com/michaelraines/future-core/internal/platform/glfw"
 )
 
 // newPlatformWindow creates a GLFW window (vendored C source, compiled via CGo).

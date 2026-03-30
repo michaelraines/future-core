@@ -5,7 +5,7 @@ package glfw
 import (
 	"github.com/ebitengine/purego"
 
-	"github.com/michaelraines/future-render/internal/platform"
+	"github.com/michaelraines/future-core/internal/platform"
 )
 
 // installCallbacks registers GLFW event callbacks via purego.NewCallback.

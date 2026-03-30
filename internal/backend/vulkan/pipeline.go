@@ -2,7 +2,7 @@
 
 package vulkan
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Pipeline implements backend.Pipeline for Vulkan.
 // Models a VkPipeline (graphics pipeline state object). In Vulkan, pipeline

@@ -2,7 +2,7 @@
 
 package dx12
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Buffer implements backend.Buffer for DirectX 12.
 // Models an ID3D12Resource (committed buffer resource).

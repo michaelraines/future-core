@@ -2,7 +2,7 @@
 
 package metal
 
-import "github.com/michaelraines/future-render/internal/backend"
+import "github.com/michaelraines/future-core/internal/backend"
 
 // Shader implements backend.Shader for Metal.
 // Models an MTLLibrary containing compiled MSL functions.

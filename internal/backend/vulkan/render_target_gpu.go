@@ -3,8 +3,8 @@
 package vulkan
 
 import (
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/vk"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/vk"
 )
 
 // RenderTarget implements backend.RenderTarget for Vulkan.

@@ -9,7 +9,7 @@ import (
 	"log"
 	"time"
 
-	futurerender "github.com/michaelraines/future-render"
+	futurerender "github.com/michaelraines/future-core"
 )
 
 const (

@@ -5,8 +5,8 @@ package opengl
 import (
 	"unsafe"
 
-	"github.com/michaelraines/future-render/internal/backend"
-	"github.com/michaelraines/future-render/internal/gl"
+	"github.com/michaelraines/future-core/internal/backend"
+	"github.com/michaelraines/future-core/internal/gl"
 )
 
 // commandEncoder implements backend.CommandEncoder for OpenGL.
