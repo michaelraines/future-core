@@ -60,10 +60,10 @@ func (g *demoGame) Draw(screen *futurerender.Image) {
 	fillRect(screen, 200-s/2, 200-s/2, s, s, 0.95, 0.9, 0.2, 1.0)
 
 	// White border rectangle to prove rendering works.
-	fillRect(screen, 5, 5, screenW-10, 3, 1, 1, 1, 1)           // top
-	fillRect(screen, 5, screenH-8, screenW-10, 3, 1, 1, 1, 1)   // bottom
-	fillRect(screen, 5, 5, 3, screenH-10, 1, 1, 1, 1)           // left
-	fillRect(screen, screenW-8, 5, 3, screenH-10, 1, 1, 1, 1)   // right
+	fillRect(screen, 5, 5, screenW-10, 3, 1, 1, 1, 1)         // top
+	fillRect(screen, 5, screenH-8, screenW-10, 3, 1, 1, 1, 1) // bottom
+	fillRect(screen, 5, 5, 3, screenH-10, 1, 1, 1, 1)         // left
+	fillRect(screen, screenW-8, 5, 3, screenH-10, 1, 1, 1, 1) // right
 }
 
 func (g *demoGame) Layout(_, _ int) (int, int) {

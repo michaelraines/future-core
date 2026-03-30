@@ -92,7 +92,7 @@ type engine struct {
 	ctx2d    js.Value
 
 	// Frame timing.
-	lastTime time.Time
+	lastTime    time.Time
 	accumulator time.Duration
 	frameCount  int
 	tickCount   int
@@ -420,12 +420,12 @@ func (e *engine) setWindowTitle(title string) {
 	js.Global().Get("document").Set("title", title)
 }
 
-func (e *engine) setFullscreen(fs bool) {}
-func (e *engine) isFullscreen() bool    { return false }
-func (e *engine) setVSync(_ bool)       {}
-func (e *engine) isVSync() bool         { return true }
-func (e *engine) currentFPS() float64   { return e.fpsValue }
-func (e *engine) currentTPS() float64   { return e.tpsValue }
+func (e *engine) setFullscreen(fs bool)      {}
+func (e *engine) isFullscreen() bool         { return false }
+func (e *engine) setVSync(_ bool)            {}
+func (e *engine) isVSync() bool              { return true }
+func (e *engine) currentFPS() float64        { return e.fpsValue }
+func (e *engine) currentTPS() float64        { return e.tpsValue }
 func (e *engine) setCursorMode(_ CursorMode) {}
 func (e *engine) deviceScaleFactor() float64 {
 	dpr := js.Global().Get("devicePixelRatio").Float()
