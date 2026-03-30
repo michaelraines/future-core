@@ -73,7 +73,7 @@ func TestSaveScreenshotReadScreen(t *testing.T) {
 	// Verify the PNG was written and is valid.
 	f, err := os.Open(path)
 	require.NoError(t, err)
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // test file, best-effort close
 
 	img, err := png.Decode(f)
 	require.NoError(t, err)

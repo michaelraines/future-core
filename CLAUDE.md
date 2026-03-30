@@ -214,7 +214,28 @@ Follow this cycle for every change:
 - `make build` ensures everything compiles (included in `make`)
 - If adding platform-specific code, verify build tags work
 
-### 5. Update Docs
+### 5. Verify CI Parity Before Push
+- **Do not push unless you are confident CI will pass.** CI runs with
+  `TAGS=soft` and X11 development headers installed. Before pushing, run:
+  ```bash
+  make TAGS=soft fmt
+  make TAGS=soft vet
+  make TAGS=soft lint
+  make TAGS=soft test
+  make TAGS=soft cover-check
+  make TAGS=soft build
+  ```
+- If X11 headers are not installed locally, install them first:
+  ```bash
+  sudo apt-get install -y libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev libxxf86vm-dev
+  ```
+- The CI workflow (`.github/workflows/ci.yml`) is the source of truth.
+  Review it before pushing to ensure your changes match what CI validates.
+- **Never assume local `make` passing is sufficient.** The CI uses
+  `-tags soft` which changes which files are compiled (e.g., CGo GLFW
+  files are still built on Linux even with the soft tag).
+
+### 6. Update Docs
 - Update `ROADMAP.md` when completing milestone tasks
 - Don't create new markdown files unless explicitly asked
 
