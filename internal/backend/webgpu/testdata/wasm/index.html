@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>WebGPU WASM Test</title></head>
+<body>
+<pre id="output">Loading...</pre>
+<script src="wasm_exec.js"></script>
+<script>
+  const go = new Go();
+  WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then(async (result) => {
+    await go.run(result.instance);
+    const out = document.getElementById("output");
+    const r = window.__webgpu_result;
+    if (r) {
+      out.textContent = r;
+      const parsed = JSON.parse(r);
+      document.title = parsed.ok ? "PASS" : "FAIL: " + parsed.error;
+    } else {
+      out.textContent = '{"ok":false,"stage":"wasm","error":"no result set"}';
+      document.title = "FAIL: no result";
+    }
+  }).catch((err) => {
+    const out = document.getElementById("output");
+    out.textContent = JSON.stringify({ok: false, stage: "wasm_load", error: err.toString()});
+    document.title = "FAIL: " + err.toString();
+  });
+</script>
+</body>
+</html>
