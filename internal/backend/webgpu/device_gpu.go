@@ -24,9 +24,11 @@ type Device struct {
 	defaultColorTex  wgpu.Texture
 	defaultColorView wgpu.TextureView
 
-	adapterInfo    AdapterInfo
-	limits         Limits
-	defaultSampler wgpu.Sampler
+	adapterInfo AdapterInfo
+	limits      Limits
+
+	// Sampler cache: keyed by filter mode.
+	samplers map[wgpu.FilterMode]wgpu.Sampler
 }
 
 // New creates a new WebGPU device.
@@ -35,7 +37,8 @@ func New() *Device {
 		adapterInfo: AdapterInfo{
 			BackendType: BackendTypeNull,
 		},
-		limits: DefaultLimits(),
+		limits:   DefaultLimits(),
+		samplers: make(map[wgpu.FilterMode]wgpu.Sampler),
 	}
 }
 
@@ -57,40 +60,25 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("webgpu: failed to create instance")
 	}
 
-	// Request adapter (synchronous via callback).
-	var adapterErr error
-	var adapterResult wgpu.Adapter
-	adapterCallback := func(status uint32, adapter wgpu.Adapter, msg uintptr, userdata uintptr) {
-		if status != 0 {
-			adapterErr = fmt.Errorf("webgpu: adapter request failed (status %d)", status)
-			return
-		}
-		adapterResult = adapter
+	// Request adapter (synchronous — wgpu-native calls callback inline).
+	adapter, err := wgpu.InstanceRequestAdapterSync(d.instance)
+	if err != nil {
+		wgpu.InstanceRelease(d.instance)
+		d.instance = 0
+		return fmt.Errorf("webgpu: %w", err)
 	}
-	_ = adapterCallback // In real usage, passed via C callback mechanism
-	// For now, set adapter directly — full callback integration requires
-	// purego callback support.
-	d.adapter = adapterResult
+	d.adapter = adapter
 
-	// Request device (synchronous via callback).
-	var deviceErr error
-	var deviceResult wgpu.Device
-	deviceCallback := func(status uint32, device wgpu.Device, msg uintptr, userdata uintptr) {
-		if status != 0 {
-			deviceErr = fmt.Errorf("webgpu: device request failed (status %d)", status)
-			return
-		}
-		deviceResult = device
+	// Request device (synchronous — wgpu-native calls callback inline).
+	device, err := wgpu.AdapterRequestDeviceSync(d.adapter)
+	if err != nil {
+		wgpu.AdapterRelease(d.adapter)
+		d.adapter = 0
+		wgpu.InstanceRelease(d.instance)
+		d.instance = 0
+		return fmt.Errorf("webgpu: %w", err)
 	}
-	_ = deviceCallback
-	d.device = deviceResult
-
-	if adapterErr != nil {
-		return adapterErr
-	}
-	if deviceErr != nil {
-		return deviceErr
-	}
+	d.device = device
 
 	if d.device != 0 {
 		d.queue = wgpu.DeviceGetQueue(d.device)
@@ -113,19 +101,38 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	return nil
 }
 
-// ensureDefaultSampler creates a default nearest-filter sampler if needed.
-func (d *Device) ensureDefaultSampler() wgpu.Sampler {
-	if d.defaultSampler == 0 && d.device != 0 {
-		d.defaultSampler = wgpu.DeviceCreateSampler(d.device)
+// getSampler returns a cached sampler for the given filter mode, creating one if needed.
+func (d *Device) getSampler(filter wgpu.FilterMode) wgpu.Sampler {
+	if d.device == 0 {
+		return 0
 	}
-	return d.defaultSampler
+	if s, ok := d.samplers[filter]; ok {
+		return s
+	}
+	desc := wgpu.SamplerDescriptor{
+		AddressModeU:  wgpu.AddressModeClampToEdge,
+		AddressModeV:  wgpu.AddressModeClampToEdge,
+		AddressModeW:  wgpu.AddressModeClampToEdge,
+		MagFilter:     filter,
+		MinFilter:     filter,
+		MipmapFilter:  filter,
+		LodMinClamp:   0,
+		LodMaxClamp:   32,
+		Compare:       0, // undefined — no comparison
+		MaxAnisotropy: 1,
+	}
+	s := wgpu.DeviceCreateSamplerWithDescriptor(d.device, &desc)
+	if s != 0 {
+		d.samplers[filter] = s
+	}
+	return s
 }
 
 // Dispose releases all WebGPU resources.
 func (d *Device) Dispose() {
-	if d.defaultSampler != 0 {
-		wgpu.SamplerRelease(d.defaultSampler)
-		d.defaultSampler = 0
+	for k, s := range d.samplers {
+		wgpu.SamplerRelease(s)
+		delete(d.samplers, k)
 	}
 	if d.defaultColorView != 0 {
 		wgpu.TextureViewRelease(d.defaultColorView)

@@ -400,12 +400,17 @@ both desktop and web targets.
 | WebGPU type mapping | Done | WGPUTextureFormat, WGPUTextureUsage, WGPUBufferUsage; AdapterInfo, BackendType, Limits |
 | Backend registry integration | Done | Auto-registers as "webgpu" via `init()` |
 | wgpu-native loader (`internal/wgpu/`) | Done | purego bindings to wgpu-native, 53 functions bound |
+| WGSL shader compilation | Done | GLSL→WGSL pure-Go translator (`shadertranslate/wgsl.go`); vertex/fragment attrs, uniforms, varyings, texture sampling, local vars |
+| Adapter/device initialization | Done | Synchronous via `purego.NewCallback`; wgpu-native calls callbacks inline |
+| Uniform buffer management | Done | Shader records uniforms → std140 layout → per-draw GPU buffer → bind group 0 |
+| Bind group layout caching | Done | Pipeline creates group 0 (uniforms) + group 1 (texture+sampler); encoder reuses |
+| Depth/stencil pipeline state | Done | `DepthStencilState` built from `PipelineDescriptor` depth fields |
+| Depth attachment in render pass | Done | Wires render target depth texture into `RenderPassDepthStencilAttachment` |
+| Sampler cache + SetTextureFilter | Done | Device caches samplers by filter mode; encoder records per-slot filter |
+| WebGPU render pipeline | Done | Full pipeline creation: shader modules, vertex layout, blend, depth/stencil, pipeline layout |
+| Native WebGPU path (`//go:build !js`) | Done | All `_gpu.go` files compile with full GPU API calls |
 | WebGPU swapchain / surface | Planned | `wgpu::Surface` for native; `GPUCanvasContext` for browser |
-| WGSL shader compilation | Planned | GLSL → WGSL transpilation via Naga or Tint |
-| WebGPU render pipeline | In Progress | GPU files exist but shader compilation path incomplete |
-| WebGPU bind groups + uniforms | In Progress | Bind group layout exists, async adapter/device callbacks incomplete |
 | Browser WebGPU path (`//go:build js`) | Planned | `syscall/js` bindings to `navigator.gpu` |
-| Native WebGPU path (`//go:build !js`) | In Progress | `_gpu.go` files compile, basic init works |
 | Build tag `//go:build !soft` | Done | GPU files on desktop; soft fallback with `-tags soft` |
 
 ### 9f — DirectX 12 Backend (Done)

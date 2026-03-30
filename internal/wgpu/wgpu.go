@@ -183,8 +183,76 @@ const (
 type CompareFunction uint32
 
 const (
-	CompareFunctionAlways CompareFunction = 8
+	CompareFunctionNever        CompareFunction = 1
+	CompareFunctionLess         CompareFunction = 2
+	CompareFunctionLessEqual    CompareFunction = 3
+	CompareFunctionEqual        CompareFunction = 4
+	CompareFunctionGreaterEqual CompareFunction = 5
+	CompareFunctionGreater      CompareFunction = 6
+	CompareFunctionNotEqual     CompareFunction = 7
+	CompareFunctionAlways       CompareFunction = 8
 )
+
+// StencilOperation mirrors WGPUStencilOperation.
+type StencilOperation uint32
+
+const (
+	StencilOperationKeep           StencilOperation = 0
+	StencilOperationZero           StencilOperation = 1
+	StencilOperationReplace        StencilOperation = 2
+	StencilOperationInvert         StencilOperation = 3
+	StencilOperationIncrementClamp StencilOperation = 4
+	StencilOperationDecrementClamp StencilOperation = 5
+	StencilOperationIncrementWrap  StencilOperation = 6
+	StencilOperationDecrementWrap  StencilOperation = 7
+)
+
+// AddressMode mirrors WGPUAddressMode.
+type AddressMode uint32
+
+const (
+	AddressModeRepeat       AddressMode = 0
+	AddressModeMirrorRepeat AddressMode = 1
+	AddressModeClampToEdge  AddressMode = 2
+)
+
+// FilterMode mirrors WGPUFilterMode.
+type FilterMode uint32
+
+const (
+	FilterModeNearest FilterMode = 0
+	FilterModeLinear  FilterMode = 1
+)
+
+// RenderPassDepthStencilAttachment is WGPURenderPassDepthStencilAttachment.
+type RenderPassDepthStencilAttachment struct {
+	View              TextureView
+	DepthLoadOp       LoadOp
+	DepthStoreOp      StoreOp
+	DepthClearValue   float32
+	DepthReadOnly     uint32
+	StencilLoadOp     LoadOp
+	StencilStoreOp    StoreOp
+	StencilClearValue uint32
+	StencilReadOnly   uint32
+}
+
+// SamplerDescriptor is WGPUSamplerDescriptor.
+type SamplerDescriptor struct {
+	NextInChain   uintptr
+	Label         uintptr
+	AddressModeU  AddressMode
+	AddressModeV  AddressMode
+	AddressModeW  AddressMode
+	MagFilter     FilterMode
+	MinFilter     FilterMode
+	MipmapFilter  FilterMode
+	LodMinClamp   float32
+	LodMaxClamp   float32
+	Compare       CompareFunction
+	MaxAnisotropy uint16
+	_             [2]byte // padding
+}
 
 // ---------------------------------------------------------------------------
 // Pipeline creation structs (C-compatible layout)
@@ -827,9 +895,60 @@ func DeviceCreateSampler(dev Device) Sampler {
 	return fnDeviceCreateSampler(dev, 0)
 }
 
+// DeviceCreateSamplerWithDescriptor creates a sampler with the given descriptor.
+func DeviceCreateSamplerWithDescriptor(dev Device, desc *SamplerDescriptor) Sampler {
+	return fnDeviceCreateSampler(dev, uintptr(unsafe.Pointer(desc)))
+}
+
 // SamplerRelease releases a sampler.
 func SamplerRelease(s Sampler) {
 	fnSamplerRelease(s)
+}
+
+// InstanceRequestAdapterSync synchronously requests an adapter from the instance.
+// wgpu-native calls the callback inline before returning.
+func InstanceRequestAdapterSync(inst Instance) (Adapter, error) {
+	var result Adapter
+	var resultErr error
+
+	cb := purego.NewCallback(func(status uint32, adapter uintptr, msg uintptr, userdata uintptr) {
+		if status != 0 {
+			resultErr = fmt.Errorf("adapter request failed (status %d)", status)
+			return
+		}
+		result = Adapter(adapter)
+	})
+	fnInstanceRequestAdapter(inst, 0, cb, 0)
+	if resultErr != nil {
+		return 0, resultErr
+	}
+	if result == 0 {
+		return 0, fmt.Errorf("adapter request returned nil")
+	}
+	return result, nil
+}
+
+// AdapterRequestDeviceSync synchronously requests a device from the adapter.
+// wgpu-native calls the callback inline before returning.
+func AdapterRequestDeviceSync(adapter Adapter) (Device, error) {
+	var result Device
+	var resultErr error
+
+	cb := purego.NewCallback(func(status uint32, device uintptr, msg uintptr, userdata uintptr) {
+		if status != 0 {
+			resultErr = fmt.Errorf("device request failed (status %d)", status)
+			return
+		}
+		result = Device(device)
+	})
+	fnAdapterRequestDevice(adapter, 0, cb, 0)
+	if resultErr != nil {
+		return 0, resultErr
+	}
+	if result == 0 {
+		return 0, fmt.Errorf("device request returned nil")
+	}
+	return result, nil
 }
 
 // MapModeRead is the read mode for buffer mapping.

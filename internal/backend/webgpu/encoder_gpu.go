@@ -21,6 +21,9 @@ type Encoder struct {
 	passEncoder     wgpu.RenderPassEncoder
 	cmdEncoder      wgpu.CommandEncoder
 	boundTexture    *Texture
+
+	// Current sampler filter per slot (default: nearest).
+	slotFilters map[int]wgpu.FilterMode
 }
 
 // BeginRenderPass begins a WebGPU render pass.
@@ -29,11 +32,17 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 
 	view := e.dev.defaultColorView
 	w, h := uint32(e.width), uint32(e.height)
+	var depthView wgpu.TextureView
 	if desc.Target != nil {
 		if rt, ok := desc.Target.(*RenderTarget); ok {
 			view = rt.colorTex.view
 			w = uint32(rt.w)
 			h = uint32(rt.h)
+			if rt.depthTex != nil {
+				if dt, ok := rt.depthTex.(*Texture); ok {
+					depthView = dt.view
+				}
+			}
 		}
 	}
 
@@ -59,8 +68,23 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		ColorAttachments:     ptrOf(&colorAttachment),
 	}
 
+	// Attach depth/stencil if available.
+	var depthAttach wgpu.RenderPassDepthStencilAttachment
+	if depthView != 0 {
+		depthAttach = wgpu.RenderPassDepthStencilAttachment{
+			View:            depthView,
+			DepthLoadOp:     wgpu.LoadOpClear,
+			DepthStoreOp:    wgpu.StoreOpStore,
+			DepthClearValue: 1.0,
+			StencilLoadOp:   wgpu.LoadOpClear,
+			StencilStoreOp:  wgpu.StoreOpStore,
+		}
+		rpDesc.DepthStencilAttachment = uintptr(unsafe.Pointer(&depthAttach))
+	}
+
 	e.passEncoder = wgpu.CommandEncoderBeginRenderPass(e.cmdEncoder, &rpDesc)
 	runtime.KeepAlive(colorAttachment)
+	runtime.KeepAlive(depthAttach)
 	e.inRenderPass = true
 
 	// Set default viewport.
@@ -84,7 +108,7 @@ func (e *Encoder) EndRenderPass() {
 	}
 }
 
-// SetPipeline binds a render pipeline.
+// SetPipeline binds a render pipeline and uploads uniforms.
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	p, ok := pipeline.(*Pipeline)
 	if !ok {
@@ -100,6 +124,75 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	if p.handle != 0 && e.passEncoder != 0 {
 		wgpu.RenderPassSetPipeline(e.passEncoder, p.handle)
 	}
+
+	// Bind uniform buffer (group 0) if the shader has uniforms.
+	e.bindUniforms()
+}
+
+// bindUniforms creates a GPU buffer from the shader's recorded uniforms
+// and binds it to group 0.
+func (e *Encoder) bindUniforms() {
+	if e.currentPipeline == nil || e.passEncoder == 0 || e.dev.device == 0 {
+		return
+	}
+	shader, ok := e.currentPipeline.desc.Shader.(*Shader)
+	if !ok || shader == nil {
+		return
+	}
+
+	// Use the vertex uniform layout (most common for projection matrices).
+	// If the fragment shader also has uniforms, pack those too.
+	var data []byte
+	if len(shader.vertexUniformLayout) > 0 {
+		data = shader.packUniforms(shader.vertexUniformLayout)
+	} else if len(shader.fragmentUniformLayout) > 0 {
+		data = shader.packUniforms(shader.fragmentUniformLayout)
+	}
+	if len(data) == 0 {
+		return
+	}
+
+	bgl := e.currentPipeline.uniformBGL
+	if bgl == 0 {
+		return
+	}
+
+	// Create a temporary buffer for this frame's uniform data.
+	alignedSize := uint64((len(data) + 3) &^ 3)
+	bufDesc := wgpu.BufferDescriptor{
+		Usage: wgpu.BufferUsageUniform | wgpu.BufferUsageCopyDst,
+		Size:  alignedSize,
+	}
+	uboBuf := wgpu.DeviceCreateBuffer(e.dev.device, &bufDesc)
+	if uboBuf == 0 {
+		return
+	}
+	wgpu.QueueWriteBuffer(e.dev.queue, uboBuf, 0,
+		unsafe.Pointer(&data[0]), uint64(len(data)))
+	runtime.KeepAlive(data)
+
+	// Create bind group with the uniform buffer.
+	bgEntries := []wgpu.BindGroupEntry{
+		{
+			Binding: 0,
+			Buffer_: uboBuf,
+			Offset:  0,
+			Size:    alignedSize,
+		},
+	}
+	bgDesc := wgpu.BindGroupDescriptor{
+		Layout:     bgl,
+		EntryCount: 1,
+		Entries:    uintptr(unsafe.Pointer(&bgEntries[0])),
+	}
+	bg := wgpu.DeviceCreateBindGroup(e.dev.device, &bgDesc)
+	runtime.KeepAlive(bgEntries)
+	if bg != 0 {
+		wgpu.RenderPassSetBindGroup(e.passEncoder, 0, bg)
+		wgpu.BindGroupRelease(bg)
+	}
+	// Release the temporary buffer (GPU retains it until submission completes).
+	wgpu.BufferRelease(uboBuf)
 }
 
 // SetVertexBuffer binds a vertex buffer to a slot.
@@ -128,57 +221,39 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 		return
 	}
 	e.boundTexture = t
-
-	// Create a bind group with the texture view and a default sampler.
-	// This requires a bind group layout matching the pipeline's expectations.
-	// For now, create a simple texture-only bind group.
 	if t.view == 0 {
 		return
 	}
 
-	// Create sampler.
-	sampler := e.dev.ensureDefaultSampler()
+	// Determine sampler filter for this slot.
+	filter := wgpu.FilterModeNearest
+	if e.slotFilters != nil {
+		if f, ok := e.slotFilters[slot]; ok {
+			filter = f
+		}
+	}
+	sampler := e.dev.getSampler(filter)
 	if sampler == 0 {
 		return
 	}
 
-	// Create bind group layout for texture + sampler.
-	entries := []wgpu.BindGroupLayoutEntry{
-		{
-			Binding:    0,
-			Visibility: 2, // Fragment
-			Sampler_: wgpu.BindGroupLayoutEntrySampler{
-				Type: 1, // Filtering
-			},
-		},
-		{
-			Binding:    1,
-			Visibility: 2, // Fragment
-			Texture_: wgpu.BindGroupLayoutEntryTexture{
-				SampleType:    1, // Float
-				ViewDimension: 2, // 2D
-			},
-		},
+	// Use cached bind group layout from the current pipeline.
+	var bgl wgpu.BindGroupLayout
+	if e.currentPipeline != nil && e.currentPipeline.textureBGL != 0 {
+		bgl = e.currentPipeline.textureBGL
 	}
-
-	bglDesc := wgpu.BindGroupLayoutDescriptor{
-		EntryCount: uint32(len(entries)),
-		Entries:    uintptr(unsafe.Pointer(&entries[0])),
-	}
-	bgl := wgpu.DeviceCreateBindGroupLayout(e.dev.device, &bglDesc)
-	runtime.KeepAlive(entries)
 	if bgl == 0 {
 		return
 	}
 
 	bgEntries := []wgpu.BindGroupEntry{
 		{
-			Binding:  0,
-			Sampler_: sampler,
+			Binding:      0,
+			TextureView_: t.view,
 		},
 		{
-			Binding:      1,
-			TextureView_: t.view,
+			Binding:  1,
+			Sampler_: sampler,
 		},
 	}
 
@@ -190,26 +265,31 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 	bg := wgpu.DeviceCreateBindGroup(e.dev.device, &bgDesc)
 	runtime.KeepAlive(bgEntries)
 	if bg != 0 {
-		wgpu.RenderPassSetBindGroup(e.passEncoder, uint32(slot), bg)
+		wgpu.RenderPassSetBindGroup(e.passEncoder, 1, bg)
 		wgpu.BindGroupRelease(bg)
 	}
-	wgpu.BindGroupLayoutRelease(bgl)
 }
 
 // SetTextureFilter overrides the texture filter for a slot.
-func (e *Encoder) SetTextureFilter(_ int, _ backend.TextureFilter) {
-	// Would create/update a sampler in the bind group.
+func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
+	if e.slotFilters == nil {
+		e.slotFilters = make(map[int]wgpu.FilterMode)
+	}
+	switch filter {
+	case backend.FilterLinear:
+		e.slotFilters[slot] = wgpu.FilterModeLinear
+	default:
+		e.slotFilters[slot] = wgpu.FilterModeNearest
+	}
 }
 
 // SetStencil configures stencil test state.
-func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {
-	// Stencil state is baked into the pipeline in WebGPU.
-}
+// In WebGPU, stencil state is baked into the pipeline at creation time.
+func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {}
 
 // SetColorWrite enables or disables color writing.
-func (e *Encoder) SetColorWrite(_ bool) {
-	// Color write mask is baked into the pipeline in WebGPU.
-}
+// In WebGPU, the color write mask is baked into the pipeline at creation time.
+func (e *Encoder) SetColorWrite(_ bool) {}
 
 // SetViewport sets the rendering viewport.
 func (e *Encoder) SetViewport(vp backend.Viewport) {

@@ -16,6 +16,11 @@ type Pipeline struct {
 	dev    *Device
 	desc   backend.PipelineDescriptor
 	handle wgpu.RenderPipeline
+
+	// Cached bind group layouts for this pipeline.
+	uniformBGL wgpu.BindGroupLayout // group 0: uniforms
+	textureBGL wgpu.BindGroupLayout // group 1: texture + sampler
+	layout     wgpu.PipelineLayout
 }
 
 // InnerPipeline returns nil for GPU pipelines (no soft delegation).
@@ -37,6 +42,12 @@ func (p *Pipeline) createPipeline() {
 		return
 	}
 
+	// Create bind group layouts.
+	p.createBindGroupLayouts()
+	if p.layout == 0 {
+		return
+	}
+
 	vertexEntry := cstr("vs_main")
 	fragmentEntry := cstr("fs_main")
 
@@ -52,7 +63,6 @@ func (p *Pipeline) createPipeline() {
 		})
 	}
 	if stride == 0 {
-		// Infer stride from attributes.
 		for _, a := range p.desc.VertexFormat.Attributes {
 			end := uint64(a.Offset) + vertexFormatSize(a.Format)
 			if end > stride {
@@ -94,6 +104,7 @@ func (p *Pipeline) createPipeline() {
 	}
 
 	desc := wgpu.RenderPipelineDescriptor{
+		Layout: p.layout,
 		Vertex: wgpu.VertexState{
 			Module:      shader.vertexModule,
 			EntryPoint:  uintptr(unsafe.Pointer(vertexEntry)),
@@ -112,6 +123,25 @@ func (p *Pipeline) createPipeline() {
 		Fragment: uintptr(unsafe.Pointer(&fragment)),
 	}
 
+	// Add depth/stencil state if depth testing is enabled.
+	var depthStencil wgpu.DepthStencilState
+	if p.desc.DepthTest {
+		depthStencil = wgpu.DepthStencilState{
+			Format:            wgpu.TextureFormatDepth24Plus,
+			DepthWriteEnabled: boolToUint32(p.desc.DepthWrite),
+			DepthCompare:      wgpuCompareFunc(p.desc.DepthFunc),
+			StencilFront: wgpu.StencilFaceState{
+				Compare: wgpu.CompareFunctionAlways,
+			},
+			StencilBack: wgpu.StencilFaceState{
+				Compare: wgpu.CompareFunctionAlways,
+			},
+			StencilReadMask:  0xFF,
+			StencilWriteMask: 0xFF,
+		}
+		desc.DepthStencil = uintptr(unsafe.Pointer(&depthStencil))
+	}
+
 	p.handle = wgpu.DeviceCreateRenderPipelineTyped(p.dev.device, &desc)
 	runtime.KeepAlive(vertexEntry)
 	runtime.KeepAlive(fragmentEntry)
@@ -120,6 +150,98 @@ func (p *Pipeline) createPipeline() {
 	runtime.KeepAlive(blend)
 	runtime.KeepAlive(target)
 	runtime.KeepAlive(fragment)
+	runtime.KeepAlive(depthStencil)
+}
+
+// createBindGroupLayouts creates the bind group layouts and pipeline layout.
+func (p *Pipeline) createBindGroupLayouts() {
+	if p.dev.device == 0 {
+		return
+	}
+
+	// Group 0: Uniform buffer (vertex + fragment visibility).
+	uniformEntries := []wgpu.BindGroupLayoutEntry{
+		{
+			Binding:    0,
+			Visibility: 1 | 2, // Vertex | Fragment
+			Buffer_: wgpu.BindGroupLayoutEntryBuffer{
+				Type:           1, // Uniform
+				MinBindingSize: 0,
+			},
+		},
+	}
+	uniformBGLDesc := wgpu.BindGroupLayoutDescriptor{
+		EntryCount: uint32(len(uniformEntries)),
+		Entries:    uintptr(unsafe.Pointer(&uniformEntries[0])),
+	}
+	p.uniformBGL = wgpu.DeviceCreateBindGroupLayout(p.dev.device, &uniformBGLDesc)
+	runtime.KeepAlive(uniformEntries)
+
+	// Group 1: Texture + sampler (fragment visibility).
+	textureEntries := []wgpu.BindGroupLayoutEntry{
+		{
+			Binding:    0,
+			Visibility: 2, // Fragment
+			Texture_: wgpu.BindGroupLayoutEntryTexture{
+				SampleType:    1, // Float
+				ViewDimension: 2, // 2D
+			},
+		},
+		{
+			Binding:    1,
+			Visibility: 2, // Fragment
+			Sampler_: wgpu.BindGroupLayoutEntrySampler{
+				Type: 1, // Filtering
+			},
+		},
+	}
+	textureBGLDesc := wgpu.BindGroupLayoutDescriptor{
+		EntryCount: uint32(len(textureEntries)),
+		Entries:    uintptr(unsafe.Pointer(&textureEntries[0])),
+	}
+	p.textureBGL = wgpu.DeviceCreateBindGroupLayout(p.dev.device, &textureBGLDesc)
+	runtime.KeepAlive(textureEntries)
+
+	// Pipeline layout with both groups.
+	bgls := []wgpu.BindGroupLayout{p.uniformBGL, p.textureBGL}
+	plDesc := wgpu.PipelineLayoutDescriptor{
+		BindGroupLayoutCount: uint32(len(bgls)),
+		BindGroupLayouts:     uintptr(unsafe.Pointer(&bgls[0])),
+	}
+	p.layout = wgpu.DeviceCreatePipelineLayout(p.dev.device, &plDesc)
+	runtime.KeepAlive(bgls)
+}
+
+// wgpuCompareFunc maps backend CompareFunc to wgpu CompareFunction.
+func wgpuCompareFunc(cf backend.CompareFunc) wgpu.CompareFunction {
+	switch cf {
+	case backend.CompareNever:
+		return wgpu.CompareFunctionNever
+	case backend.CompareLess:
+		return wgpu.CompareFunctionLess
+	case backend.CompareLessEqual:
+		return wgpu.CompareFunctionLessEqual
+	case backend.CompareEqual:
+		return wgpu.CompareFunctionEqual
+	case backend.CompareGreaterEqual:
+		return wgpu.CompareFunctionGreaterEqual
+	case backend.CompareGreater:
+		return wgpu.CompareFunctionGreater
+	case backend.CompareNotEqual:
+		return wgpu.CompareFunctionNotEqual
+	case backend.CompareAlways:
+		return wgpu.CompareFunctionAlways
+	default:
+		return wgpu.CompareFunctionAlways
+	}
+}
+
+// boolToUint32 converts a bool to a C-compatible uint32 (0 or 1).
+func boolToUint32(b bool) uint32 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // wgpuBlendState returns blend configuration for a backend blend mode.
@@ -245,5 +367,17 @@ func (p *Pipeline) Dispose() {
 	if p.handle != 0 {
 		wgpu.RenderPipelineRelease(p.handle)
 		p.handle = 0
+	}
+	if p.layout != 0 {
+		wgpu.PipelineLayoutRelease(p.layout)
+		p.layout = 0
+	}
+	if p.uniformBGL != 0 {
+		wgpu.BindGroupLayoutRelease(p.uniformBGL)
+		p.uniformBGL = 0
+	}
+	if p.textureBGL != 0 {
+		wgpu.BindGroupLayoutRelease(p.textureBGL)
+		p.textureBGL = 0
 	}
 }

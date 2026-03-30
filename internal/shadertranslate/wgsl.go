@@ -1,0 +1,409 @@
+package shadertranslate
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+// WGSLResult holds the translated WGSL source and uniform layout.
+type WGSLResult struct {
+	Source   string
+	Uniforms []UniformField
+}
+
+// glslToWGSLType maps GLSL type names to WGSL equivalents.
+var glslToWGSLType = map[string]string{
+	"float":     "f32",
+	"vec2":      "vec2<f32>",
+	"vec3":      "vec3<f32>",
+	"vec4":      "vec4<f32>",
+	"mat3":      "mat3x3<f32>",
+	"mat4":      "mat4x4<f32>",
+	"int":       "i32",
+	"ivec2":     "vec2<i32>",
+	"ivec3":     "vec3<i32>",
+	"ivec4":     "vec4<i32>",
+	"sampler2D": "texture_2d<f32>",
+}
+
+// wgslType converts a GLSL type name to WGSL.
+func wgslType(glslType string) string {
+	if t, ok := glslToWGSLType[glslType]; ok {
+		return t
+	}
+	return glslType
+}
+
+// GLSLToWGSLVertex translates a GLSL 330 vertex shader to WGSL.
+func GLSLToWGSLVertex(glsl string) (WGSLResult, error) {
+	lines := strings.Split(glsl, "\n")
+
+	var attrs []attribute
+	var uniforms []uniform
+	var varyings []varying
+	var bodyLines []string
+	inBody := false
+	braceDepth := 0
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if reVersion.MatchString(trimmed) {
+			continue
+		}
+		if m := reAttribute.FindStringSubmatch(trimmed); m != nil {
+			loc := 0
+			if _, err := fmt.Sscanf(m[1], "%d", &loc); err != nil {
+				return WGSLResult{}, fmt.Errorf("invalid attribute location %q: %w", m[1], err)
+			}
+			attrs = append(attrs, attribute{location: loc, typ: m[2], name: m[3]})
+			continue
+		}
+		if m := reUniform.FindStringSubmatch(trimmed); m != nil {
+			uniforms = append(uniforms, uniform{typ: m[1], name: m[2]})
+			continue
+		}
+		if m := reVaryingOut.FindStringSubmatch(trimmed); m != nil {
+			varyings = append(varyings, varying{typ: m[1], name: m[2]})
+			continue
+		}
+		if reMainStart.MatchString(trimmed) {
+			inBody = true
+			if strings.Contains(trimmed, "{") {
+				braceDepth = 1
+			}
+			continue
+		}
+		if inBody {
+			for _, ch := range trimmed {
+				switch ch {
+				case '{':
+					braceDepth++
+				case '}':
+					braceDepth--
+				}
+			}
+			if braceDepth <= 0 {
+				inBody = false
+				continue
+			}
+			bodyLines = append(bodyLines, trimmed)
+		}
+	}
+
+	var b strings.Builder
+
+	// VertexInput struct.
+	b.WriteString("struct VertexInput {\n")
+	for _, a := range attrs {
+		fmt.Fprintf(&b, "    @location(%d) %s: %s,\n", a.location, a.name, wgslType(a.typ))
+	}
+	b.WriteString("};\n\n")
+
+	// VertexOutput struct.
+	b.WriteString("struct VertexOutput {\n")
+	b.WriteString("    @builtin(position) position: vec4<f32>,\n")
+	for i, v := range varyings {
+		fmt.Fprintf(&b, "    @location(%d) %s: %s,\n", i, v.name, wgslType(v.typ))
+	}
+	b.WriteString("};\n\n")
+
+	// Uniform buffer struct (non-sampler uniforms only).
+	var bufUniforms []uniform
+	for _, u := range uniforms {
+		if u.typ != "sampler2D" {
+			bufUniforms = append(bufUniforms, u)
+		}
+	}
+
+	uniformLayout := buildWGSLUniformLayout(bufUniforms)
+
+	if len(bufUniforms) > 0 {
+		b.WriteString("struct VertexUniforms {\n")
+		for _, u := range bufUniforms {
+			fmt.Fprintf(&b, "    %s: %s,\n", u.name, wgslType(u.typ))
+		}
+		b.WriteString("};\n\n")
+		b.WriteString("@group(0) @binding(0) var<uniform> uniforms: VertexUniforms;\n\n")
+	}
+
+	// Vertex function.
+	b.WriteString("@vertex\nfn vs_main(in: VertexInput) -> VertexOutput {\n")
+	b.WriteString("    var out: VertexOutput;\n")
+
+	for _, line := range bodyLines {
+		translated := translateWGSLVertexLine(line, attrs, uniforms, varyings)
+		b.WriteString("    " + translated + "\n")
+	}
+
+	b.WriteString("    return out;\n")
+	b.WriteString("}\n")
+
+	return WGSLResult{Source: b.String(), Uniforms: uniformLayout}, nil
+}
+
+// GLSLToWGSLFragment translates a GLSL 330 fragment shader to WGSL.
+func GLSLToWGSLFragment(glsl string) (WGSLResult, error) {
+	lines := strings.Split(glsl, "\n")
+
+	var uniforms []uniform
+	var varyings []varying
+	var fragOutName string
+	var bodyLines []string
+	inBody := false
+	braceDepth := 0
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if reVersion.MatchString(trimmed) {
+			continue
+		}
+		if m := reUniform.FindStringSubmatch(trimmed); m != nil {
+			uniforms = append(uniforms, uniform{typ: m[1], name: m[2]})
+			continue
+		}
+		if m := reVaryingIn.FindStringSubmatch(trimmed); m != nil {
+			varyings = append(varyings, varying{typ: m[1], name: m[2]})
+			continue
+		}
+		if m := reFragOut.FindStringSubmatch(trimmed); m != nil {
+			fragOutName = m[1]
+			continue
+		}
+		if reMainStart.MatchString(trimmed) {
+			inBody = true
+			if strings.Contains(trimmed, "{") {
+				braceDepth = 1
+			}
+			continue
+		}
+		if inBody {
+			for _, ch := range trimmed {
+				switch ch {
+				case '{':
+					braceDepth++
+				case '}':
+					braceDepth--
+				}
+			}
+			if braceDepth <= 0 {
+				inBody = false
+				continue
+			}
+			bodyLines = append(bodyLines, trimmed)
+		}
+	}
+
+	var b strings.Builder
+
+	// FragmentInput struct (matches VertexOutput).
+	b.WriteString("struct FragmentInput {\n")
+	b.WriteString("    @builtin(position) position: vec4<f32>,\n")
+	for i, v := range varyings {
+		fmt.Fprintf(&b, "    @location(%d) %s: %s,\n", i, v.name, wgslType(v.typ))
+	}
+	b.WriteString("};\n\n")
+
+	// Collect sampler and non-sampler uniforms.
+	var samplerUniforms []uniform
+	var bufUniforms []uniform
+	for _, u := range uniforms {
+		if u.typ == "sampler2D" {
+			samplerUniforms = append(samplerUniforms, u)
+		} else {
+			bufUniforms = append(bufUniforms, u)
+		}
+	}
+
+	uniformLayout := buildWGSLUniformLayout(bufUniforms)
+
+	// Fragment uniform struct.
+	if len(bufUniforms) > 0 {
+		b.WriteString("struct FragmentUniforms {\n")
+		for _, u := range bufUniforms {
+			fmt.Fprintf(&b, "    %s: %s,\n", u.name, wgslType(u.typ))
+		}
+		b.WriteString("};\n\n")
+		b.WriteString("@group(0) @binding(0) var<uniform> uniforms: FragmentUniforms;\n")
+	}
+
+	// Texture and sampler bindings (group 1 for textures).
+	for i, s := range samplerUniforms {
+		texBinding := i * 2
+		sampBinding := i*2 + 1
+		fmt.Fprintf(&b, "@group(1) @binding(%d) var %s: texture_2d<f32>;\n", texBinding, s.name)
+		fmt.Fprintf(&b, "@group(1) @binding(%d) var %s_sampler: sampler;\n", sampBinding, s.name)
+	}
+	if len(samplerUniforms) > 0 || len(bufUniforms) > 0 {
+		b.WriteString("\n")
+	}
+
+	// Fragment function.
+	b.WriteString("@fragment\nfn fs_main(in: FragmentInput) -> @location(0) vec4<f32> {\n")
+
+	for _, line := range bodyLines {
+		translated := translateWGSLFragmentLine(line, uniforms, varyings, samplerUniforms, fragOutName)
+		b.WriteString("    " + translated + "\n")
+	}
+
+	b.WriteString("}\n")
+
+	return WGSLResult{Source: b.String(), Uniforms: uniformLayout}, nil
+}
+
+// translateWGSLVertexLine translates a single line of vertex shader body to WGSL.
+func translateWGSLVertexLine(line string, attrs []attribute, uniforms []uniform, varyings []varying) string {
+	s := line
+
+	// Local variable declarations (before type constructors).
+	s = replaceWGSLLocalVarDecl(s)
+
+	// Type constructors.
+	s = replaceWGSLTypes(s)
+
+	// gl_Position → out.position
+	s = strings.ReplaceAll(s, "gl_Position", "out.position")
+
+	// Attribute references: aPosition → in.aPosition
+	for _, a := range attrs {
+		s = replaceIdentifier(s, a.name, "in."+a.name)
+	}
+
+	// Varying assignments: vTexCoord → out.vTexCoord
+	for _, v := range varyings {
+		s = replaceIdentifier(s, v.name, "out."+v.name)
+	}
+
+	// Uniform references: uProjection → uniforms.uProjection
+	for _, u := range uniforms {
+		if u.typ != "sampler2D" {
+			s = replaceIdentifier(s, u.name, "uniforms."+u.name)
+		}
+	}
+
+	return s
+}
+
+// translateWGSLFragmentLine translates a single line of fragment shader body to WGSL.
+func translateWGSLFragmentLine(line string, uniforms []uniform, varyings []varying, samplers []uniform, fragOutName string) string {
+	s := line
+
+	// Local variable declarations (before type constructors).
+	s = replaceWGSLLocalVarDecl(s)
+
+	// Type constructors.
+	s = replaceWGSLTypes(s)
+
+	// texture(sampler, uv) → textureSample(sampler, sampler_sampler, uv)
+	for _, samp := range samplers {
+		s = replaceWGSLTextureCall(s, samp.name)
+	}
+
+	// Varying references: vTexCoord → in.vTexCoord
+	for _, v := range varyings {
+		s = replaceIdentifier(s, v.name, "in."+v.name)
+	}
+
+	// Uniform references.
+	for _, u := range uniforms {
+		if u.typ != "sampler2D" {
+			s = replaceIdentifier(s, u.name, "uniforms."+u.name)
+		}
+	}
+
+	// fragColor = expr → return expr
+	if fragOutName != "" && strings.Contains(s, fragOutName) {
+		s = strings.Replace(s, fragOutName+" =", "return", 1)
+		s = strings.Replace(s, fragOutName+"=", "return", 1)
+	}
+
+	return s
+}
+
+// reLocalVar matches GLSL local variable declarations: type name = expr;
+var reLocalVar = regexp.MustCompile(`^(\s*)(vec[234]|mat[34]|float|int|ivec[234])\s+(\w+)\s*=`)
+
+// replaceWGSLLocalVarDecl converts "type name = expr" to "var name: type = expr".
+func replaceWGSLLocalVarDecl(s string) string {
+	m := reLocalVar.FindStringSubmatch(s)
+	if m == nil {
+		return s
+	}
+	prefix := m[1]
+	glslT := m[2]
+	varName := m[3]
+	wT := wgslType(glslT)
+	// Replace the matched "type name =" portion.
+	old := m[0]
+	return strings.Replace(s, old, prefix+"var "+varName+": "+wT+" =", 1)
+}
+
+// replaceWGSLTypeConstructor replaces a GLSL type name at word boundaries,
+// but not when already followed by '<' (already WGSL-ified).
+func replaceWGSLTypeConstructor(s, from, to string) string {
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(from) + `\b`)
+	result := re.ReplaceAllStringFunc(s, func(m string) string {
+		idx := strings.Index(s, m)
+		endIdx := idx + len(m)
+		if endIdx < len(s) && s[endIdx] == '<' {
+			return m // Already WGSL type, don't replace.
+		}
+		return to
+	})
+	return result
+}
+
+// replaceWGSLTypes replaces GLSL type constructors with WGSL equivalents.
+func replaceWGSLTypes(s string) string {
+	s = replaceWGSLTypeConstructor(s, "vec2", "vec2<f32>")
+	s = replaceWGSLTypeConstructor(s, "vec3", "vec3<f32>")
+	s = replaceWGSLTypeConstructor(s, "vec4", "vec4<f32>")
+	s = replaceWGSLTypeConstructor(s, "mat3", "mat3x3<f32>")
+	s = replaceWGSLTypeConstructor(s, "mat4", "mat4x4<f32>")
+	s = replaceWGSLTypeConstructor(s, "ivec2", "vec2<i32>")
+	s = replaceWGSLTypeConstructor(s, "ivec3", "vec3<i32>")
+	s = replaceWGSLTypeConstructor(s, "ivec4", "vec4<i32>")
+	return s
+}
+
+// replaceWGSLTextureCall replaces texture(sampler, uv) with textureSample(sampler, sampler_sampler, uv).
+func replaceWGSLTextureCall(s, samplerName string) string {
+	re := reTextureCall(samplerName)
+	return re.ReplaceAllString(s, "textureSample("+samplerName+", "+samplerName+"_sampler, ")
+}
+
+// reTextureCall builds a regex for texture(samplerName, ...).
+func reTextureCall(samplerName string) *regexp.Regexp {
+	return regexp.MustCompile(`texture\s*\(\s*` + regexp.QuoteMeta(samplerName) + `\s*,\s*`)
+}
+
+// buildWGSLUniformLayout computes byte offsets for uniform fields using WGSL/std140 rules.
+func buildWGSLUniformLayout(uniforms []uniform) []UniformField {
+	if len(uniforms) == 0 {
+		return nil
+	}
+	fields := make([]UniformField, len(uniforms))
+	offset := 0
+	for i, u := range uniforms {
+		size := uniformSize(u.typ)
+		align := 4
+		if size >= 16 {
+			align = 16
+		} else if size == 8 {
+			align = 8
+		}
+		if offset%align != 0 {
+			offset += align - (offset % align)
+		}
+		fields[i] = UniformField{
+			Name:   u.name,
+			Type:   wgslType(u.typ),
+			Offset: offset,
+			Size:   size,
+		}
+		offset += size
+	}
+	return fields
+}
