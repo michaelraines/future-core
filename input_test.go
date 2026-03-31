@@ -78,6 +78,11 @@ func TestTouchPositionNilEngine(t *testing.T) {
 	require.Equal(t, 0, y)
 }
 
+func TestTouchPressureNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.InDelta(t, 0.0, TouchPressure(TouchID(0)), 1e-6)
+}
+
 func TestGamepadIDsNilEngine(t *testing.T) {
 	withNilEngine(t)
 	require.Nil(t, GamepadIDs())
@@ -196,6 +201,21 @@ func TestTouchPositionWired(t *testing.T) {
 	x, y = TouchPosition(TouchID(99))
 	require.Equal(t, 0, x)
 	require.Equal(t, 0, y)
+}
+
+func TestTouchPressureWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	// No touch — returns 0.
+	require.InDelta(t, 0.0, TouchPressure(TouchID(99)), 1e-6)
+
+	// Press with pressure.
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, Action: platform.ActionPress, X: 10, Y: 20, Pressure: 0.7})
+	require.InDelta(t, 0.7, TouchPressure(TouchID(1)), 1e-6)
+
+	// Release — returns 0.
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, Action: platform.ActionRelease})
+	require.InDelta(t, 0.0, TouchPressure(TouchID(1)), 1e-6)
 }
 
 func TestGamepadIDsWired(t *testing.T) {
