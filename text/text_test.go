@@ -168,7 +168,7 @@ func TestMeasureWithLineSpacing(t *testing.T) {
 	_, h2 := Measure("A\nB", face, 50)
 
 	// Custom line spacing should produce different height.
-	require.NotInDelta(t, h1, h2, 1e-9)
+	require.NotEqual(t, h1, h2, "different line spacing should produce different height")
 }
 
 func TestAdvance(t *testing.T) {
