@@ -787,14 +787,14 @@ type BlendFactor int
 
 // BlendFactor constants matching Ebitengine.
 const (
-	BlendFactorZero             BlendFactor = iota // 0
-	BlendFactorOne                                 // 1
-	BlendFactorSourceAlpha                         // src alpha
-	BlendFactorDestinationAlpha                    // dst alpha
-	BlendFactorOneMinusSourceAlpha                 // 1 - src alpha
-	BlendFactorOneMinusDestinationAlpha            // 1 - dst alpha
-	BlendFactorSourceColor                         // src color (RGB)
-	BlendFactorDestinationColor                    // dst color (RGB)
+	BlendFactorZero                     BlendFactor = iota // 0
+	BlendFactorOne                                         // 1
+	BlendFactorSourceAlpha                                 // src alpha
+	BlendFactorDestinationAlpha                            // dst alpha
+	BlendFactorOneMinusSourceAlpha                         // 1 - src alpha
+	BlendFactorOneMinusDestinationAlpha                    // 1 - dst alpha
+	BlendFactorSourceColor                                 // src color (RGB)
+	BlendFactorDestinationColor                            // dst color (RGB)
 )
 
 // BlendOperation represents a blend operation for the Blend struct.
@@ -912,7 +912,6 @@ func colorMatrixToUniforms(cm fmath.ColorMatrix) (body [16]float32, translation 
 	}
 	return body, translation
 }
-
 
 // blendToBackend maps a public Blend to a backend BlendMode.
 // For now, we map preset Blend values to the backend's BlendMode enum.
