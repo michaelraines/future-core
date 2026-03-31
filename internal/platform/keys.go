@@ -89,6 +89,18 @@ const (
 	KeyF10
 	KeyF11
 	KeyF12
+	KeyF13
+	KeyF14
+	KeyF15
+	KeyF16
+	KeyF17
+	KeyF18
+	KeyF19
+	KeyF20
+	KeyF21
+	KeyF22
+	KeyF23
+	KeyF24
 
 	// Keypad
 	KeyKP0

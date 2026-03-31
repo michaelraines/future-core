@@ -302,6 +302,69 @@ func TestKeyMapping(t *testing.T) {
 	}
 }
 
+func TestKeyF13ThroughF24(t *testing.T) {
+	tests := []struct {
+		pub  Key
+		plat platform.Key
+	}{
+		{KeyF13, platform.KeyF13},
+		{KeyF14, platform.KeyF14},
+		{KeyF15, platform.KeyF15},
+		{KeyF16, platform.KeyF16},
+		{KeyF17, platform.KeyF17},
+		{KeyF18, platform.KeyF18},
+		{KeyF19, platform.KeyF19},
+		{KeyF20, platform.KeyF20},
+		{KeyF21, platform.KeyF21},
+		{KeyF22, platform.KeyF22},
+		{KeyF23, platform.KeyF23},
+		{KeyF24, platform.KeyF24},
+	}
+	for _, tt := range tests {
+		require.Equal(t, tt.plat, keyToInternal(tt.pub), "key %d", tt.pub)
+	}
+}
+
+func TestEbitenKeyAliases(t *testing.T) {
+	// Arrow keys
+	require.Equal(t, KeyDown, KeyArrowDown)
+	require.Equal(t, KeyLeft, KeyArrowLeft)
+	require.Equal(t, KeyRight, KeyArrowRight)
+	require.Equal(t, KeyUp, KeyArrowUp)
+
+	// Punctuation aliases
+	require.Equal(t, KeyGraveAccent, KeyBackquote)
+	require.Equal(t, KeyLeftBracket, KeyBracketLeft)
+	require.Equal(t, KeyRightBracket, KeyBracketRight)
+	require.Equal(t, KeyApostrophe, KeyQuote)
+
+	// Modifier aliases
+	require.Equal(t, KeyLeftAlt, KeyAltLeft)
+	require.Equal(t, KeyRightAlt, KeyAltRight)
+	require.Equal(t, KeyLeftControl, KeyControlLeft)
+	require.Equal(t, KeyRightControl, KeyControlRight)
+	require.Equal(t, KeyLeftShift, KeyShiftLeft)
+	require.Equal(t, KeyRightShift, KeyShiftRight)
+	require.Equal(t, KeyLeftSuper, KeyMetaLeft)
+	require.Equal(t, KeyRightSuper, KeyMetaRight)
+	require.Equal(t, KeyMenu, KeyContextMenu)
+
+	// Digit aliases
+	require.Equal(t, Key0, KeyDigit0)
+	require.Equal(t, Key9, KeyDigit9)
+
+	// Numpad aliases
+	require.Equal(t, KeyKP0, KeyNumpad0)
+	require.Equal(t, KeyKP9, KeyNumpad9)
+	require.Equal(t, KeyKPAdd, KeyNumpadAdd)
+	require.Equal(t, KeyKPDecimal, KeyNumpadDecimal)
+	require.Equal(t, KeyKPDivide, KeyNumpadDivide)
+	require.Equal(t, KeyKPEnter, KeyNumpadEnter)
+	require.Equal(t, KeyKPEqual, KeyNumpadEqual)
+	require.Equal(t, KeyKPMultiply, KeyNumpadMultiply)
+	require.Equal(t, KeyKPSubtract, KeyNumpadSubtract)
+}
+
 func TestKeyToInternalOutOfBounds(t *testing.T) {
 	require.Equal(t, platform.KeyUnknown, keyToInternal(Key(-1)))
 	require.Equal(t, platform.KeyUnknown, keyToInternal(Key(9999)))
