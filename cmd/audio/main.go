@@ -68,7 +68,7 @@ func generateSineWAV() []byte {
 }
 
 type audioGame struct {
-	face    *text.Face
+	face    text.Face
 	ctx     *audio.Context
 	player  *audio.Player
 	initErr error
@@ -101,6 +101,13 @@ func colorScale(r, g, b, a float32) futurerender.ColorScale {
 	return cs
 }
 
+func drawText(screen *futurerender.Image, s string, face text.Face, x, y float64, cs futurerender.ColorScale) {
+	opts := &text.DrawOptions{}
+	opts.ColorScale = cs
+	opts.GeoM.Translate(x, y)
+	text.Draw(screen, s, face, opts)
+}
+
 func (g *audioGame) Draw(screen *futurerender.Image) {
 	screen.Fill(futurerender.ColorFromRGBA(0.05, 0.05, 0.15, 1.0))
 
@@ -109,25 +116,17 @@ func (g *audioGame) Draw(screen *futurerender.Image) {
 	}
 
 	// Title
-	titleOpts := &text.DrawOptions{
-		ColorScale: colorScale(1, 1, 1, 1),
-	}
-	text.Draw(screen, "Future Render — Audio Example", g.face, 20, 30, titleOpts)
+	drawText(screen, "Future Render — Audio Example", g.face, 20, 30, colorScale(1, 1, 1, 1))
 
 	// Instructions
-	instrOpts := &text.DrawOptions{
-		ColorScale: colorScale(0.7, 0.8, 1.0, 1),
-	}
-	text.Draw(screen, "Controls:", g.face, 20, 80, instrOpts)
-	text.Draw(screen, "  Space  — Play / Pause", g.face, 20, 110, instrOpts)
-	text.Draw(screen, "  Escape — Exit", g.face, 20, 140, instrOpts)
+	instrCS := colorScale(0.7, 0.8, 1.0, 1)
+	drawText(screen, "Controls:", g.face, 20, 80, instrCS)
+	drawText(screen, "  Space  — Play / Pause", g.face, 20, 110, instrCS)
+	drawText(screen, "  Escape — Exit", g.face, 20, 140, instrCS)
 
 	// Playback state
 	if g.initErr != nil {
-		errOpts := &text.DrawOptions{
-			ColorScale: colorScale(1, 0.3, 0.3, 1),
-		}
-		text.Draw(screen, fmt.Sprintf("Audio init error: %v", g.initErr), g.face, 20, 200, errOpts)
+		drawText(screen, fmt.Sprintf("Audio init error: %v", g.initErr), g.face, 20, 200, colorScale(1, 0.3, 0.3, 1))
 		return
 	}
 
@@ -141,15 +140,8 @@ func (g *audioGame) Draw(screen *futurerender.Image) {
 		state = "Playing"
 		stateColor = colorScale(0.3, 1, 0.3, 1)
 	}
-	stateOpts := &text.DrawOptions{
-		ColorScale: stateColor,
-	}
-	text.Draw(screen, fmt.Sprintf("Status: %s", state), g.face, 20, 200, stateOpts)
-
-	infoOpts := &text.DrawOptions{
-		ColorScale: colorScale(0.6, 0.6, 0.6, 1),
-	}
-	text.Draw(screen, fmt.Sprintf("Tone: %gHz sine wave, %gs, %dHz sample rate", freq, duration, sampleRate), g.face, 20, 240, infoOpts)
+	drawText(screen, fmt.Sprintf("Status: %s", state), g.face, 20, 200, stateColor)
+	drawText(screen, fmt.Sprintf("Tone: %gHz sine wave, %gs, %dHz sample rate", freq, duration, sampleRate), g.face, 20, 240, colorScale(0.6, 0.6, 0.6, 1))
 }
 
 func (g *audioGame) Layout(_, _ int) (int, int) {

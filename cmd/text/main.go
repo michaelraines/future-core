@@ -19,8 +19,8 @@ const (
 )
 
 type textGame struct {
-	titleFace *text.Face
-	bodyFace  *text.Face
+	titleFace text.Face
+	bodyFace  text.Face
 }
 
 func (g *textGame) Update() error {
@@ -28,6 +28,21 @@ func (g *textGame) Update() error {
 		return futurerender.ErrTermination
 	}
 	return nil
+}
+
+func drawText(screen *futurerender.Image, s string, face text.Face, x, y float64, cs futurerender.ColorScale) {
+	opts := &text.DrawOptions{}
+	opts.ColorScale = cs
+	opts.GeoM.Translate(x, y)
+	text.Draw(screen, s, face, opts)
+}
+
+func drawTextAligned(screen *futurerender.Image, s string, face text.Face, x, y, maxW float64, cs futurerender.ColorScale, align text.Align) {
+	opts := &text.DrawOptions{}
+	opts.ColorScale = cs
+	opts.GeoM.Translate(x, y)
+	opts.PrimaryAlign = align
+	text.DrawWrapped(screen, s, face, maxW, opts)
 }
 
 func colorScale(r, g, b, a float32) futurerender.ColorScale {
@@ -44,10 +59,11 @@ func (g *textGame) Draw(screen *futurerender.Image) {
 	}
 
 	// Title — large, centered text.
-	text.Draw(screen, "Future Render Text Demo", g.titleFace, 0, 20, &text.DrawOptions{
-		ColorScale: colorScale(0.9, 0.8, 0.3, 1),
-		Align:      text.AlignCenter,
-	})
+	titleOpts := &text.DrawOptions{}
+	titleOpts.ColorScale = colorScale(0.9, 0.8, 0.3, 1)
+	titleOpts.GeoM.Translate(0, 20)
+	titleOpts.PrimaryAlign = text.AlignCenter
+	text.Draw(screen, "Future Render Text Demo", g.titleFace, titleOpts)
 
 	// Word-wrapped paragraph.
 	paragraph := "This example demonstrates the text rendering capabilities of Future Render. " +
@@ -55,35 +71,20 @@ func (g *textGame) Draw(screen *futurerender.Image) {
 		"efficient rendering. Word wrapping automatically breaks long lines at whitespace " +
 		"boundaries to fit within the specified maximum width."
 
-	text.DrawWrapped(screen, paragraph, g.bodyFace, 40, 80, screenW-80, &text.DrawOptions{
-		ColorScale: colorScale(0.9, 0.9, 0.9, 1),
-		Align:      text.AlignLeft,
-	})
+	drawTextAligned(screen, paragraph, g.bodyFace, 40, 80, screenW-80, colorScale(0.9, 0.9, 0.9, 1), text.AlignStart)
 
 	// Alignment examples — each line uses a different alignment mode.
 	lineH := g.bodyFace.Metrics().Height
 	baseY := 240.0
 
-	text.Draw(screen, "Left-aligned text", g.bodyFace, 40, baseY, &text.DrawOptions{
-		ColorScale: colorScale(0.6, 0.9, 0.6, 1),
-		Align:      text.AlignLeft,
-	})
+	drawText(screen, "Left-aligned text", g.bodyFace, 40, baseY, colorScale(0.6, 0.9, 0.6, 1))
 
-	text.DrawWrapped(screen, "Center-aligned text", g.bodyFace, 40, baseY+lineH*2, screenW-80, &text.DrawOptions{
-		ColorScale: colorScale(0.6, 0.6, 0.9, 1),
-		Align:      text.AlignCenter,
-	})
+	drawTextAligned(screen, "Center-aligned text", g.bodyFace, 40, baseY+lineH*2, screenW-80, colorScale(0.6, 0.6, 0.9, 1), text.AlignCenter)
 
-	text.DrawWrapped(screen, "Right-aligned text", g.bodyFace, 40, baseY+lineH*4, screenW-80, &text.DrawOptions{
-		ColorScale: colorScale(0.9, 0.6, 0.6, 1),
-		Align:      text.AlignRight,
-	})
+	drawTextAligned(screen, "Right-aligned text", g.bodyFace, 40, baseY+lineH*4, screenW-80, colorScale(0.9, 0.6, 0.6, 1), text.AlignEnd)
 
 	// Footer.
-	text.DrawWrapped(screen, "Press Escape to exit", g.bodyFace, 40, screenH-60, screenW-80, &text.DrawOptions{
-		ColorScale: colorScale(0.5, 0.5, 0.5, 1),
-		Align:      text.AlignCenter,
-	})
+	drawTextAligned(screen, "Press Escape to exit", g.bodyFace, 40, screenH-60, screenW-80, colorScale(0.5, 0.5, 0.5, 1), text.AlignCenter)
 }
 
 func (g *textGame) Layout(_, _ int) (int, int) {
