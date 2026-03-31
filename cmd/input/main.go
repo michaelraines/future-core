@@ -55,7 +55,7 @@ var allKeys = []keyEntry{
 }
 
 type inputGame struct {
-	face *text.Face
+	face text.Face
 }
 
 func (g *inputGame) Update() error {
@@ -86,7 +86,10 @@ func (g *inputGame) Draw(screen *futurerender.Image) {
 	dim := colorScale(0.5, 0.5, 0.5, 1)
 
 	draw := func(s string, c futurerender.ColorScale) {
-		text.Draw(screen, s, g.face, 20, y, &text.DrawOptions{ColorScale: c})
+		opts := &text.DrawOptions{}
+		opts.ColorScale = c
+		opts.GeoM.Translate(20, y)
+		text.Draw(screen, s, g.face, opts)
 		y += lineH
 	}
 

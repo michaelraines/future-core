@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"image/draw"
 
+	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
 )
 
@@ -28,8 +29,8 @@ type glyphEntry struct {
 
 // glyphCache manages rasterized glyph bitmaps for a single Face.
 type glyphCache struct {
-	face    *Face
-	entries map[rune]*glyphEntry
+	fontFace font.Face
+	entries  map[rune]*glyphEntry
 
 	// generation tracks the atlas generation at the time entries were cached.
 	// When the atlas grows, its generation increments and all cached atlas
@@ -37,11 +38,11 @@ type glyphCache struct {
 	generation int
 }
 
-// newGlyphCache creates a glyph cache for the given face.
-func newGlyphCache(f *Face) *glyphCache {
+// newGlyphCache creates a glyph cache for the given font.Face.
+func newGlyphCache(f font.Face) *glyphCache {
 	return &glyphCache{
-		face:    f,
-		entries: make(map[rune]*glyphEntry),
+		fontFace: f,
+		entries:  make(map[rune]*glyphEntry),
 	}
 }
 
@@ -67,7 +68,7 @@ func (c *glyphCache) get(r rune, atlas *fontAtlas) *glyphEntry {
 
 // rasterize creates a glyph bitmap and uploads it to the atlas.
 func (c *glyphCache) rasterize(r rune, atlas *fontAtlas) *glyphEntry {
-	f := c.face.face
+	f := c.fontFace
 
 	// Get glyph metrics.
 	advance, ok := f.GlyphAdvance(r)

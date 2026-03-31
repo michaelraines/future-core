@@ -1,6 +1,7 @@
 package text
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -12,17 +13,69 @@ import (
 func cleanupAtlases(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
-		globalAtlases = map[*Face]*fontAtlas{}
+		globalAtlases = map[Face]*fontAtlas{}
 	})
 }
 
-// --- Face tests ---
+// newTestFace is a helper that creates a *GoTextFace for testing.
+func newTestFace(t *testing.T, size float64) *GoTextFace {
+	t.Helper()
+	source, err := NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
+	require.NoError(t, err)
+	face := &GoTextFace{Source: source, Size: size}
+	face.ensureInit()
+	require.NotNil(t, face.face, "font face should initialize")
+	return face
+}
+
+// --- GoTextFaceSource tests ---
+
+func TestNewGoTextFaceSource(t *testing.T) {
+	source, err := NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
+	require.NoError(t, err)
+	require.NotNil(t, source)
+	require.NotNil(t, source.otFont)
+}
+
+func TestNewGoTextFaceSourceInvalidData(t *testing.T) {
+	_, err := NewGoTextFaceSource(bytes.NewReader([]byte("not a font")))
+	require.Error(t, err)
+}
+
+// --- GoTextFace tests ---
+
+func TestGoTextFaceLazyInit(t *testing.T) {
+	source, err := NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
+	require.NoError(t, err)
+
+	face := &GoTextFace{Source: source, Size: 24}
+	// Before calling any method, internal fields should be zero.
+	require.Nil(t, face.face)
+	require.Nil(t, face.cache)
+
+	// Calling Metrics triggers lazy init.
+	m := face.Metrics()
+	require.Greater(t, m.Height, 0.0)
+	require.NotNil(t, face.face)
+	require.NotNil(t, face.cache)
+}
+
+func TestGoTextFaceNilSource(t *testing.T) {
+	face := &GoTextFace{Source: nil, Size: 24}
+	m := face.Metrics()
+	require.InDelta(t, 0.0, m.Height, 1e-9)
+}
+
+// --- NewFace convenience tests ---
 
 func TestNewFace(t *testing.T) {
 	face, err := NewFace(goregular.TTF, 24)
 	require.NoError(t, err)
 	require.NotNil(t, face)
-	require.InDelta(t, 24.0, face.size, 1e-9)
+
+	gtf, ok := face.(*GoTextFace)
+	require.True(t, ok)
+	require.InDelta(t, 24.0, gtf.Size, 1e-9)
 }
 
 func TestNewFaceInvalidData(t *testing.T) {
@@ -31,8 +84,7 @@ func TestNewFaceInvalidData(t *testing.T) {
 }
 
 func TestFaceMetrics(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	m := face.Metrics()
 	require.Greater(t, m.Height, 0.0)
@@ -44,13 +96,13 @@ func TestFaceMetrics(t *testing.T) {
 func TestFaceClose(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	target := futurerender.NewImage(200, 200)
 
 	// Draw to create atlas and cache entries.
-	Draw(target, "Hello", face, 10, 20, nil)
+	opts := &DrawOptions{}
+	opts.GeoM.Translate(10, 20)
+	Draw(target, "Hello", face, opts)
 	_, ok := globalAtlases[face]
 	require.True(t, ok, "atlas should exist after Draw")
 	require.NotEmpty(t, face.cache.entries)
@@ -63,37 +115,75 @@ func TestFaceClose(t *testing.T) {
 }
 
 func TestFaceCloseWithoutAtlas(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	// Close on a face that was never used should not panic.
 	face.Close()
 }
 
-func TestFaceMeasure(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+// --- Measure tests ---
 
-	w := face.Measure("Hello")
+func TestMeasure(t *testing.T) {
+	face := newTestFace(t, 24)
+
+	w, h := Measure("Hello", face, 0)
 	require.Greater(t, w, 0.0)
+	require.Greater(t, h, 0.0)
 
 	// Longer text should be wider.
-	w2 := face.Measure("Hello, World!")
+	w2, h2 := Measure("Hello, World!", face, 0)
 	require.Greater(t, w2, w)
+	require.InDelta(t, h, h2, 1e-9, "single-line height should match")
 }
 
-func TestFaceMeasureEmpty(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+func TestMeasureEmpty(t *testing.T) {
+	face := newTestFace(t, 24)
 
-	require.InDelta(t, 0.0, face.Measure(""), 1e-9)
+	w, h := Measure("", face, 0)
+	require.InDelta(t, 0.0, w, 1e-9)
+	require.InDelta(t, 0.0, h, 1e-9)
+}
+
+func TestMeasureNilFace(t *testing.T) {
+	w, h := Measure("Hello", nil, 0)
+	require.InDelta(t, 0.0, w, 1e-9)
+	require.InDelta(t, 0.0, h, 1e-9)
+}
+
+func TestMeasureMultiline(t *testing.T) {
+	face := newTestFace(t, 24)
+
+	w1, h1 := Measure("Hello", face, 0)
+	w2, h2 := Measure("Hello\nWorld", face, 0)
+
+	// Width should be at least as wide as the widest single line.
+	require.GreaterOrEqual(t, w2, w1, "multiline width should be >= single line width")
+	// Height should increase for multi-line.
+	require.Greater(t, h2, h1)
+}
+
+func TestMeasureWithLineSpacing(t *testing.T) {
+	face := newTestFace(t, 24)
+
+	_, h1 := Measure("A\nB", face, 0)
+	_, h2 := Measure("A\nB", face, 50)
+
+	// Custom line spacing should produce different height.
+	require.NotEqual(t, h1, h2, "different line spacing should produce different height")
+}
+
+func TestAdvance(t *testing.T) {
+	face := newTestFace(t, 24)
+
+	w := Advance("Hello", face)
+	require.Greater(t, w, 0.0)
+
+	require.InDelta(t, 0.0, Advance("Hello", nil), 1e-9)
 }
 
 // --- Glyph cache tests ---
 
 func TestGlyphCacheHitMiss(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	atlas := newFontAtlas()
 	atlas.image = futurerender.NewImage(256, 256)
@@ -112,8 +202,7 @@ func TestGlyphCacheHitMiss(t *testing.T) {
 }
 
 func TestGlyphCacheSpace(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	atlas := newFontAtlas()
 	atlas.image = futurerender.NewImage(256, 256)
@@ -125,8 +214,7 @@ func TestGlyphCacheSpace(t *testing.T) {
 }
 
 func TestGlyphCacheMultipleRunes(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	atlas := newFontAtlas()
 	atlas.image = futurerender.NewImage(512, 512)
@@ -142,8 +230,7 @@ func TestGlyphCacheMultipleRunes(t *testing.T) {
 }
 
 func TestGlyphCacheNilAtlas(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	// Should not panic even with nil atlas — glyph just won't have atlas coords.
 	g := face.cache.get('A', nil)
@@ -152,8 +239,7 @@ func TestGlyphCacheNilAtlas(t *testing.T) {
 }
 
 func TestGlyphCacheInvalidatedOnAtlasGrow(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	atlas := &fontAtlas{size: 16}
 	atlas.image = futurerender.NewImage(16, 16)
@@ -181,8 +267,7 @@ func TestGlyphCacheInvalidatedOnAtlasGrow(t *testing.T) {
 }
 
 func TestGlyphCacheNotInvalidatedWithoutGrow(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	atlas := newFontAtlas()
 	atlas.image = futurerender.NewImage(512, 512)
@@ -316,38 +401,35 @@ func TestAtlasEnsureImageLazy(t *testing.T) {
 // --- Draw tests ---
 
 func TestDrawNilTarget(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	// Should not panic.
-	Draw(nil, "Hello", face, 0, 0, nil)
+	Draw(nil, "Hello", face, nil)
 }
 
 func TestDrawNilFace(t *testing.T) {
 	img := futurerender.NewImage(100, 100)
 	// Should not panic.
-	Draw(img, "Hello", nil, 0, 0, nil)
+	Draw(img, "Hello", nil, nil)
 }
 
 func TestDrawEmptyString(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 	img := futurerender.NewImage(100, 100)
 
 	// Should not panic and should be a no-op.
-	Draw(img, "", face, 0, 0, nil)
+	Draw(img, "", face, nil)
 }
 
 func TestDrawCreatesAtlas(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	target := futurerender.NewImage(200, 200)
 
 	// Draw text — should create atlas for this face.
-	Draw(target, "Hi", face, 10, 20, nil)
+	opts := &DrawOptions{}
+	opts.GeoM.Translate(10, 20)
+	Draw(target, "Hi", face, opts)
 
 	atlas, ok := globalAtlases[face]
 	require.True(t, ok)
@@ -358,47 +440,41 @@ func TestDrawCreatesAtlas(t *testing.T) {
 func TestDrawWithColorScale(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	target := futurerender.NewImage(200, 200)
 
 	opts := &DrawOptions{}
 	opts.ColorScale.Scale(1, 0, 0, 1)
+	opts.GeoM.Translate(10, 20)
 	// Should not panic.
-	Draw(target, "Red", face, 10, 20, opts)
+	Draw(target, "Red", face, opts)
 }
 
 func TestDrawDefaultsToWhite(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	target := futurerender.NewImage(200, 200)
 
 	// Zero color should default to white.
 	opts := &DrawOptions{}
-	Draw(target, "A", face, 0, 0, opts)
+	Draw(target, "A", face, opts)
 }
 
 func TestDrawSpacesOnly(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	target := futurerender.NewImage(200, 200)
 
 	// Should not panic — spaces are empty glyphs, no DrawImage calls.
-	Draw(target, "   ", face, 10, 20, nil)
+	Draw(target, "   ", face, nil)
 }
 
 func TestAtlasForReusesFace(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	a1 := atlasFor(face)
 	a2 := atlasFor(face)
@@ -408,10 +484,8 @@ func TestAtlasForReusesFace(t *testing.T) {
 func TestAtlasForDifferentFaces(t *testing.T) {
 	cleanupAtlases(t)
 
-	face1, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-	face2, err := NewFace(goregular.TTF, 48)
-	require.NoError(t, err)
+	face1 := newTestFace(t, 24)
+	face2 := newTestFace(t, 48)
 
 	a1 := atlasFor(face1)
 	a2 := atlasFor(face2)
@@ -439,36 +513,62 @@ func TestFixedFloorCeil(t *testing.T) {
 func TestDrawMultiline(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	target := futurerender.NewImage(400, 400)
+
+	opts := &DrawOptions{}
+	opts.GeoM.Translate(10, 20)
 	// Should not panic with multi-line text.
-	Draw(target, "Hello\nWorld", face, 10, 20, nil)
+	Draw(target, "Hello\nWorld", face, opts)
 }
 
 func TestDrawMultilineWithAlignment(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	target := futurerender.NewImage(400, 400)
 
-	for _, align := range []Align{AlignLeft, AlignCenter, AlignRight} {
-		opts := &DrawOptions{Align: align}
-		Draw(target, "Short\nLonger line here", face, 10, 20, opts)
+	for _, align := range []Align{AlignStart, AlignCenter, AlignEnd} {
+		opts := &DrawOptions{}
+		opts.PrimaryAlign = align
+		opts.GeoM.Translate(10, 20)
+		Draw(target, "Short\nLonger line here", face, opts)
 	}
+}
+
+func TestDrawWithSecondaryAlign(t *testing.T) {
+	cleanupAtlases(t)
+
+	face := newTestFace(t, 24)
+	target := futurerender.NewImage(400, 400)
+
+	for _, align := range []Align{AlignStart, AlignCenter, AlignEnd} {
+		opts := &DrawOptions{}
+		opts.SecondaryAlign = align
+		opts.GeoM.Translate(200, 200)
+		Draw(target, "Hello\nWorld", face, opts)
+	}
+}
+
+func TestDrawWithLineSpacing(t *testing.T) {
+	cleanupAtlases(t)
+
+	face := newTestFace(t, 24)
+	target := futurerender.NewImage(400, 400)
+
+	opts := &DrawOptions{}
+	opts.LineSpacing = 40
+	opts.GeoM.Translate(10, 20)
+	Draw(target, "Line1\nLine2", face, opts)
 }
 
 // --- Word wrapping tests ---
 
 func TestWrapLines(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	// Measure a known word to set a reasonable maxWidth.
-	wordW := face.Measure("Hello")
+	wordW := Advance("Hello", face)
 	require.Greater(t, wordW, 0.0)
 
 	// Two words that fit on one line.
@@ -483,24 +583,21 @@ func TestWrapLines(t *testing.T) {
 }
 
 func TestWrapLinesPreservesNewlines(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	lines := WrapLines("Hello\nWorld", face, 1000)
 	require.Equal(t, []string{"Hello", "World"}, lines)
 }
 
 func TestWrapLinesEmptyParagraphs(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	lines := WrapLines("A\n\nB", face, 1000)
 	require.Equal(t, []string{"A", "", "B"}, lines)
 }
 
 func TestWrapLinesLongWord(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	// A single long word always stays on its own line.
 	lines := WrapLines("Supercalifragilistic", face, 10)
@@ -514,8 +611,7 @@ func TestWrapLinesNilFace(t *testing.T) {
 }
 
 func TestWrapLinesZeroWidth(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
+	face := newTestFace(t, 24)
 
 	lines := WrapLines("Hello", face, 0)
 	require.Equal(t, []string{"Hello"}, lines)
@@ -524,29 +620,30 @@ func TestWrapLinesZeroWidth(t *testing.T) {
 func TestDrawWrapped(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	target := futurerender.NewImage(400, 400)
+
+	opts := &DrawOptions{}
+	opts.GeoM.Translate(10, 20)
 	// Should not panic.
-	DrawWrapped(target, "The quick brown fox jumps over the lazy dog", face, 10, 20, 200, nil)
+	DrawWrapped(target, "The quick brown fox jumps over the lazy dog", face, 200, opts)
 }
 
 func TestDrawWrappedNilTarget(t *testing.T) {
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-	DrawWrapped(nil, "Hello", face, 0, 0, 100, nil)
+	face := newTestFace(t, 24)
+	DrawWrapped(nil, "Hello", face, 100, nil)
 }
 
 func TestDrawWrappedWithAlignment(t *testing.T) {
 	cleanupAtlases(t)
 
-	face, err := NewFace(goregular.TTF, 24)
-	require.NoError(t, err)
-
+	face := newTestFace(t, 24)
 	target := futurerender.NewImage(400, 400)
-	opts := &DrawOptions{Align: AlignCenter}
-	DrawWrapped(target, "Short\nA much longer line", face, 10, 20, 300, opts)
+
+	opts := &DrawOptions{}
+	opts.PrimaryAlign = AlignCenter
+	opts.GeoM.Translate(10, 20)
+	DrawWrapped(target, "Short\nA much longer line", face, 300, opts)
 }
 
 // --- splitWords tests ---
@@ -562,9 +659,9 @@ func TestSplitWords(t *testing.T) {
 // --- Alignment constants test ---
 
 func TestAlignConstants(t *testing.T) {
-	require.Equal(t, Align(0), AlignLeft)
+	require.Equal(t, Align(0), AlignStart)
 	require.Equal(t, Align(1), AlignCenter)
-	require.Equal(t, Align(2), AlignRight)
+	require.Equal(t, Align(2), AlignEnd)
 }
 
 // --- Shaping tests ---
@@ -648,4 +745,35 @@ func TestRuneScript(t *testing.T) {
 	require.NotZero(t, runeScript('A'))
 	require.NotZero(t, runeScript('\u05E9'))
 	require.NotZero(t, runeScript('\u0627'))
+}
+
+// --- Face interface compliance test ---
+
+func TestFaceInterfaceCompliance(t *testing.T) {
+	face := newTestFace(t, 24)
+	// GoTextFace must satisfy the Face interface.
+	var _ Face = face
+}
+
+// --- splitLines test ---
+
+func TestSplitLines(t *testing.T) {
+	require.Equal(t, []string{"a", "b", "c"}, splitLines("a\nb\nc"))
+	require.Equal(t, []string{"single"}, splitLines("single"))
+	require.Equal(t, []string{""}, splitLines(""))
+}
+
+// --- LayoutOptions test ---
+
+func TestDrawOptionsHasLayoutFields(t *testing.T) {
+	opts := &DrawOptions{}
+	opts.LineSpacing = 30
+	opts.PrimaryAlign = AlignCenter
+	opts.SecondaryAlign = AlignEnd
+	opts.GeoM.Translate(10, 20)
+	opts.ColorScale.Scale(1, 0.5, 0, 1)
+
+	require.InDelta(t, 30.0, opts.LineSpacing, 1e-9)
+	require.Equal(t, AlignCenter, opts.PrimaryAlign)
+	require.Equal(t, AlignEnd, opts.SecondaryAlign)
 }
