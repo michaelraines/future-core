@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WebGPU WASM Render Test</title>
+<style>
+  body { background: #1a1a2e; color: #eee; font-family: monospace; text-align: center; margin: 0; padding: 10px; }
+  #game-canvas { display: block; margin: 10px auto; border: 1px solid #444; }
+  pre { text-align: left; max-width: 600px; margin: 10px auto; font-size: 11px; color: #aaa; }
+</style>
+</head>
+<body>
+<h3>Future Render — WebGPU WASM</h3>
+<canvas id="game-canvas" width="400" height="400"></canvas>
+<pre id="output">Loading WASM...</pre>
+<script src="wasm_exec.js"></script>
+<script>
+  const go = new Go();
+  WebAssembly.instantiateStreaming(fetch("main.wasm"), go.importObject).then((result) => {
+    document.getElementById("output").textContent = "Engine running...";
+    go.run(result.instance);
+    // Engine uses select{} so go.run() never resolves.
+    // Set title after a brief delay to signal to Playwright.
+    setTimeout(() => { document.title = "RUNNING"; }, 500);
+  }).catch((err) => {
+    document.getElementById("output").textContent = "Error: " + err;
+    document.title = "FAIL: " + err;
+  });
+</script>
+</body>
+</html>

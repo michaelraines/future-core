@@ -3,7 +3,7 @@
 Per-backend state of the world for planning future work. Each section covers
 what's implemented, what's working, what's broken, and what remains.
 
-Last updated: 2026-03-24
+Last updated: 2026-03-30
 
 ---
 
@@ -20,7 +20,7 @@ fallback** for CI. Four of those (Vulkan, Metal, WebGPU, DX12) also have
 | OpenGL 3.3 | Production | None | N/A (GPU) | GLSL 330 core |
 | Vulkan | Clear works, draw broken | Yes | 10/10 (soft) | GLSL→SPIR-V (shaderc) |
 | Metal | Clear + draw working | Yes | 10/10 (soft) | GLSL→MSL (pure Go) |
-| WebGPU | Early / incomplete | Yes | 10/10 (soft) | Planned (WGSL) |
+| WebGPU | Pipeline wired | Yes | 10/10 (soft) | GLSL→WGSL (pure Go) |
 | DirectX 12 | Early / incomplete | Yes | 10/10 (soft) | Planned (HLSL) |
 | WebGL2 | Soft-delegating only | Yes | 10/10 (soft) | GLSL ES 3.00 (stub) |
 
@@ -190,35 +190,63 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 ## WebGPU
 
 **Package**: `internal/backend/webgpu/`
-**Status**: GPU bindings early — basic structure, shader pipeline incomplete
+**Status**: GPU pipeline wired — needs GPU hardware validation
 **Platform**: Cross-platform (desktop via wgpu-native, browser via JS API)
-**Bindings**: `internal/wgpu/wgpu.go` — 53 purego-bound functions
-**GPU Tests**: None
+**Bindings**: `internal/wgpu/wgpu.go` — 60 purego-bound functions
+**Shader**: `internal/shadertranslate/wgsl.go` — pure-Go GLSL→WGSL translator
+**GPU Tests**: None (needs wgpu-native library at runtime)
 
 ### Implemented (GPU mode)
-- `_gpu.go` files exist for all types (device, encoder, pipeline, shader,
+- `_gpu.go` files for all types (device, encoder, pipeline, shader,
   texture, buffer, render target)
-- wgpu-native bindings cover: Instance, Adapter, Device, Queue, Surface,
+- wgpu-native bindings: Instance, Adapter, Device, Queue, Surface,
   Swapchain, Texture, TextureView, Buffer, ShaderModule, BindGroup,
   Pipeline, CommandEncoder, RenderPassEncoder
-- Basic device initialization structure
-- Texture and buffer creation framework
+- **Synchronous adapter/device initialization** via `purego.NewCallback`
+  (wgpu-native calls callbacks inline)
+- **GLSL→WGSL shader translation** (`shadertranslate/wgsl.go`): vertex
+  attributes, uniforms, varyings, texture sampling, local variable
+  declarations, type constructor mapping
+- **Uniform ring buffer**: 16 KB persistent GPU buffer with 256-byte-aligned
+  cursor; reset per-frame in `BeginFrame`, advances per-draw. Eliminates
+  per-draw buffer creation/destruction
+- **Bind group layout caching**: pipeline creates group 0 (uniforms) and
+  group 1 (texture + sampler) layouts once; encoder reuses them
+- **Depth/stencil pipeline state**: `DepthStencilState` built from
+  `PipelineDescriptor` fields when depth testing is enabled
+- **Depth attachment**: `BeginRenderPass` wires the render target's depth
+  texture view into `RenderPassDepthStencilAttachment`
+- **Sampler cache**: device caches samplers by `FilterMode` (nearest/linear);
+  `SetTextureFilter` records per-slot filter, used when binding textures
+- **Resize handling**: `Resize(w, h)` reconfigures the surface (or recreates
+  the offscreen texture); `BeginFrame` detects stale/lost surfaces and
+  reconfigures automatically before retry
+- **Surface/presentation**: `SurfaceFactory`-driven surface creation,
+  `wgpuSurfaceConfigure` for presentation mode (VSync/FIFO), per-frame
+  texture acquisition via `SurfaceGetCurrentTexture`, present in `EndFrame`
+- **Frame lifecycle**: `BeginFrame` acquires surface texture + resets
+  uniform cursor; `EndFrame` presents and releases the surface view
+- Texture creation, upload, readback (staging buffer + map)
+- Buffer creation, upload, sub-region upload
+- Viewport, scissor, draw, drawIndexed
+- ReadScreen via texture-to-buffer copy
+- **Browser path** (`//go:build js`): full `syscall/js` implementation
+  targeting the browser `navigator.gpu` API — `GPUDevice`, `GPUQueue`,
+  `GPUCommandEncoder`, `GPURenderPassEncoder`, `GPUCanvasContext` for
+  presentation, async adapter/device via Promise callbacks, GLSL→WGSL
+  translation shared with native path
 
 ### Known Issues
-- Async adapter/device creation has placeholder code ("for now, set adapter
-  directly" comment)
-- Shader compilation path incomplete (WGSL source expected but no GLSL→WGSL
-  translator exists yet)
-- No GPU tests to validate any of the implementation
+- No GPU tests yet — requires `libwgpu_native.{so,dylib,dll}` at runtime
+- SetStencil and SetColorWrite are no-ops (state baked into pipeline)
+- GLSL→WGSL translator covers core sprite/text patterns and built-in
+  math functions; does not support array uniforms or custom functions
 
 ### Roadmap
-1. Implement GLSL→WGSL translator (or integrate Naga via purego)
-2. Complete async adapter/device initialization
-3. Validate basic clear + readback cycle
-4. Implement full draw pipeline with bind groups
-5. Add GPU tests
-6. Surface/swapchain integration for presentation
-7. Browser path via `syscall/js` (`navigator.gpu`)
+1. Validate clear + readback cycle on GPU hardware (native + browser)
+2. Validate full sprite rendering pipeline with visual test
+3. Run conformance suite against GPU mode
+4. HTML harness example for browser WebGPU
 
 ---
 
@@ -287,7 +315,7 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 | GLSL 330 | SPIR-V | `internal/shaderc/` (purego libshaderc) | Working |
 | GLSL 330 | MSL | `internal/shadertranslate/msl.go` (pure Go) | Working |
 | GLSL 330 | GLSL ES 3.00 | Stub translator in webgl/ | Planned |
-| GLSL 330 | WGSL | Not implemented | Planned |
+| GLSL 330 | WGSL | `internal/shadertranslate/wgsl.go` (pure Go) | Working |
 | GLSL 330 | HLSL | Not implemented | Planned |
 | Kage | GLSL 330 | `internal/shaderir/` transpiler | Production |
 
@@ -305,8 +333,9 @@ Based on current state and effort required:
    integration and visual validation. Likely the first backend to achieve
    full GPU rendering after OpenGL.
 
-3. **WebGPU** — Bindings exist but shader pipeline is the blocker. Needs
-   GLSL→WGSL translator before any rendering can work.
+3. **WebGPU** — GPU pipeline fully wired (shader translation, uniforms,
+   bind groups, depth/stencil, sampler cache). Needs GPU hardware
+   validation and surface/swapchain integration for presentation.
 
 4. **DirectX 12** — Most work remaining. Minimal GPU implementation, no
    shader pipeline, Windows-only testing constraint.

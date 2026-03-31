@@ -1,18 +1,17 @@
-//go:build (darwin || linux || freebsd || windows) && !soft
+//go:build js && !soft
 
 package webgpu
 
 import (
 	"encoding/binary"
 	"math"
+	"syscall/js"
 
 	"github.com/michaelraines/future-core/internal/backend"
 	"github.com/michaelraines/future-core/internal/shadertranslate"
-	"github.com/michaelraines/future-core/internal/wgpu"
 )
 
-// Shader implements backend.Shader for WebGPU.
-// Stores WGSL source and compiled WGPUShaderModule handle.
+// Shader implements backend.Shader for WebGPU via the browser JS API.
 type Shader struct {
 	dev            *Device
 	vertexSource   string
@@ -25,14 +24,14 @@ type Shader struct {
 	fragmentUniformLayout []shadertranslate.UniformField
 
 	// Compiled shader modules (lazily created).
-	vertexModule   wgpu.ShaderModule
-	fragmentModule wgpu.ShaderModule
+	vertexModule   js.Value
+	fragmentModule js.Value
 	compiled       bool
 }
 
-// compile translates GLSL to WGSL and compiles the source into shader modules.
+// compile translates GLSL to WGSL and creates shader modules.
 func (s *Shader) compile() {
-	if s.compiled || s.dev.device == 0 {
+	if s.compiled {
 		return
 	}
 	s.compiled = true
@@ -40,14 +39,18 @@ func (s *Shader) compile() {
 	if s.vertexSource != "" {
 		result, err := shadertranslate.GLSLToWGSLVertex(s.vertexSource)
 		if err == nil {
-			s.vertexModule = wgpu.DeviceCreateShaderModuleWGSL(s.dev.device, result.Source)
+			desc := js.Global().Get("Object").New()
+			desc.Set("code", result.Source)
+			s.vertexModule = s.dev.device.Call("createShaderModule", desc)
 			s.vertexUniformLayout = result.Uniforms
 		}
 	}
 	if s.fragmentSource != "" {
 		result, err := shadertranslate.GLSLToWGSLFragment(s.fragmentSource)
 		if err == nil {
-			s.fragmentModule = wgpu.DeviceCreateShaderModuleWGSL(s.dev.device, result.Source)
+			desc := js.Global().Get("Object").New()
+			desc.Set("code", result.Source)
+			s.fragmentModule = s.dev.device.Call("createShaderModule", desc)
 			s.fragmentUniformLayout = result.Uniforms
 		}
 	}
@@ -58,7 +61,6 @@ func (s *Shader) packUniforms(layout []shadertranslate.UniformField) []byte {
 	if len(layout) == 0 {
 		return nil
 	}
-	// Calculate total buffer size (last field offset + size, aligned to 16).
 	last := layout[len(layout)-1]
 	totalSize := last.Offset + last.Size
 	if totalSize%16 != 0 {
@@ -70,13 +72,13 @@ func (s *Shader) packUniforms(layout []shadertranslate.UniformField) []byte {
 		if !ok {
 			continue
 		}
-		writeUniformValue(buf[f.Offset:], v)
+		writeUniformValueJS(buf[f.Offset:], v)
 	}
 	return buf
 }
 
-// writeUniformValue writes a uniform value into a byte slice.
-func writeUniformValue(dst []byte, v interface{}) {
+// writeUniformValueJS writes a uniform value into a byte slice.
+func writeUniformValueJS(dst []byte, v interface{}) {
 	switch val := v.(type) {
 	case float32:
 		binary.LittleEndian.PutUint32(dst, math.Float32bits(val))
@@ -119,12 +121,4 @@ func (s *Shader) SetUniformBlock(name string, data []byte) { s.uniforms[name] = 
 // Dispose releases shader resources.
 func (s *Shader) Dispose() {
 	s.uniforms = nil
-	if s.vertexModule != 0 {
-		wgpu.ShaderModuleRelease(s.vertexModule)
-		s.vertexModule = 0
-	}
-	if s.fragmentModule != 0 {
-		wgpu.ShaderModuleRelease(s.fragmentModule)
-		s.fragmentModule = 0
-	}
 }
