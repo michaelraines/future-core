@@ -677,8 +677,10 @@ func (g *GeoM) SetElement(i, j int, v float64) {
 // Invert inverts the GeoM. If the matrix is not invertible, it becomes
 // a zero-value identity.
 func (g *GeoM) Invert() {
-	inv := g.mat3().Inverse()
-	g.m = inv
+	inv, ok := g.mat3().Inverse()
+	if ok {
+		g.m = inv
+	}
 }
 
 // Mat3 returns the underlying 3x3 matrix.
