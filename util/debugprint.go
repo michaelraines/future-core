@@ -106,7 +106,6 @@ func debugGlyph(ch rune) []byte {
 // debugFontData is a 5-wide bitmap font for ASCII 32–126.
 // Each character is a slice of bytes; each byte encodes one row with bits
 // 4..0 mapping to pixels left-to-right (bit 4 = leftmost).
-//
 var debugFontData = [debugCharCount][]byte{
 	// 32 ' ' (space)
 	nil,
