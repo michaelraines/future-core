@@ -669,9 +669,7 @@ func (g *GeoM) Element(i, j int) float64 {
 // i must be 0 or 1, j must be 0, 1, or 2.
 // This matches Ebitengine's GeoM.SetElement.
 func (g *GeoM) SetElement(i, j int, v float64) {
-	m := g.mat3()
-	m.Set(i, j, v)
-	g.m = m
+	g.m = g.mat3().Set(i, j, v)
 }
 
 // Invert inverts the GeoM. If the matrix is not invertible, it becomes
