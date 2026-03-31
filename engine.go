@@ -42,8 +42,63 @@ type Game interface {
 	Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int)
 }
 
+// FocusHandler is an optional interface that Game implementations can
+// satisfy to receive focus/blur notifications. On mobile, these correspond
+// to the app being foregrounded (OnFocus) or backgrounded (OnBlur).
+// Use OnBlur to save game state before the OS may terminate the app.
+type FocusHandler interface {
+	// OnFocus is called when the application gains focus (foregrounded).
+	OnFocus()
+	// OnBlur is called when the application loses focus (backgrounded).
+	// Save any critical state here — on mobile the app may be killed.
+	OnBlur()
+}
+
+// LifecycleHandler is an optional interface that Game implementations can
+// satisfy to receive lifecycle notifications. OnDispose is called once
+// when the game loop exits, before the engine shuts down.
+type LifecycleHandler interface {
+	// OnDispose is called once when the game loop is about to exit.
+	// Use this to release external resources (save files, network connections).
+	OnDispose()
+}
+
 // ErrTermination is returned from Update() to cleanly exit the game loop.
 var ErrTermination = errors.New("game terminated")
+
+// RunGameOptions configures engine behavior at startup. Pass to
+// RunGameWithOptions to customize. A nil options value uses defaults.
+type RunGameOptions struct {
+	// ScreenOrientation locks the screen to a specific orientation.
+	// Only effective on mobile platforms; ignored on desktop.
+	// Default: OrientationDefault (system decides).
+	ScreenOrientation Orientation
+
+	// InitialWindowWidth overrides the default window width (800).
+	// Set to 0 to use the default.
+	InitialWindowWidth int
+
+	// InitialWindowHeight overrides the default window height (600).
+	// Set to 0 to use the default.
+	InitialWindowHeight int
+
+	// InitialWindowTitle overrides the default window title.
+	// Set to "" to use the default ("Future Render").
+	InitialWindowTitle string
+}
+
+// Orientation represents a screen orientation preference.
+type Orientation int
+
+// Orientation constants.
+const (
+	// OrientationDefault lets the system decide the orientation.
+	OrientationDefault Orientation = iota
+	// OrientationPortrait locks to portrait mode.
+	OrientationPortrait
+	// OrientationLandscape locks to landscape mode.
+	OrientationLandscape
+)
 
 // RunGame starts the game loop with the given Game implementation.
 // This function blocks until the game exits. It must be called from
@@ -51,6 +106,31 @@ var ErrTermination = errors.New("game terminated")
 func RunGame(game Game) error {
 	e := newEngine(game)
 	return e.run()
+}
+
+// RunGameWithOptions starts the game loop with the given Game and options.
+// This function blocks until the game exits. It must be called from
+// the main goroutine on platforms that require it (macOS, iOS).
+func RunGameWithOptions(game Game, opts *RunGameOptions) error {
+	applyRunGameOptions(opts)
+	return RunGame(game)
+}
+
+// applyRunGameOptions applies the given options to the pending engine state.
+func applyRunGameOptions(opts *RunGameOptions) {
+	if opts == nil {
+		return
+	}
+	if opts.InitialWindowWidth > 0 {
+		pendingWindowWidth = opts.InitialWindowWidth
+	}
+	if opts.InitialWindowHeight > 0 {
+		pendingWindowHeight = opts.InitialWindowHeight
+	}
+	if opts.InitialWindowTitle != "" {
+		pendingWindowTitle = opts.InitialWindowTitle
+	}
+	pendingOrientation = opts.ScreenOrientation
 }
 
 // SetWindowSize sets the window size in logical pixels.
@@ -191,6 +271,33 @@ func IsScreenClearedEveryFrame() bool {
 	return screenClearedEveryFrame.Load()
 }
 
+// SetScreenOrientation requests a specific screen orientation.
+// Only effective on mobile platforms; ignored on desktop.
+func SetScreenOrientation(o Orientation) {
+	pendingOrientation = o
+	// On mobile, apply immediately if the engine is running.
+	// The platform layer checks this value each frame.
+}
+
+// ScreenOrientation returns the current screen orientation preference.
+func ScreenOrientation() Orientation {
+	return pendingOrientation
+}
+
+// --- Soft keyboard API ---
+
+// ShowSoftKeyboard requests the platform to show the software keyboard.
+// Only effective on mobile platforms; no-op on desktop.
+func ShowSoftKeyboard() {
+	// Implemented per-platform. On Android, this sends a JNI call.
+}
+
+// HideSoftKeyboard requests the platform to hide the software keyboard.
+// Only effective on mobile platforms; no-op on desktop.
+func HideSoftKeyboard() {
+	// Implemented per-platform. On Android, this sends a JNI call.
+}
+
 // --- Engine internals ---
 
 var (
@@ -205,6 +312,7 @@ var (
 	pendingWindowTitle  = "Future Render"
 	pendingWindowWidth  = 800
 	pendingWindowHeight = 600
+	pendingOrientation  Orientation
 )
 
 // getEngine returns the current engine, or nil if not initialized.

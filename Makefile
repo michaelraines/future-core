@@ -16,7 +16,7 @@
 #   go 1.24+
 #   golangci-lint (https://golangci-lint.run/welcome/install/)
 
-.PHONY: all ci fmt vet lint test test-race bench build clean fix check-lint cover cover-check cover-html
+.PHONY: all ci fmt vet lint test test-race bench build build-android clean fix check-lint cover cover-check cover-html
 
 # Minimum required test coverage per package (percentage).
 COVERAGE_MIN := 80
@@ -36,12 +36,12 @@ endif
 #   conversions that go vet flags; no tests in CI
 # - internal/mtl, internal/vk, internal/wgpu, internal/d3d12: GPU binding packages
 #   use purego/unsafe; excluded from vet/lint (tested via backend conformance)
-PKGS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl$$ | grep -v /internal/platform/glfw | grep -v /internal/platform/cocoa | grep -v /internal/backend/opengl | grep -v /internal/mtl$$ | grep -v /internal/vk$$ | grep -v /internal/wgpu$$ | grep -v /internal/d3d12$$)
+PKGS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl$$ | grep -v /internal/platform/glfw | grep -v /internal/platform/cocoa | grep -v /internal/platform/android | grep -v /internal/backend/opengl | grep -v /internal/mtl$$ | grep -v /internal/vk$$ | grep -v /internal/wgpu$$ | grep -v /internal/d3d12$$)
 
 # LINT_PATHS provides relative directory paths for golangci-lint, which
 # requires filesystem paths rather than Go module paths.
 MODULE := $(shell go list -m)
-LINT_PATHS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl$$ | grep -v /internal/platform/glfw | grep -v /internal/platform/cocoa | grep -v /internal/backend/opengl | grep -v /internal/mtl$$ | grep -v /internal/vk$$ | grep -v /internal/wgpu$$ | grep -v /internal/d3d12$$ | sed "s|^$(MODULE)|.|")
+LINT_PATHS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl$$ | grep -v /internal/platform/glfw | grep -v /internal/platform/cocoa | grep -v /internal/platform/android | grep -v /internal/backend/opengl | grep -v /internal/mtl$$ | grep -v /internal/vk$$ | grep -v /internal/wgpu$$ | grep -v /internal/d3d12$$ | sed "s|^$(MODULE)|.|")
 
 # All buildable packages. Excludes:
 # - audio/: requires ALSA headers (CGo) on Linux
@@ -95,6 +95,31 @@ bench:
 build:
 	@echo "==> Building..."
 	go build $(GO_TAGS) $(BUILD_PKGS)
+
+# Cross-compile for Android (arm64). Verifies engine-internal packages compile
+# for Android without requiring the NDK or CGo. The root package, platform
+# packages, and GPU binding packages are excluded because they need CGo (the
+# root package imports x/mobile/app which requires JNI bindings via CGo; this
+# is analogous to the root package requiring X11 headers on Linux for GLFW).
+# Full Android builds require CGO_ENABLED=1 with the Android NDK toolchain.
+build-android:
+	@echo "==> Building for Android (arm64)..."
+	GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -tags soft \
+		$(shell GOOS=android GOARCH=arm64 go list -tags soft ./... 2>/dev/null \
+		| grep -v "github.com/michaelraines/future-core$$" \
+		| grep -v /audio \
+		| grep -v /cmd/ \
+		| grep -v /text$$ \
+		| grep -v /internal/platform/glfw \
+		| grep -v /internal/platform/cocoa \
+		| grep -v /internal/platform/win32 \
+		| grep -v /internal/platform/android \
+		| grep -v /internal/gl$$ \
+		| grep -v /internal/mtl$$ \
+		| grep -v /internal/vk$$ \
+		| grep -v /internal/wgpu$$ \
+		| grep -v /internal/d3d12$$ \
+		| grep -v /internal/backend/opengl)
 
 # --- Coverage Targets ---
 

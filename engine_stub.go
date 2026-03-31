@@ -1,4 +1,4 @@
-//go:build !(darwin || linux || freebsd || windows) && !js
+//go:build !(darwin || linux || freebsd || windows || android) && !js
 
 package futurerender
 

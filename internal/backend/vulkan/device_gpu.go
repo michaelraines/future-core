@@ -1,4 +1,4 @@
-//go:build (darwin || linux || freebsd || windows) && !soft
+//go:build (darwin || linux || freebsd || windows || android) && !soft
 
 package vulkan
 
@@ -167,6 +167,8 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 			}
 		case "windows":
 			d.instanceInfo.Extensions = appendUnique(d.instanceInfo.Extensions, "VK_KHR_win32_surface")
+		case "android":
+			d.instanceInfo.Extensions = appendUnique(d.instanceInfo.Extensions, "VK_KHR_android_surface")
 		default: // linux, freebsd
 			d.instanceInfo.Extensions = appendUnique(d.instanceInfo.Extensions, "VK_KHR_xlib_surface")
 		}
