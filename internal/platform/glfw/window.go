@@ -517,6 +517,30 @@ func mapKey(k int32) platform.Key {
 		return platform.KeyF11
 	case glfwKeyF12:
 		return platform.KeyF12
+	case glfwKeyF13:
+		return platform.KeyF13
+	case glfwKeyF14:
+		return platform.KeyF14
+	case glfwKeyF15:
+		return platform.KeyF15
+	case glfwKeyF16:
+		return platform.KeyF16
+	case glfwKeyF17:
+		return platform.KeyF17
+	case glfwKeyF18:
+		return platform.KeyF18
+	case glfwKeyF19:
+		return platform.KeyF19
+	case glfwKeyF20:
+		return platform.KeyF20
+	case glfwKeyF21:
+		return platform.KeyF21
+	case glfwKeyF22:
+		return platform.KeyF22
+	case glfwKeyF23:
+		return platform.KeyF23
+	case glfwKeyF24:
+		return platform.KeyF24
 	default:
 		return platform.KeyUnknown
 	}

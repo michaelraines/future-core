@@ -241,6 +241,18 @@ const (
 	KeyF10
 	KeyF11
 	KeyF12
+	KeyF13
+	KeyF14
+	KeyF15
+	KeyF16
+	KeyF17
+	KeyF18
+	KeyF19
+	KeyF20
+	KeyF21
+	KeyF22
+	KeyF23
+	KeyF24
 	KeyKP0
 	KeyKP1
 	KeyKP2
@@ -273,6 +285,60 @@ const (
 // KeyMax is the maximum Key value (exclusive sentinel).
 // It is used by inpututil.AppendPressedKeys.
 const KeyMax = keyCount
+
+// Ebitengine-compatible key aliases.
+// These follow the W3C UI Events KeyboardEvent.code naming convention
+// used by Ebitengine v2, allowing callers to use either naming style.
+const (
+	KeyArrowDown  = KeyDown
+	KeyArrowLeft  = KeyLeft
+	KeyArrowRight = KeyRight
+	KeyArrowUp    = KeyUp
+
+	KeyBackquote    = KeyGraveAccent
+	KeyBracketLeft  = KeyLeftBracket
+	KeyBracketRight = KeyRightBracket
+	KeyQuote        = KeyApostrophe
+
+	KeyAltLeft      = KeyLeftAlt
+	KeyAltRight     = KeyRightAlt
+	KeyControlLeft  = KeyLeftControl
+	KeyControlRight = KeyRightControl
+	KeyShiftLeft    = KeyLeftShift
+	KeyShiftRight   = KeyRightShift
+	KeyMetaLeft     = KeyLeftSuper
+	KeyMetaRight    = KeyRightSuper
+	KeyContextMenu  = KeyMenu
+
+	KeyDigit0 = Key0
+	KeyDigit1 = Key1
+	KeyDigit2 = Key2
+	KeyDigit3 = Key3
+	KeyDigit4 = Key4
+	KeyDigit5 = Key5
+	KeyDigit6 = Key6
+	KeyDigit7 = Key7
+	KeyDigit8 = Key8
+	KeyDigit9 = Key9
+
+	KeyNumpad0        = KeyKP0
+	KeyNumpad1        = KeyKP1
+	KeyNumpad2        = KeyKP2
+	KeyNumpad3        = KeyKP3
+	KeyNumpad4        = KeyKP4
+	KeyNumpad5        = KeyKP5
+	KeyNumpad6        = KeyKP6
+	KeyNumpad7        = KeyKP7
+	KeyNumpad8        = KeyKP8
+	KeyNumpad9        = KeyKP9
+	KeyNumpadAdd      = KeyKPAdd
+	KeyNumpadDecimal  = KeyKPDecimal
+	KeyNumpadDivide   = KeyKPDivide
+	KeyNumpadEnter    = KeyKPEnter
+	KeyNumpadEqual    = KeyKPEqual
+	KeyNumpadMultiply = KeyKPMultiply
+	KeyNumpadSubtract = KeyKPSubtract
+)
 
 // keyMap maps public Key values to platform.Key values.
 var keyMap [keyCount]platform.Key
@@ -362,6 +428,18 @@ func init() {
 	keyMap[KeyF10] = platform.KeyF10
 	keyMap[KeyF11] = platform.KeyF11
 	keyMap[KeyF12] = platform.KeyF12
+	keyMap[KeyF13] = platform.KeyF13
+	keyMap[KeyF14] = platform.KeyF14
+	keyMap[KeyF15] = platform.KeyF15
+	keyMap[KeyF16] = platform.KeyF16
+	keyMap[KeyF17] = platform.KeyF17
+	keyMap[KeyF18] = platform.KeyF18
+	keyMap[KeyF19] = platform.KeyF19
+	keyMap[KeyF20] = platform.KeyF20
+	keyMap[KeyF21] = platform.KeyF21
+	keyMap[KeyF22] = platform.KeyF22
+	keyMap[KeyF23] = platform.KeyF23
+	keyMap[KeyF24] = platform.KeyF24
 	keyMap[KeyKP0] = platform.KeyKP0
 	keyMap[KeyKP1] = platform.KeyKP1
 	keyMap[KeyKP2] = platform.KeyKP2
