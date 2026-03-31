@@ -113,8 +113,7 @@ func RunGame(game Game) error {
 // the main goroutine on platforms that require it (macOS, iOS).
 func RunGameWithOptions(game Game, opts *RunGameOptions) error {
 	applyRunGameOptions(opts)
-	e := newEngine(game)
-	return e.run()
+	return RunGame(game)
 }
 
 // applyRunGameOptions applies the given options to the pending engine state.

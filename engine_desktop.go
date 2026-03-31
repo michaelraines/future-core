@@ -462,11 +462,6 @@ func (e *engine) run() error {
 		}
 	}
 
-	// Notify game of disposal if it implements LifecycleHandler.
-	if lh, ok := e.game.(LifecycleHandler); ok {
-		lh.OnDispose()
-	}
-
 	return nil
 }
 
