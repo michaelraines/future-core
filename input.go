@@ -52,6 +52,16 @@ func IsMouseButtonPressed(button MouseButton) bool {
 	return e.inputState.IsMouseButtonPressed(platform.MouseButton(button))
 }
 
+// IsMouseButtonJustPressed returns whether the given mouse button was
+// pressed this frame (edge detection).
+func IsMouseButtonJustPressed(button MouseButton) bool {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return false
+	}
+	return e.inputState.IsMouseButtonJustPressed(platform.MouseButton(button))
+}
+
 // CursorPosition returns the current cursor position in logical pixels.
 func CursorPosition() (x, y int) {
 	e := getEngine()
@@ -259,6 +269,10 @@ const (
 	KeyMenu
 	keyCount // sentinel — not exported
 )
+
+// KeyMax is the maximum Key value (exclusive sentinel).
+// It is used by inpututil.AppendPressedKeys.
+const KeyMax = keyCount
 
 // keyMap maps public Key values to platform.Key values.
 var keyMap [keyCount]platform.Key

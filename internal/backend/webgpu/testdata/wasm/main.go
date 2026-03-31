@@ -9,8 +9,9 @@ import (
 	"math"
 	"os"
 
+	"image"
+
 	futurerender "github.com/michaelraines/future-core"
-	fmath "github.com/michaelraines/future-core/math"
 )
 
 func init() {
@@ -72,10 +73,7 @@ func (g *demoGame) Layout(_, _ int) (int, int) {
 
 // fillRect draws a filled rectangle using SubImage + Fill.
 func fillRect(screen *futurerender.Image, x, y, w, h int, r, g, b, a float64) {
-	sub := screen.SubImage(fmath.Rect{
-		Min: fmath.Vec2{X: float64(x), Y: float64(y)},
-		Max: fmath.Vec2{X: float64(x + w), Y: float64(y + h)},
-	})
+	sub := screen.SubImage(image.Rect(x, y, x+w, y+h))
 	if sub != nil {
 		sub.Fill(futurerender.ColorFromRGBA(r, g, b, a))
 	}

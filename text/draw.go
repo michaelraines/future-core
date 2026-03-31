@@ -6,7 +6,6 @@ import (
 	"unicode"
 
 	futurerender "github.com/michaelraines/future-core"
-	fmath "github.com/michaelraines/future-core/math"
 )
 
 // Align specifies horizontal text alignment.
@@ -27,7 +26,7 @@ type DrawOptions struct {
 	// ColorScale tints the text. A zero-valued ColorScale is treated as
 	// opaque white (1,1,1,1), matching Ebitengine's convention so that
 	// default DrawOptions{} draws white text.
-	ColorScale fmath.Color
+	ColorScale futurerender.ColorScale
 
 	// Align specifies horizontal text alignment. Default is AlignLeft.
 	// For multi-line text, each line is aligned relative to the widest line
@@ -205,17 +204,12 @@ func drawLine(target *futurerender.Image, s string, face *Face, x, y, refWidth f
 	atlas := atlasFor(face)
 
 	var geoM futurerender.GeoM
-	var colorScale fmath.Color
+	var colorScale futurerender.ColorScale
 	align := AlignLeft
 	if opts != nil {
 		geoM = opts.GeoM
 		colorScale = opts.ColorScale
 		align = opts.Align
-	}
-
-	// Default to white if zero.
-	if colorScale == (fmath.Color{}) {
-		colorScale = fmath.Color{R: 1, G: 1, B: 1, A: 1}
 	}
 
 	// Apply alignment offset.
@@ -259,9 +253,8 @@ func drawLine(target *futurerender.Image, s string, face *Face, x, y, refWidth f
 			continue
 		}
 
-		drawOpts := &futurerender.DrawImageOptions{
-			ColorScale: colorScale,
-		}
+		drawOpts := &futurerender.DrawImageOptions{}
+		drawOpts.ColorScale = colorScale
 		drawOpts.GeoM.Translate(curX+g.bearingX, y+g.bearingY+face.metrics.Ascent)
 		drawOpts.GeoM.Concat(geoM)
 		target.DrawImage(glyphImg, drawOpts)

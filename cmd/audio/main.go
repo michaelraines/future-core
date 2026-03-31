@@ -16,7 +16,6 @@ import (
 	futurerender "github.com/michaelraines/future-core"
 	"github.com/michaelraines/future-core/audio"
 	"github.com/michaelraines/future-core/audio/wav"
-	fmath "github.com/michaelraines/future-core/math"
 	"github.com/michaelraines/future-core/text"
 	"golang.org/x/image/font/gofont/goregular"
 )
@@ -96,6 +95,12 @@ func (g *audioGame) Update() error {
 	return nil
 }
 
+func colorScale(r, g, b, a float32) futurerender.ColorScale {
+	var cs futurerender.ColorScale
+	cs.Scale(r, g, b, a)
+	return cs
+}
+
 func (g *audioGame) Draw(screen *futurerender.Image) {
 	screen.Fill(futurerender.ColorFromRGBA(0.05, 0.05, 0.15, 1.0))
 
@@ -105,13 +110,13 @@ func (g *audioGame) Draw(screen *futurerender.Image) {
 
 	// Title
 	titleOpts := &text.DrawOptions{
-		ColorScale: fmath.Color{R: 1, G: 1, B: 1, A: 1},
+		ColorScale: colorScale(1, 1, 1, 1),
 	}
 	text.Draw(screen, "Future Render — Audio Example", g.face, 20, 30, titleOpts)
 
 	// Instructions
 	instrOpts := &text.DrawOptions{
-		ColorScale: fmath.Color{R: 0.7, G: 0.8, B: 1.0, A: 1},
+		ColorScale: colorScale(0.7, 0.8, 1.0, 1),
 	}
 	text.Draw(screen, "Controls:", g.face, 20, 80, instrOpts)
 	text.Draw(screen, "  Space  — Play / Pause", g.face, 20, 110, instrOpts)
@@ -120,7 +125,7 @@ func (g *audioGame) Draw(screen *futurerender.Image) {
 	// Playback state
 	if g.initErr != nil {
 		errOpts := &text.DrawOptions{
-			ColorScale: fmath.Color{R: 1, G: 0.3, B: 0.3, A: 1},
+			ColorScale: colorScale(1, 0.3, 0.3, 1),
 		}
 		text.Draw(screen, fmt.Sprintf("Audio init error: %v", g.initErr), g.face, 20, 200, errOpts)
 		return
@@ -131,10 +136,10 @@ func (g *audioGame) Draw(screen *futurerender.Image) {
 	}
 
 	state := "Paused"
-	stateColor := fmath.Color{R: 1, G: 0.6, B: 0.2, A: 1}
+	stateColor := colorScale(1, 0.6, 0.2, 1)
 	if g.player.IsPlaying() {
 		state = "Playing"
-		stateColor = fmath.Color{R: 0.3, G: 1, B: 0.3, A: 1}
+		stateColor = colorScale(0.3, 1, 0.3, 1)
 	}
 	stateOpts := &text.DrawOptions{
 		ColorScale: stateColor,
@@ -142,7 +147,7 @@ func (g *audioGame) Draw(screen *futurerender.Image) {
 	text.Draw(screen, fmt.Sprintf("Status: %s", state), g.face, 20, 200, stateOpts)
 
 	infoOpts := &text.DrawOptions{
-		ColorScale: fmath.Color{R: 0.6, G: 0.6, B: 0.6, A: 1},
+		ColorScale: colorScale(0.6, 0.6, 0.6, 1),
 	}
 	text.Draw(screen, fmt.Sprintf("Tone: %gHz sine wave, %gs, %dHz sample rate", freq, duration, sampleRate), g.face, 20, 240, infoOpts)
 }

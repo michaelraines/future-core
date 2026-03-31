@@ -510,6 +510,8 @@ func (e *engine) deviceScaleFactor() float64 {
 	return 1.0
 }
 
+func (e *engine) setWindowResizable(_ bool) {}
+
 // preferredBackends returns Android's backend preference order.
 // Vulkan is the primary GPU API on Android; soft rasterizer as fallback.
 func preferredBackends() []string {

@@ -526,6 +526,8 @@ func (e *engine) deviceScaleFactor() float64 {
 	return 1.0
 }
 
+func (e *engine) setWindowResizable(_ bool) {}
+
 // resolveBackendName determines the backend name that will be used, without
 // actually creating the device. Used to decide window configuration (e.g. NoGL)
 // before the window is created.

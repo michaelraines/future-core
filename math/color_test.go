@@ -23,6 +23,14 @@ func TestColorFromHex(t *testing.T) {
 
 func TestColorRGBA(t *testing.T) {
 	r, g, b, a := ColorWhite.RGBA()
+	require.Equal(t, uint32(0xffff), r)
+	require.Equal(t, uint32(0xffff), g)
+	require.Equal(t, uint32(0xffff), b)
+	require.Equal(t, uint32(0xffff), a)
+}
+
+func TestColorRGBA8(t *testing.T) {
+	r, g, b, a := ColorWhite.RGBA8()
 	require.Equal(t, uint8(255), r)
 	require.Equal(t, uint8(255), g)
 	require.Equal(t, uint8(255), b)

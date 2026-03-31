@@ -41,3 +41,4 @@ func (e *engine) currentFPS() float64        { return e.fpsValue }
 func (e *engine) currentTPS() float64        { return e.tpsValue }
 func (e *engine) setCursorMode(_ CursorMode) {}
 func (e *engine) deviceScaleFactor() float64 { return 1.0 }
+func (e *engine) setWindowResizable(_ bool)  {}

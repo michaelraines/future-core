@@ -57,7 +57,7 @@ func (g *spriteGame) Draw(screen *futurerender.Image) {
 	opts2.GeoM.Translate(-float64(w)/2, -float64(h)/2)
 	opts2.GeoM.Rotate(-g.angle)
 	opts2.GeoM.Translate(screenW/4, screenH/2)
-	opts2.ColorScale = futurerender.ColorFromRGBA(1, 1, 1, 0.5)
+	opts2.ColorScale.ScaleAlpha(0.5)
 
 	screen.DrawImage(g.sprite, opts2)
 }

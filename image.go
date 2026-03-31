@@ -3,6 +3,7 @@ package futurerender
 import (
 	"fmt"
 	goimage "image"
+	"image/color"
 	"image/draw"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -83,6 +84,21 @@ func NewImage(width, height int) *Image {
 	return img
 }
 
+// NewImageOptions specifies options for NewImageWithOptions.
+type NewImageOptions struct {
+	// Unmanaged indicates that the image is not managed by the engine.
+	// Unmanaged images are not automatically disposed on context loss.
+	Unmanaged bool
+}
+
+// NewImageWithOptions creates a new blank image with the given bounds and options.
+// This matches Ebitengine's NewImageWithOptions.
+func NewImageWithOptions(bounds goimage.Rectangle, opts *NewImageOptions) *Image {
+	w := bounds.Dx()
+	h := bounds.Dy()
+	return NewImage(w, h)
+}
+
 // NewImageFromImage creates an Image from a Go image.Image.
 // The pixel data is uploaded to the GPU immediately.
 func NewImageFromImage(src goimage.Image) *Image {
@@ -135,9 +151,10 @@ func (img *Image) Size() (width, height int) {
 	return img.width, img.height
 }
 
-// Bounds returns the image bounds as a Rect.
-func (img *Image) Bounds() fmath.Rect {
-	return fmath.NewRect(0, 0, float64(img.width), float64(img.height))
+// Bounds returns the image bounds as an image.Rectangle.
+// This matches Ebitengine's Image.Bounds() signature.
+func (img *Image) Bounds() goimage.Rectangle {
+	return goimage.Rect(0, 0, img.width, img.height)
 }
 
 // DrawImage draws src onto img with the given options.
@@ -168,7 +185,7 @@ func (img *Image) DrawImage(src *Image, opts *DrawImageOptions) {
 	x3, y3 := o.GeoM.Apply(0, float64(srcH))
 
 	// Color scale (default to opaque white).
-	cr, cg, cb, ca := colorScaleOrDefault(o.ColorScale)
+	cr, cg, cb, ca := o.ColorScale.rgbaOrDefault()
 
 	// Determine texture ID: use source texture, or white texture for nil.
 	texID := src.textureID
@@ -251,7 +268,9 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 }
 
 // Fill fills the entire image with the given color.
-func (img *Image) Fill(c fmath.Color) {
+// The argument accepts any color.Color implementation (stdlib interface),
+// matching Ebitengine's Image.Fill signature.
+func (img *Image) Fill(clr color.Color) {
 	if img.disposed {
 		return
 	}
@@ -262,10 +281,11 @@ func (img *Image) Fill(c fmath.Color) {
 
 	w := float32(img.width)
 	h := float32(img.height)
-	r := float32(c.R)
-	g := float32(c.G)
-	b := float32(c.B)
-	a := float32(c.A)
+	cr, cg, cb, ca := clr.RGBA()
+	r := float32(cr) / 0xffff
+	g := float32(cg) / 0xffff
+	b := float32(cb) / 0xffff
+	a := float32(ca) / 0xffff
 
 	// Use the white texture and multiply by vertex color.
 	texID := rend.whiteTextureID
@@ -287,14 +307,17 @@ func (img *Image) Fill(c fmath.Color) {
 
 // SubImage returns a sub-region of the image for sprite sheet support.
 // The returned Image shares the parent's GPU texture with adjusted UVs.
-func (img *Image) SubImage(r fmath.Rect) *Image {
+// This matches Ebitengine's Image.SubImage signature (takes image.Rectangle).
+func (img *Image) SubImage(r goimage.Rectangle) *Image {
 	w := float32(img.width)
 	h := float32(img.height)
+	rw := r.Dx()
+	rh := r.Dy()
 
 	if w == 0 || h == 0 {
 		return &Image{
-			width:  int(r.Width()),
-			height: int(r.Height()),
+			width:  rw,
+			height: rh,
 		}
 	}
 
@@ -314,8 +337,8 @@ func (img *Image) SubImage(r fmath.Rect) *Image {
 	}
 
 	return &Image{
-		width:     int(r.Width()),
-		height:    int(r.Height()),
+		width:     rw,
+		height:    rh,
 		texture:   parent.texture,
 		textureID: parent.textureID,
 		parent:    parent,
@@ -329,7 +352,7 @@ func (img *Image) SubImage(r fmath.Rect) *Image {
 // Clear resets all pixels to transparent black (0, 0, 0, 0).
 // This is equivalent to ebiten.Image.Clear.
 func (img *Image) Clear() {
-	img.Fill(fmath.Color{R: 0, G: 0, B: 0, A: 0})
+	img.Fill(color.NRGBA{})
 }
 
 // ReadPixels reads RGBA pixel data from the image into dst.
@@ -372,9 +395,19 @@ func (img *Image) Dispose() {
 	}
 }
 
-// WritePixels uploads RGBA pixel data to a rectangular region of the image.
+// WritePixels uploads RGBA pixel data to the entire image.
 // The data must be len(pix) == 4*width*height bytes in RGBA order.
-func (img *Image) WritePixels(pix []byte, x, y, width, height int) {
+// This matches Ebitengine's Image.WritePixels signature (single arg, full image).
+func (img *Image) WritePixels(pix []byte) {
+	if img.disposed || img.texture == nil {
+		return
+	}
+	img.texture.Upload(pix, 0)
+}
+
+// WritePixelsRegion uploads RGBA pixel data to a rectangular region of the image.
+// The data must be len(pix) == 4*width*height bytes in RGBA order.
+func (img *Image) WritePixelsRegion(pix []byte, x, y, width, height int) {
 	if img.disposed || img.texture == nil {
 		return
 	}
@@ -389,15 +422,14 @@ type DrawImageOptions struct {
 	// ColorScale scales the RGBA color of each pixel.
 	// A zero-valued ColorScale is treated as opaque white (1,1,1,1), matching
 	// Ebitengine's behavior so that a default DrawImageOptions{} draws the
-	// image unmodified. To make an image invisible, use ColorM or set the
-	// alpha channel in vertex colors instead.
-	ColorScale fmath.Color
+	// image unmodified.
+	ColorScale ColorScale
 
 	// ColorM is the color matrix transformation.
 	ColorM fmath.ColorMatrix
 
 	// Blend specifies the blend mode.
-	Blend BlendMode
+	Blend Blend
 
 	// Filter specifies the texture filter.
 	Filter Filter
@@ -406,7 +438,7 @@ type DrawImageOptions struct {
 // DrawTrianglesOptions holds options for DrawTriangles.
 type DrawTrianglesOptions struct {
 	// Blend specifies the blend mode.
-	Blend BlendMode
+	Blend Blend
 
 	// Filter specifies the texture filter.
 	Filter Filter
@@ -423,12 +455,11 @@ type DrawRectShaderOptions struct {
 	// ColorScale scales the RGBA color of each pixel.
 	// A zero-valued ColorScale is treated as opaque white (1,1,1,1), matching
 	// Ebitengine's behavior so that a default DrawRectShaderOptions{} draws the
-	// image unmodified. To make an image invisible, use ColorM or set the
-	// alpha channel in vertex colors instead.
-	ColorScale fmath.Color
+	// image unmodified.
+	ColorScale ColorScale
 
 	// Blend specifies the blend mode.
-	Blend BlendMode
+	Blend Blend
 
 	// Uniforms maps uniform names to values. Values can be float32, float64,
 	// int, int32, or []float32. Slice length determines the GLSL type:
@@ -442,7 +473,7 @@ type DrawRectShaderOptions struct {
 // DrawTrianglesShaderOptions holds options for DrawTrianglesShader.
 type DrawTrianglesShaderOptions struct {
 	// Blend specifies the blend mode.
-	Blend BlendMode
+	Blend Blend
 
 	// FillRule specifies the fill rule for overlapping triangles.
 	FillRule FillRule
@@ -482,7 +513,7 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 	x2, y2 := o.GeoM.Apply(float64(w), float64(h))
 	x3, y3 := o.GeoM.Apply(0, float64(h))
 
-	cr, cg, cb, ca := colorScaleOrDefault(o.ColorScale)
+	cr, cg, cb, ca := o.ColorScale.rgbaOrDefault()
 	blend := blendToBackend(o.Blend)
 
 	// Determine texture ID from first source image, or white texture.
@@ -622,6 +653,34 @@ func (g *GeoM) Apply(x, y float64) (rx, ry float64) {
 	return v.X, v.Y
 }
 
+// Element returns the element at row i, column j of the affine transform.
+// i must be 0 or 1, j must be 0, 1, or 2.
+// The matrix is:
+//
+//	| a b tx |   Element(0,0) Element(0,1) Element(0,2)
+//	| c d ty |   Element(1,0) Element(1,1) Element(1,2)
+//
+// This matches Ebitengine's GeoM.Element.
+func (g *GeoM) Element(i, j int) float64 {
+	return g.mat3().At(i, j)
+}
+
+// SetElement sets the element at row i, column j of the affine transform.
+// i must be 0 or 1, j must be 0, 1, or 2.
+// This matches Ebitengine's GeoM.SetElement.
+func (g *GeoM) SetElement(i, j int, v float64) {
+	g.m = g.mat3().Set(i, j, v)
+}
+
+// Invert inverts the GeoM. If the matrix is not invertible, it becomes
+// a zero-value identity.
+func (g *GeoM) Invert() {
+	inv, ok := g.mat3().Inverse()
+	if ok {
+		g.m = inv
+	}
+}
+
 // Mat3 returns the underlying 3x3 matrix.
 // A zero-valued GeoM returns the identity matrix.
 func (g *GeoM) Mat3() fmath.Mat3 {
@@ -637,14 +696,167 @@ func (g *GeoM) mat3() fmath.Mat3 {
 	return g.m
 }
 
-// BlendMode specifies how colors are blended.
-type BlendMode int
+// ColorScale represents a color scale applied to drawn images.
+// This matches Ebitengine's ColorScale type.
+// A zero-valued ColorScale is treated as opaque white (1,1,1,1).
+type ColorScale struct {
+	r, g, b, a float32
+	set        bool
+}
 
-// BlendMode constants.
+// Scale multiplies all color components.
+func (cs *ColorScale) Scale(r, g, b, a float32) {
+	if !cs.set {
+		cs.r, cs.g, cs.b, cs.a = r, g, b, a
+		cs.set = true
+		return
+	}
+	cs.r *= r
+	cs.g *= g
+	cs.b *= b
+	cs.a *= a
+}
+
+// ScaleAlpha multiplies the alpha component only.
+func (cs *ColorScale) ScaleAlpha(a float32) {
+	if !cs.set {
+		cs.r, cs.g, cs.b, cs.a = 1, 1, 1, a
+		cs.set = true
+		return
+	}
+	cs.a *= a
+}
+
+// R returns the red component. Returns 1 if not set.
+func (cs ColorScale) R() float32 {
+	if !cs.set {
+		return 1
+	}
+	return cs.r
+}
+
+// G returns the green component. Returns 1 if not set.
+func (cs ColorScale) G() float32 {
+	if !cs.set {
+		return 1
+	}
+	return cs.g
+}
+
+// B returns the blue component. Returns 1 if not set.
+func (cs ColorScale) B() float32 {
+	if !cs.set {
+		return 1
+	}
+	return cs.b
+}
+
+// A returns the alpha component. Returns 1 if not set.
+func (cs ColorScale) A() float32 {
+	if !cs.set {
+		return 1
+	}
+	return cs.a
+}
+
+// Reset resets the ColorScale to the default (opaque white).
+func (cs *ColorScale) Reset() {
+	cs.r, cs.g, cs.b, cs.a = 0, 0, 0, 0
+	cs.set = false
+}
+
+// rgbaOrDefault returns RGBA float32 values, defaulting to (1,1,1,1) if not set.
+func (cs ColorScale) rgbaOrDefault() (r, g, b, a float32) {
+	if !cs.set {
+		return 1, 1, 1, 1
+	}
+	return cs.r, cs.g, cs.b, cs.a
+}
+
+// SetColor sets the ColorScale from an fmath.Color.
+func (cs *ColorScale) SetColor(c fmath.Color) {
+	cs.r = float32(c.R)
+	cs.g = float32(c.G)
+	cs.b = float32(c.B)
+	cs.a = float32(c.A)
+	cs.set = true
+}
+
+// BlendFactor represents a blend factor for the Blend struct.
+type BlendFactor int
+
+// BlendFactor constants matching Ebitengine.
 const (
-	BlendSourceOver     BlendMode = iota // Standard alpha blending
-	BlendAdditive                        // Additive blending
-	BlendMultiplicative                  // Multiplicative blending
+	BlendFactorZero                     BlendFactor = iota // 0
+	BlendFactorOne                                         // 1
+	BlendFactorSourceAlpha                                 // src alpha
+	BlendFactorDestinationAlpha                            // dst alpha
+	BlendFactorOneMinusSourceAlpha                         // 1 - src alpha
+	BlendFactorOneMinusDestinationAlpha                    // 1 - dst alpha
+	BlendFactorSourceColor                                 // src color (RGB)
+	BlendFactorDestinationColor                            // dst color (RGB)
+)
+
+// BlendOperation represents a blend operation for the Blend struct.
+type BlendOperation int
+
+// BlendOperation constants matching Ebitengine.
+const (
+	BlendOperationAdd             BlendOperation = iota // src + dst
+	BlendOperationSubtract                              // src - dst
+	BlendOperationReverseSubtract                       // dst - src
+	BlendOperationMin                                   // min(src, dst)
+	BlendOperationMax                                   // max(src, dst)
+)
+
+// Blend specifies how colors are blended, matching Ebitengine's ebiten.Blend struct.
+// A zero-valued Blend represents source-over (standard alpha) blending.
+type Blend struct {
+	// BlendFactorSourceRGB is the source RGB blend factor.
+	BlendFactorSourceRGB BlendFactor
+	// BlendFactorSourceAlpha is the source alpha blend factor.
+	BlendFactorSourceAlpha BlendFactor
+	// BlendFactorDestinationRGB is the destination RGB blend factor.
+	BlendFactorDestinationRGB BlendFactor
+	// BlendFactorDestinationAlpha is the destination alpha blend factor.
+	BlendFactorDestinationAlpha BlendFactor
+	// BlendOperationRGB is the RGB blend operation.
+	BlendOperationRGB BlendOperation
+	// BlendOperationAlpha is the alpha blend operation.
+	BlendOperationAlpha BlendOperation
+}
+
+// Preset Blend values matching Ebitengine's variables.
+var (
+	// BlendSourceOver is standard alpha blending: src*srcA + dst*(1-srcA).
+	BlendSourceOver = Blend{
+		BlendFactorSourceRGB:        BlendFactorOne,
+		BlendFactorSourceAlpha:      BlendFactorOne,
+		BlendFactorDestinationRGB:   BlendFactorOneMinusSourceAlpha,
+		BlendFactorDestinationAlpha: BlendFactorOneMinusSourceAlpha,
+		BlendOperationRGB:           BlendOperationAdd,
+		BlendOperationAlpha:         BlendOperationAdd,
+	}
+
+	// BlendLighter is additive blending: src + dst.
+	BlendLighter = Blend{
+		BlendFactorSourceRGB:        BlendFactorOne,
+		BlendFactorSourceAlpha:      BlendFactorOne,
+		BlendFactorDestinationRGB:   BlendFactorOne,
+		BlendFactorDestinationAlpha: BlendFactorOne,
+		BlendOperationRGB:           BlendOperationAdd,
+		BlendOperationAlpha:         BlendOperationAdd,
+	}
+
+	// BlendMultiply is multiplicative blending: src * dst.
+	BlendMultiply = Blend{
+		BlendFactorSourceRGB:        BlendFactorDestinationColor,
+		BlendFactorSourceAlpha:      BlendFactorDestinationAlpha,
+		BlendFactorDestinationRGB:   BlendFactorZero,
+		BlendFactorDestinationAlpha: BlendFactorZero,
+		BlendOperationRGB:           BlendOperationAdd,
+		BlendOperationAlpha:         BlendOperationAdd,
+	}
 )
 
 // Filter specifies texture filtering.
@@ -701,25 +913,19 @@ func colorMatrixToUniforms(cm fmath.ColorMatrix) (body [16]float32, translation 
 	return body, translation
 }
 
-// colorScaleOrDefault returns RGBA components from a ColorScale, defaulting
-// to opaque white if the color is zero-valued. This matches Ebitengine's
-// convention: a zero-valued DrawImageOptions{} draws the image as-is.
-// Transparent black (0,0,0,0) is indistinguishable from "not set".
-func colorScaleOrDefault(c fmath.Color) (r, g, b, a float32) {
-	if c.R == 0 && c.G == 0 && c.B == 0 && c.A == 0 {
-		return 1, 1, 1, 1
-	}
-	return float32(c.R), float32(c.G), float32(c.B), float32(c.A)
-}
-
-// blendToBackend maps a public BlendMode to a backend BlendMode.
-func blendToBackend(b BlendMode) backend.BlendMode {
+// blendToBackend maps a public Blend to a backend BlendMode.
+// For now, we map preset Blend values to the backend's BlendMode enum.
+// A zero-valued Blend maps to source-over (standard alpha blending).
+func blendToBackend(b Blend) backend.BlendMode {
 	switch b {
-	case BlendAdditive:
+	case BlendLighter:
 		return backend.BlendAdditive
-	case BlendMultiplicative:
+	case BlendMultiply:
 		return backend.BlendMultiplicative
+	case BlendSourceOver:
+		return backend.BlendSourceOver
 	default:
+		// Zero-valued Blend or unrecognized custom blend -> source-over.
 		return backend.BlendSourceOver
 	}
 }
