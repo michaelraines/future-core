@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	futurerender "github.com/michaelraines/future-core"
-	fmath "github.com/michaelraines/future-core/math"
 	"github.com/michaelraines/future-core/text"
 	"golang.org/x/image/font/gofont/goregular"
 )
@@ -66,6 +65,12 @@ func (g *inputGame) Update() error {
 	return nil
 }
 
+func colorScale(r, g, b, a float32) futurerender.ColorScale {
+	var cs futurerender.ColorScale
+	cs.Scale(r, g, b, a)
+	return cs
+}
+
 func (g *inputGame) Draw(screen *futurerender.Image) {
 	screen.Fill(futurerender.ColorFromRGBA(0.05, 0.05, 0.1, 1.0))
 
@@ -75,12 +80,12 @@ func (g *inputGame) Draw(screen *futurerender.Image) {
 
 	lineH := g.face.Metrics().Height
 	y := 20.0
-	white := fmath.Color{R: 1, G: 1, B: 1, A: 1}
-	header := fmath.Color{R: 0.9, G: 0.8, B: 0.3, A: 1}
-	green := fmath.Color{R: 0.4, G: 1, B: 0.4, A: 1}
-	dim := fmath.Color{R: 0.5, G: 0.5, B: 0.5, A: 1}
+	white := colorScale(1, 1, 1, 1)
+	header := colorScale(0.9, 0.8, 0.3, 1)
+	green := colorScale(0.4, 1, 0.4, 1)
+	dim := colorScale(0.5, 0.5, 0.5, 1)
 
-	draw := func(s string, c fmath.Color) {
+	draw := func(s string, c futurerender.ColorScale) {
 		text.Draw(screen, s, g.face, 20, y, &text.DrawOptions{ColorScale: c})
 		y += lineH
 	}

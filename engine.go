@@ -179,6 +179,39 @@ func MaxTPS() int {
 	return int(maxTPS.Load())
 }
 
+// TPS returns the current maximum TPS setting.
+// This is an alias for MaxTPS, matching Ebitengine's ebiten.TPS().
+func TPS() int {
+	return MaxTPS()
+}
+
+// WindowResizingModeType specifies the window resizing behavior.
+type WindowResizingModeType int
+
+// WindowResizingMode constants.
+const (
+	// WindowResizingModeDisabled prevents the user from resizing the window.
+	WindowResizingModeDisabled WindowResizingModeType = iota
+	// WindowResizingModeOnlyFullscreenEnabled allows only fullscreen toggling.
+	WindowResizingModeOnlyFullscreenEnabled
+	// WindowResizingModeEnabled allows free window resizing.
+	WindowResizingModeEnabled
+)
+
+// SetWindowResizingMode sets the window resizing behavior.
+// This matches Ebitengine's ebiten.SetWindowResizingMode.
+func SetWindowResizingMode(mode WindowResizingModeType) {
+	pendingResizingMode = mode
+	if e := getEngine(); e != nil {
+		e.setWindowResizable(mode == WindowResizingModeEnabled)
+	}
+}
+
+// WindowResizingMode returns the current window resizing mode.
+func WindowResizingMode() WindowResizingModeType {
+	return pendingResizingMode
+}
+
 // SetVsyncEnabled enables or disables vertical synchronization.
 func SetVsyncEnabled(enabled bool) {
 	if e := getEngine(); e != nil {
@@ -313,6 +346,7 @@ var (
 	pendingWindowWidth  = 800
 	pendingWindowHeight = 600
 	pendingOrientation  Orientation
+	pendingResizingMode WindowResizingModeType
 )
 
 // getEngine returns the current engine, or nil if not initialized.

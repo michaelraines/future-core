@@ -9,7 +9,6 @@ import (
 	"log"
 
 	futurerender "github.com/michaelraines/future-core"
-	fmath "github.com/michaelraines/future-core/math"
 	"github.com/michaelraines/future-core/text"
 	"golang.org/x/image/font/gofont/goregular"
 )
@@ -31,6 +30,12 @@ func (g *textGame) Update() error {
 	return nil
 }
 
+func colorScale(r, g, b, a float32) futurerender.ColorScale {
+	var cs futurerender.ColorScale
+	cs.Scale(r, g, b, a)
+	return cs
+}
+
 func (g *textGame) Draw(screen *futurerender.Image) {
 	screen.Fill(futurerender.ColorFromRGBA(0.05, 0.05, 0.1, 1.0))
 
@@ -40,7 +45,7 @@ func (g *textGame) Draw(screen *futurerender.Image) {
 
 	// Title — large, centered text.
 	text.Draw(screen, "Future Render Text Demo", g.titleFace, 0, 20, &text.DrawOptions{
-		ColorScale: fmath.Color{R: 0.9, G: 0.8, B: 0.3, A: 1},
+		ColorScale: colorScale(0.9, 0.8, 0.3, 1),
 		Align:      text.AlignCenter,
 	})
 
@@ -51,7 +56,7 @@ func (g *textGame) Draw(screen *futurerender.Image) {
 		"boundaries to fit within the specified maximum width."
 
 	text.DrawWrapped(screen, paragraph, g.bodyFace, 40, 80, screenW-80, &text.DrawOptions{
-		ColorScale: fmath.Color{R: 0.9, G: 0.9, B: 0.9, A: 1},
+		ColorScale: colorScale(0.9, 0.9, 0.9, 1),
 		Align:      text.AlignLeft,
 	})
 
@@ -60,23 +65,23 @@ func (g *textGame) Draw(screen *futurerender.Image) {
 	baseY := 240.0
 
 	text.Draw(screen, "Left-aligned text", g.bodyFace, 40, baseY, &text.DrawOptions{
-		ColorScale: fmath.Color{R: 0.6, G: 0.9, B: 0.6, A: 1},
+		ColorScale: colorScale(0.6, 0.9, 0.6, 1),
 		Align:      text.AlignLeft,
 	})
 
 	text.DrawWrapped(screen, "Center-aligned text", g.bodyFace, 40, baseY+lineH*2, screenW-80, &text.DrawOptions{
-		ColorScale: fmath.Color{R: 0.6, G: 0.6, B: 0.9, A: 1},
+		ColorScale: colorScale(0.6, 0.6, 0.9, 1),
 		Align:      text.AlignCenter,
 	})
 
 	text.DrawWrapped(screen, "Right-aligned text", g.bodyFace, 40, baseY+lineH*4, screenW-80, &text.DrawOptions{
-		ColorScale: fmath.Color{R: 0.9, G: 0.6, B: 0.6, A: 1},
+		ColorScale: colorScale(0.9, 0.6, 0.6, 1),
 		Align:      text.AlignRight,
 	})
 
 	// Footer.
 	text.DrawWrapped(screen, "Press Escape to exit", g.bodyFace, 40, screenH-60, screenW-80, &text.DrawOptions{
-		ColorScale: fmath.Color{R: 0.5, G: 0.5, B: 0.5, A: 1},
+		ColorScale: colorScale(0.5, 0.5, 0.5, 1),
 		Align:      text.AlignCenter,
 	})
 }

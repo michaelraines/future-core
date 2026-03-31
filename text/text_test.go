@@ -7,7 +7,6 @@ import (
 	"golang.org/x/image/font/gofont/goregular"
 
 	futurerender "github.com/michaelraines/future-core"
-	fmath "github.com/michaelraines/future-core/math"
 )
 
 func cleanupAtlases(t *testing.T) {
@@ -364,9 +363,8 @@ func TestDrawWithColorScale(t *testing.T) {
 
 	target := futurerender.NewImage(200, 200)
 
-	opts := &DrawOptions{
-		ColorScale: fmath.Color{R: 1, G: 0, B: 0, A: 1},
-	}
+	opts := &DrawOptions{}
+	opts.ColorScale.Scale(1, 0, 0, 1)
 	// Should not panic.
 	Draw(target, "Red", face, 10, 20, opts)
 }

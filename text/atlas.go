@@ -1,8 +1,9 @@
 package text
 
 import (
+	"image"
+
 	futurerender "github.com/michaelraines/future-core"
-	fmath "github.com/michaelraines/future-core/math"
 )
 
 const (
@@ -114,7 +115,7 @@ func (a *fontAtlas) upload(pix []byte, x, y, w, h int) {
 	if a.image == nil {
 		return
 	}
-	a.image.WritePixels(pix, x, y, w, h)
+	a.image.WritePixelsRegion(pix, x, y, w, h)
 }
 
 // subImage returns a sub-image of the atlas for the given glyph region.
@@ -122,6 +123,5 @@ func (a *fontAtlas) subImage(x, y, w, h int) *futurerender.Image {
 	if a.image == nil {
 		return nil
 	}
-	return a.image.SubImage(fmath.NewRect(float64(x), float64(y),
-		float64(w), float64(h)))
+	return a.image.SubImage(image.Rect(x, y, x+w, y+h))
 }

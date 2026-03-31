@@ -49,8 +49,22 @@ var (
 	ColorMagenta     = Color{R: 1, G: 0, B: 1, A: 1}
 )
 
-// RGBA returns the color as 8-bit RGBA values.
-func (c Color) RGBA() (r, g, b, a uint8) {
+// RGBA returns the color as premultiplied-alpha uint32 values in [0, 0xffff],
+// satisfying the standard library color.Color interface.
+func (c Color) RGBA() (r, g, b, a uint32) {
+	rf := clamp(c.R, 0, 1)
+	gf := clamp(c.G, 0, 1)
+	bf := clamp(c.B, 0, 1)
+	af := clamp(c.A, 0, 1)
+	a16 := uint32(gomath.Round(af * 0xffff))
+	return uint32(gomath.Round(rf * float64(a16))),
+		uint32(gomath.Round(gf * float64(a16))),
+		uint32(gomath.Round(bf * float64(a16))),
+		a16
+}
+
+// RGBA8 returns the color as 8-bit RGBA values.
+func (c Color) RGBA8() (r, g, b, a uint8) {
 	return uint8(gomath.Round(clamp(c.R, 0, 1) * 255)),
 		uint8(gomath.Round(clamp(c.G, 0, 1) * 255)),
 		uint8(gomath.Round(clamp(c.B, 0, 1) * 255)),

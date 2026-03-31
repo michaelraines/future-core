@@ -434,3 +434,4 @@ func (e *engine) deviceScaleFactor() float64 {
 	}
 	return dpr
 }
+func (e *engine) setWindowResizable(_ bool) {}

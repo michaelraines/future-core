@@ -212,11 +212,11 @@ func TestWritePixels(t *testing.T) {
 	img := NewImage(64, 64)
 	require.NotNil(t, img.texture)
 
-	pix := make([]byte, 10*10*4)
-	img.WritePixels(pix, 5, 5, 10, 10)
+	pix := make([]byte, 64*64*4)
+	img.WritePixels(pix)
 
 	mt := dev.textures[len(dev.textures)-1]
-	// mockTexture.UploadRegion is a no-op, but we verify no panic.
+	// mockTexture.Upload is a no-op, but we verify no panic.
 	_ = mt
 }
 
@@ -227,7 +227,7 @@ func TestWritePixelsNoTexture(t *testing.T) {
 
 	img := NewImage(32, 32)
 	// Should not panic with nil texture.
-	img.WritePixels(make([]byte, 4), 0, 0, 1, 1)
+	img.WritePixels(make([]byte, 32*32*4))
 }
 
 func TestWritePixelsDisposed(t *testing.T) {
@@ -236,7 +236,17 @@ func TestWritePixelsDisposed(t *testing.T) {
 	img := NewImage(32, 32)
 	img.Dispose()
 	// Should not panic on disposed image.
-	img.WritePixels(make([]byte, 4), 0, 0, 1, 1)
+	img.WritePixels(make([]byte, 32*32*4))
+}
+
+func TestWritePixelsRegion(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(64, 64)
+	require.NotNil(t, img.texture)
+
+	pix := make([]byte, 10*10*4)
+	img.WritePixelsRegion(pix, 5, 5, 10, 10)
 }
 
 func TestAllocTextureIDMonotonic(t *testing.T) {
@@ -256,7 +266,7 @@ func TestSubImageUVMapping(t *testing.T) {
 		u0:        0, v0: 0, u1: 1, v1: 1,
 	}
 
-	sub := img.SubImage(fmath.NewRect(0, 0, 128, 128))
+	sub := img.SubImage(goimage.Rect(0, 0, 128, 128))
 	require.Equal(t, 128, sub.width)
 	require.Equal(t, 128, sub.height)
 	require.Equal(t, uint32(42), sub.textureID)
@@ -266,7 +276,7 @@ func TestSubImageUVMapping(t *testing.T) {
 	require.InDelta(t, float32(0.5), sub.u1, 1e-6)
 	require.InDelta(t, float32(0.5), sub.v1, 1e-6)
 
-	sub2 := img.SubImage(fmath.NewRect(128, 128, 128, 128))
+	sub2 := img.SubImage(goimage.Rect(128, 128, 256, 256))
 	require.InDelta(t, float32(0.5), sub2.u0, 1e-6)
 	require.InDelta(t, float32(0.5), sub2.v0, 1e-6)
 	require.InDelta(t, float32(1.0), sub2.u1, 1e-6)
@@ -276,20 +286,20 @@ func TestSubImageUVMapping(t *testing.T) {
 func TestSubImageZeroSize(t *testing.T) {
 	// Zero-width image should not cause division by zero.
 	img := &Image{width: 0, height: 100}
-	sub := img.SubImage(fmath.NewRect(0, 0, 50, 50))
+	sub := img.SubImage(goimage.Rect(0, 0, 50, 50))
 	require.Equal(t, 50, sub.width)
 	require.Equal(t, 50, sub.height)
 	require.Nil(t, sub.texture)
 
 	// Zero-height image should not cause division by zero.
 	img2 := &Image{width: 100, height: 0}
-	sub2 := img2.SubImage(fmath.NewRect(0, 0, 30, 30))
+	sub2 := img2.SubImage(goimage.Rect(0, 0, 30, 30))
 	require.Equal(t, 30, sub2.width)
 	require.Equal(t, 30, sub2.height)
 
 	// Both zero should not cause division by zero.
 	img3 := &Image{width: 0, height: 0}
-	sub3 := img3.SubImage(fmath.NewRect(0, 0, 10, 20))
+	sub3 := img3.SubImage(goimage.Rect(0, 0, 10, 20))
 	require.Equal(t, 10, sub3.width)
 	require.Equal(t, 20, sub3.height)
 }
@@ -301,8 +311,8 @@ func TestSubImageOfSubImage(t *testing.T) {
 		u0:        0, v0: 0, u1: 1, v1: 1,
 	}
 
-	sub := root.SubImage(fmath.NewRect(0, 0, 128, 128))
-	subsub := sub.SubImage(fmath.NewRect(0, 0, 64, 64))
+	sub := root.SubImage(goimage.Rect(0, 0, 128, 128))
+	subsub := sub.SubImage(goimage.Rect(0, 0, 64, 64))
 	require.Equal(t, root, subsub.parent, "nested sub-image should reference root parent")
 	require.InDelta(t, float32(0), subsub.u0, 1e-6)
 	require.InDelta(t, float32(0), subsub.v0, 1e-6)
@@ -325,7 +335,7 @@ func TestSubImageDisposeDoesNotReleaseParent(t *testing.T) {
 		textureID: 1,
 		u0:        0, v0: 0, u1: 1, v1: 1,
 	}
-	sub := root.SubImage(fmath.NewRect(0, 0, 32, 32))
+	sub := root.SubImage(goimage.Rect(0, 0, 32, 32))
 	sub.Dispose()
 	require.False(t, root.disposed, "disposing sub-image should not dispose root")
 }
@@ -371,9 +381,8 @@ func TestDrawImageColorScale(t *testing.T) {
 	dst := &Image{width: 100, height: 100, u0: 0, v0: 0, u1: 1, v1: 1}
 	src := &Image{width: 32, height: 32, textureID: 2, u0: 0, v0: 0, u1: 1, v1: 1}
 
-	opts := &DrawImageOptions{
-		ColorScale: fmath.Color{R: 0.5, G: 0.5, B: 0.5, A: 0.5},
-	}
+	opts := &DrawImageOptions{}
+	opts.ColorScale.Scale(0.5, 0.5, 0.5, 0.5)
 	dst.DrawImage(src, opts)
 
 	batches := b.Flush()
@@ -404,7 +413,7 @@ func TestFillSubmitsToBatcher(t *testing.T) {
 	b := withBatchRenderer(t, 99)
 
 	img := &Image{width: 320, height: 240, u0: 0, v0: 0, u1: 1, v1: 1}
-	img.Fill(fmath.Color{R: 1, G: 0, B: 0, A: 1})
+	img.Fill(color.NRGBA{R: 255, G: 0, B: 0, A: 255})
 
 	batches := b.Flush()
 	require.Equal(t, 1, len(batches))
@@ -417,12 +426,12 @@ func TestFillSubmitsToBatcher(t *testing.T) {
 
 func TestBlendToBackend(t *testing.T) {
 	tests := []struct {
-		pub  BlendMode
+		pub  Blend
 		want backend.BlendMode
 	}{
 		{BlendSourceOver, backend.BlendSourceOver},
-		{BlendAdditive, backend.BlendAdditive},
-		{BlendMultiplicative, backend.BlendMultiplicative},
+		{BlendLighter, backend.BlendAdditive},
+		{BlendMultiply, backend.BlendMultiplicative},
 	}
 	for _, tt := range tests {
 		got := blendToBackend(tt.pub)
@@ -435,10 +444,10 @@ func TestBlendToBackend(t *testing.T) {
 func TestBounds(t *testing.T) {
 	img := NewImage(320, 240)
 	b := img.Bounds()
-	require.InDelta(t, 0.0, b.Min.X, 1e-6)
-	require.InDelta(t, 0.0, b.Min.Y, 1e-6)
-	require.InDelta(t, 320.0, b.Max.X, 1e-6)
-	require.InDelta(t, 240.0, b.Max.Y, 1e-6)
+	require.Equal(t, 0, b.Min.X)
+	require.Equal(t, 0, b.Min.Y)
+	require.Equal(t, 320, b.Max.X)
+	require.Equal(t, 240, b.Max.Y)
 }
 
 func TestNewGeoM(t *testing.T) {
@@ -501,6 +510,55 @@ func TestGeoMMat3(t *testing.T) {
 	require.Equal(t, identity, m)
 }
 
+func TestGeoMElement(t *testing.T) {
+	g := NewGeoM()
+	g.Translate(10, 20)
+	require.InDelta(t, 1.0, g.Element(0, 0), 1e-6)
+	require.InDelta(t, 0.0, g.Element(0, 1), 1e-6)
+	require.InDelta(t, 10.0, g.Element(0, 2), 1e-6)
+	require.InDelta(t, 0.0, g.Element(1, 0), 1e-6)
+	require.InDelta(t, 1.0, g.Element(1, 1), 1e-6)
+	require.InDelta(t, 20.0, g.Element(1, 2), 1e-6)
+}
+
+func TestGeoMSetElement(t *testing.T) {
+	g := NewGeoM()
+	g.SetElement(0, 2, 50)
+	g.SetElement(1, 2, 100)
+	x, y := g.Apply(0, 0)
+	require.InDelta(t, 50.0, x, 1e-6)
+	require.InDelta(t, 100.0, y, 1e-6)
+}
+
+func TestGeoMInvert(t *testing.T) {
+	g := NewGeoM()
+	g.Translate(10, 20)
+	g.Scale(2, 3)
+	g.Invert()
+
+	// Applying the inverted transform to the output should recover input.
+	x, y := g.Apply(20, 60)
+	require.InDelta(t, 0.0, x, 1e-6)
+	require.InDelta(t, 0.0, y, 1e-6)
+}
+
+func TestNewImageWithOptions(t *testing.T) {
+	img := NewImageWithOptions(goimage.Rect(0, 0, 64, 32), nil)
+	require.NotNil(t, img)
+	w, h := img.Size()
+	require.Equal(t, 64, w)
+	require.Equal(t, 32, h)
+}
+
+func TestNewImageWithOptionsUnmanaged(t *testing.T) {
+	opts := &NewImageOptions{Unmanaged: true}
+	img := NewImageWithOptions(goimage.Rect(0, 0, 16, 16), opts)
+	require.NotNil(t, img)
+	w, h := img.Size()
+	require.Equal(t, 16, w)
+	require.Equal(t, 16, h)
+}
+
 func TestColorFromRGBA(t *testing.T) {
 	c := ColorFromRGBA(0.1, 0.2, 0.3, 0.4)
 	require.InDelta(t, 0.1, c.R, 1e-6)
@@ -546,7 +604,7 @@ func TestDrawTrianglesWithOptions(t *testing.T) {
 	}
 	indices := []uint16{0, 1, 2}
 
-	opts := &DrawTrianglesOptions{Blend: BlendAdditive}
+	opts := &DrawTrianglesOptions{Blend: BlendLighter}
 	dst.DrawTriangles(verts, indices, src, opts)
 
 	batches := b.Flush()
@@ -587,7 +645,7 @@ func TestFillDisposed(t *testing.T) {
 	b := withBatchRenderer(t, 1)
 
 	img := &Image{width: 100, height: 100, disposed: true, u0: 0, v0: 0, u1: 1, v1: 1}
-	img.Fill(fmath.Color{R: 1, G: 0, B: 0, A: 1})
+	img.Fill(color.NRGBA{R: 255, G: 0, B: 0, A: 255})
 	require.Equal(t, 0, b.CommandCount())
 }
 
@@ -626,7 +684,7 @@ func TestFillNoRenderer(t *testing.T) {
 
 	img := &Image{width: 100, height: 100, u0: 0, v0: 0, u1: 1, v1: 1}
 	// Should not panic.
-	img.Fill(fmath.Color{R: 1, G: 0, B: 0, A: 1})
+	img.Fill(color.NRGBA{R: 255, G: 0, B: 0, A: 255})
 }
 
 func TestDrawTrianglesNoRenderer(t *testing.T) {
@@ -648,25 +706,77 @@ func TestGeoMZeroValueActsAsIdentity(t *testing.T) {
 	require.InDelta(t, 13.0, y, 1e-6)
 }
 
-func TestColorScaleOrDefault(t *testing.T) {
-	// Zero color should default to white.
-	r, g, b, a := colorScaleOrDefault(fmath.Color{})
+func TestColorScaleRGBAOrDefault(t *testing.T) {
+	// Zero-valued ColorScale should default to white.
+	var cs ColorScale
+	r, g, b, a := cs.rgbaOrDefault()
 	require.InDelta(t, float32(1), r, 1e-6)
 	require.InDelta(t, float32(1), g, 1e-6)
 	require.InDelta(t, float32(1), b, 1e-6)
 	require.InDelta(t, float32(1), a, 1e-6)
 
-	// Non-zero color should be returned as-is.
-	r2, g2, b2, a2 := colorScaleOrDefault(fmath.Color{R: 0.2, G: 0.3, B: 0.4, A: 0.5})
+	// Set color should be returned as-is.
+	cs.Scale(0.2, 0.3, 0.4, 0.5)
+	r2, g2, b2, a2 := cs.rgbaOrDefault()
 	require.InDelta(t, float32(0.2), r2, 1e-6)
 	require.InDelta(t, float32(0.3), g2, 1e-6)
 	require.InDelta(t, float32(0.4), b2, 1e-6)
 	require.InDelta(t, float32(0.5), a2, 1e-6)
 }
 
+func TestColorScaleMethods(t *testing.T) {
+	var cs ColorScale
+	// Default values should be 1.
+	require.InDelta(t, float32(1), cs.R(), 1e-6)
+	require.InDelta(t, float32(1), cs.G(), 1e-6)
+	require.InDelta(t, float32(1), cs.B(), 1e-6)
+	require.InDelta(t, float32(1), cs.A(), 1e-6)
+
+	// After Scale, values should reflect.
+	cs.Scale(0.5, 0.6, 0.7, 0.8)
+	require.InDelta(t, float32(0.5), cs.R(), 1e-6)
+	require.InDelta(t, float32(0.6), cs.G(), 1e-6)
+	require.InDelta(t, float32(0.7), cs.B(), 1e-6)
+	require.InDelta(t, float32(0.8), cs.A(), 1e-6)
+
+	// Multiply again.
+	cs.Scale(0.5, 0.5, 0.5, 0.5)
+	require.InDelta(t, float32(0.25), cs.R(), 1e-6)
+	require.InDelta(t, float32(0.3), cs.G(), 1e-6)
+	require.InDelta(t, float32(0.35), cs.B(), 1e-6)
+	require.InDelta(t, float32(0.4), cs.A(), 1e-6)
+}
+
+func TestColorScaleAlpha(t *testing.T) {
+	var cs ColorScale
+	cs.ScaleAlpha(0.5)
+	require.InDelta(t, float32(1), cs.R(), 1e-6)
+	require.InDelta(t, float32(0.5), cs.A(), 1e-6)
+
+	cs.ScaleAlpha(0.5)
+	require.InDelta(t, float32(0.25), cs.A(), 1e-6)
+}
+
+func TestColorScaleReset(t *testing.T) {
+	var cs ColorScale
+	cs.Scale(0.2, 0.3, 0.4, 0.5)
+	cs.Reset()
+	require.InDelta(t, float32(1), cs.R(), 1e-6)
+	require.InDelta(t, float32(1), cs.A(), 1e-6)
+}
+
+func TestColorScaleSetColor(t *testing.T) {
+	var cs ColorScale
+	cs.SetColor(fmath.Color{R: 0.1, G: 0.2, B: 0.3, A: 0.4})
+	require.InDelta(t, float32(0.1), cs.R(), 1e-6)
+	require.InDelta(t, float32(0.2), cs.G(), 1e-6)
+	require.InDelta(t, float32(0.3), cs.B(), 1e-6)
+	require.InDelta(t, float32(0.4), cs.A(), 1e-6)
+}
+
 func TestBlendToBackendUnknown(t *testing.T) {
-	// Unknown blend mode should default to SourceOver.
-	got := blendToBackend(BlendMode(999))
+	// Zero-valued blend should default to SourceOver.
+	got := blendToBackend(Blend{})
 	require.Equal(t, backend.BlendSourceOver, got)
 }
 
@@ -928,7 +1038,7 @@ func TestFillSetsTargetID(t *testing.T) {
 	b := withBatchRenderer(t, 1)
 
 	img := &Image{width: 100, height: 100, textureID: 7, u0: 0, v0: 0, u1: 1, v1: 1}
-	img.Fill(fmath.Color{R: 1, G: 0, B: 0, A: 1})
+	img.Fill(color.NRGBA{R: 255, G: 0, B: 0, A: 255})
 
 	batches := b.Flush()
 	require.Len(t, batches, 1)
@@ -1018,7 +1128,7 @@ func TestDrawImageSubImage(t *testing.T) {
 		texture:   &mockTexture{w: 256, h: 256},
 		u0:        0, v0: 0, u1: 1, v1: 1,
 	}
-	sub := parent.SubImage(fmath.NewRect(0, 0, 128, 128))
+	sub := parent.SubImage(goimage.Rect(0, 0, 128, 128))
 
 	dst := &Image{width: 320, height: 240, u0: 0, v0: 0, u1: 1, v1: 1}
 	dst.DrawImage(sub, nil)
