@@ -272,7 +272,7 @@ const (
 
 // KeyMax is the maximum Key value (exclusive sentinel).
 // It is used by inpututil.AppendPressedKeys.
-const KeyMax = Key(keyCount)
+const KeyMax = keyCount
 
 // keyMap maps public Key values to platform.Key values.
 var keyMap [keyCount]platform.Key

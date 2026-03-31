@@ -102,7 +102,7 @@ func (p *Path) allSubPaths() []subPath {
 func (p *Path) AppendVerticesAndIndicesForFilling(
 	vertices []futurerender.Vertex,
 	indices []uint16,
-) ([]futurerender.Vertex, []uint16) {
+) (vs []futurerender.Vertex, is []uint16) {
 	for _, sp := range p.allSubPaths() {
 		pts := sp.points
 		if len(pts) < 3 {
@@ -132,7 +132,7 @@ func (p *Path) AppendVerticesAndIndicesForStroke(
 	vertices []futurerender.Vertex,
 	indices []uint16,
 	op *StrokeOptions,
-) ([]futurerender.Vertex, []uint16) {
+) (vs []futurerender.Vertex, is []uint16) {
 	width := float32(1)
 	if op != nil && op.Width > 0 {
 		width = op.Width
@@ -212,9 +212,12 @@ func cubicBezier(p0, p1, p2, p3, t float32) float32 {
 }
 
 func quadBezierSteps(x0, y0, cpx, cpy, x1, y1 float32) int {
+	// Use control point deviation for better adaptive subdivision.
+	d1x := float64(cpx - (x0+x1)/2)
+	d1y := float64(cpy - (y0+y1)/2)
 	dx := float64(x1 - x0)
 	dy := float64(y1 - y0)
-	dist := gomath.Sqrt(dx*dx + dy*dy)
+	dist := gomath.Sqrt(dx*dx+dy*dy) + gomath.Sqrt(d1x*d1x+d1y*d1y)
 	n := int(dist / 4)
 	if n < 4 {
 		n = 4
@@ -226,9 +229,14 @@ func quadBezierSteps(x0, y0, cpx, cpy, x1, y1 float32) int {
 }
 
 func cubicBezierSteps(x0, y0, cp1x, cp1y, cp2x, cp2y, x1, y1 float32) int {
+	// Use control point deviations for better adaptive subdivision.
+	d1x := float64(cp1x - x0)
+	d1y := float64(cp1y - y0)
+	d2x := float64(cp2x - x1)
+	d2y := float64(cp2y - y1)
 	dx := float64(x1 - x0)
 	dy := float64(y1 - y0)
-	dist := gomath.Sqrt(dx*dx + dy*dy)
+	dist := gomath.Sqrt(dx*dx+dy*dy) + gomath.Sqrt(d1x*d1x+d1y*d1y) + gomath.Sqrt(d2x*d2x+d2y*d2y)
 	n := int(dist / 3)
 	if n < 4 {
 		n = 4
