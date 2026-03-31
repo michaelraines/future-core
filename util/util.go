@@ -1,13 +1,12 @@
-// Package util provides utility functions for Future Render, matching
+// Package futureutil provides utility functions for Future Render, matching
 // Ebitengine's ebitenutil package API.
-package util
+package futureutil
 
 import (
 	"fmt"
-	"image"
-	// Register common image decoders.
-	_ "image/jpeg"
-	_ "image/png"
+	goimage "image"
+	_ "image/jpeg" // Register JPEG decoder.
+	_ "image/png"  // Register PNG decoder.
 	"io/fs"
 
 	futurerender "github.com/michaelraines/future-core"
@@ -19,18 +18,22 @@ import (
 //
 // The caller must import the appropriate image decoder for the file format
 // (e.g., _ "image/png"). PNG and JPEG are registered by this package.
-func NewImageFromFileSystem(fsys fs.FS, path string) (*futurerender.Image, image.Image, error) {
+func NewImageFromFileSystem(fsys fs.FS, path string) (eimg *futurerender.Image, img goimage.Image, err error) {
 	f, err := fsys.Open(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("util: open %s: %w", path, err)
+		return nil, nil, fmt.Errorf("futureutil: open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("futureutil: close %s: %w", path, cerr)
+		}
+	}()
 
-	img, _, err := image.Decode(f)
+	img, _, err = goimage.Decode(f)
 	if err != nil {
-		return nil, nil, fmt.Errorf("util: decode %s: %w", path, err)
+		return nil, nil, fmt.Errorf("futureutil: decode %s: %w", path, err)
 	}
 
-	eimg := futurerender.NewImageFromImage(img)
+	eimg = futurerender.NewImageFromImage(img)
 	return eimg, img, nil
 }

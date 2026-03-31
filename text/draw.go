@@ -106,6 +106,8 @@ func Draw(target *futurerender.Image, s string, face Face, opts *DrawOptions) {
 	}
 	secondaryOffset := 0.0
 	switch secondaryAlign {
+	case AlignStart:
+		// No offset needed.
 	case AlignCenter:
 		secondaryOffset = -totalH / 2
 	case AlignEnd:
@@ -120,6 +122,8 @@ func Draw(target *futurerender.Image, s string, face Face, opts *DrawOptions) {
 		if primaryAlign != AlignStart && refWidth > 0 {
 			lineWidth := face.advance(line)
 			switch primaryAlign {
+			case AlignStart:
+				// No offset needed.
 			case AlignCenter:
 				ox = (refWidth - lineWidth) / 2
 			case AlignEnd:
@@ -173,6 +177,8 @@ func DrawWrapped(target *futurerender.Image, s string, face Face, maxWidth float
 		if primaryAlign != AlignStart && refWidth > 0 {
 			lineWidth := face.advance(line)
 			switch primaryAlign {
+			case AlignStart:
+				// No offset needed.
 			case AlignCenter:
 				ox = (refWidth - lineWidth) / 2
 			case AlignEnd:
