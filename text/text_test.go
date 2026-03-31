@@ -155,8 +155,8 @@ func TestMeasureMultiline(t *testing.T) {
 	w1, h1 := Measure("Hello", face, 0)
 	w2, h2 := Measure("Hello\nWorld", face, 0)
 
-	// Width should be at least as wide as the widest line.
-	require.InDelta(t, w1, w2, 1, "both lines are similar width")
+	// Width should be at least as wide as the widest single line.
+	require.GreaterOrEqual(t, w2, w1, "multiline width should be >= single line width")
 	// Height should increase for multi-line.
 	require.Greater(t, h2, h1)
 }
