@@ -5,6 +5,7 @@
 /input
 /shader
 /text
+!/text/
 /backends
 
 # Coverage artifacts
