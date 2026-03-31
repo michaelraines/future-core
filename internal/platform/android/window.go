@@ -120,6 +120,12 @@ func (w *Window) dispatchTouch(handler platform.InputHandler, ev touch.Event) {
 
 // dispatchKey converts a mobile key event to platform.KeyEvent.
 func (w *Window) dispatchKey(handler platform.InputHandler, ev key.Event) {
+	// Check if this key event is from a gamepad (D-pad, face buttons).
+	pressed := ev.Direction == key.DirPress || ev.Direction == key.DirNone
+	if handleGamepadKeyEvent(handler, ev.Code, pressed) {
+		return // consumed as gamepad input
+	}
+
 	platformKey := mapKey(ev.Code)
 	if platformKey == platform.KeyUnknown {
 		return
@@ -262,10 +268,14 @@ func (w *Window) HandleSizeEvent(e size.Event) {
 	w.widthPx = e.WidthPx
 	w.hPx = e.HeightPx
 	w.pixelsPerPt = e.PixelsPerPt
-	// Compute logical size from physical pixels and density.
+	// Compute logical size using Android density-independent pixels (dp).
+	// x/mobile's PixelsPerPt is pixels per typographic point (1pt = 1/72 inch).
+	// Android density = (PixelsPerPt * 72) / 160. Logical dp = physical / density.
+	// This gives dimensions in Android dp, consistent with DevicePixelRatio().
 	if e.PixelsPerPt > 0 {
-		w.width = int(float32(e.WidthPx) / e.PixelsPerPt)
-		w.height = int(float32(e.HeightPx) / e.PixelsPerPt)
+		density := float32(e.PixelsPerPt) * 72.0 / 160.0
+		w.width = int(float32(e.WidthPx) / density)
+		w.height = int(float32(e.HeightPx) / density)
 	} else {
 		w.width = e.WidthPx
 		w.height = e.HeightPx

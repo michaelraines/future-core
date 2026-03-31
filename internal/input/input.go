@@ -232,6 +232,16 @@ func (s *State) TouchPosition(id int) (x, y float64, ok bool) {
 	return t.X, t.Y, true
 }
 
+// TouchPressure returns the pressure of a touch point (0.0 to 1.0).
+// Returns 0 if the touch point is not active.
+func (s *State) TouchPressure(id int) float64 {
+	t, ok := s.touches[id]
+	if !ok {
+		return 0
+	}
+	return t.Pressure
+}
+
 // GamepadIDs returns the IDs of all connected gamepads.
 func (s *State) GamepadIDs() []int {
 	ids := make([]int, 0, len(s.gamepads))

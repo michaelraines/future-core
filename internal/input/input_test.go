@@ -294,6 +294,25 @@ func TestTouchPositionNotFound(t *testing.T) {
 	require.InDelta(t, 0.0, y, 1e-9)
 }
 
+func TestTouchPressure(t *testing.T) {
+	s := New()
+
+	// No touch — returns 0.
+	require.InDelta(t, 0.0, s.TouchPressure(1), 1e-9)
+
+	// Press with pressure 0.5.
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, Action: platform.ActionPress, X: 10, Y: 20, Pressure: 0.5})
+	require.InDelta(t, 0.5, s.TouchPressure(1), 1e-9)
+
+	// Move with updated pressure.
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, Action: platform.ActionRepeat, X: 10, Y: 20, Pressure: 0.8})
+	require.InDelta(t, 0.8, s.TouchPressure(1), 1e-9)
+
+	// Release — returns 0.
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, Action: platform.ActionRelease})
+	require.InDelta(t, 0.0, s.TouchPressure(1), 1e-9)
+}
+
 // --- Gamepad ---
 
 func TestGamepadEvent(t *testing.T) {

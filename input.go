@@ -101,6 +101,17 @@ func TouchPosition(id TouchID) (x, y int) {
 	return int(fx), int(fy)
 }
 
+// TouchPressure returns the pressure of a touch point (0.0 to 1.0).
+// Returns 0 if the touch point is not active. On platforms that don't
+// support pressure sensitivity, this returns 1.0 for active touches.
+func TouchPressure(id TouchID) float64 {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return 0
+	}
+	return e.inputState.TouchPressure(int(id))
+}
+
 // GamepadIDs returns the IDs of connected gamepads.
 func GamepadIDs() []GamepadID {
 	e := getEngine()

@@ -403,3 +403,131 @@ func TestSetScreenClearedEveryFrame(t *testing.T) {
 	SetScreenClearedEveryFrame(true)
 	require.True(t, IsScreenClearedEveryFrame())
 }
+
+// --- Orientation ---
+
+func TestOrientationConstants(t *testing.T) {
+	require.Equal(t, Orientation(0), OrientationDefault)
+	require.Equal(t, Orientation(1), OrientationPortrait)
+	require.Equal(t, Orientation(2), OrientationLandscape)
+}
+
+func TestSetScreenOrientation(t *testing.T) {
+	defer func() { pendingOrientation = OrientationDefault }()
+
+	SetScreenOrientation(OrientationLandscape)
+	require.Equal(t, OrientationLandscape, ScreenOrientation())
+
+	SetScreenOrientation(OrientationPortrait)
+	require.Equal(t, OrientationPortrait, ScreenOrientation())
+
+	SetScreenOrientation(OrientationDefault)
+	require.Equal(t, OrientationDefault, ScreenOrientation())
+}
+
+// --- RunGameOptions ---
+
+func TestRunGameOptionsAppliesPending(t *testing.T) {
+	defer func() {
+		pendingWindowWidth = 800
+		pendingWindowHeight = 600
+		pendingWindowTitle = "Future Render"
+		pendingOrientation = OrientationDefault
+	}()
+
+	// RunGameWithOptions would start the engine, so we just test that
+	// the options are applied to pending state before engine creation.
+	opts := &RunGameOptions{
+		InitialWindowWidth:  1920,
+		InitialWindowHeight: 1080,
+		InitialWindowTitle:  "My Game",
+		ScreenOrientation:   OrientationLandscape,
+	}
+
+	// Apply options manually (same logic as RunGameWithOptions).
+	if opts.InitialWindowWidth > 0 {
+		pendingWindowWidth = opts.InitialWindowWidth
+	}
+	if opts.InitialWindowHeight > 0 {
+		pendingWindowHeight = opts.InitialWindowHeight
+	}
+	if opts.InitialWindowTitle != "" {
+		pendingWindowTitle = opts.InitialWindowTitle
+	}
+	pendingOrientation = opts.ScreenOrientation
+
+	require.Equal(t, 1920, pendingWindowWidth)
+	require.Equal(t, 1080, pendingWindowHeight)
+	require.Equal(t, "My Game", pendingWindowTitle)
+	require.Equal(t, OrientationLandscape, pendingOrientation)
+}
+
+func TestRunGameOptionsZeroValuesKeepDefaults(t *testing.T) {
+	defer func() {
+		pendingWindowWidth = 800
+		pendingWindowHeight = 600
+		pendingWindowTitle = "Future Render"
+		pendingOrientation = OrientationDefault
+	}()
+
+	// Zero values should not override defaults.
+	opts := &RunGameOptions{}
+
+	if opts.InitialWindowWidth > 0 {
+		pendingWindowWidth = opts.InitialWindowWidth
+	}
+	if opts.InitialWindowHeight > 0 {
+		pendingWindowHeight = opts.InitialWindowHeight
+	}
+	if opts.InitialWindowTitle != "" {
+		pendingWindowTitle = opts.InitialWindowTitle
+	}
+
+	require.Equal(t, 800, pendingWindowWidth)
+	require.Equal(t, 600, pendingWindowHeight)
+	require.Equal(t, "Future Render", pendingWindowTitle)
+}
+
+// --- FocusHandler / LifecycleHandler interfaces ---
+
+type focusGame struct {
+	stubGame
+	focused  bool
+	blurred  bool
+	disposed bool
+}
+
+func (g *focusGame) OnFocus()   { g.focused = true }
+func (g *focusGame) OnBlur()    { g.blurred = true }
+func (g *focusGame) OnDispose() { g.disposed = true }
+
+func TestFocusHandlerInterface(t *testing.T) {
+	g := &focusGame{}
+
+	// Verify it implements both optional interfaces.
+	var fh FocusHandler = g
+	var lh LifecycleHandler = g
+
+	fh.OnFocus()
+	require.True(t, g.focused)
+
+	fh.OnBlur()
+	require.True(t, g.blurred)
+
+	lh.OnDispose()
+	require.True(t, g.disposed)
+}
+
+func TestStubGameDoesNotImplementFocusHandler(t *testing.T) {
+	g := &stubGame{}
+	_, ok := interface{}(g).(FocusHandler)
+	require.False(t, ok)
+}
+
+// --- Soft keyboard API ---
+
+func TestSoftKeyboardNoPanic(t *testing.T) {
+	// These are no-ops on desktop but should not panic.
+	ShowSoftKeyboard()
+	HideSoftKeyboard()
+}

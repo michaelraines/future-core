@@ -295,8 +295,20 @@ func (e *engine) runAndroid(a app.App) {
 			if androidWin != nil {
 				androidWin.HandleLifecycleEvent(ev)
 			}
-			// If the activity is dead, stop the loop.
+			// Notify game of focus changes if it implements FocusHandler.
+			if fh, ok := e.game.(FocusHandler); ok {
+				switch ev.Crosses(lifecycle.StageFocused) {
+				case lifecycle.CrossOn:
+					fh.OnFocus()
+				case lifecycle.CrossOff:
+					fh.OnBlur()
+				}
+			}
+			// If the activity is dead, notify and stop the loop.
 			if ev.Crosses(lifecycle.StageDead) == lifecycle.CrossOn {
+				if lh, ok := e.game.(LifecycleHandler); ok {
+					lh.OnDispose()
+				}
 				return
 			}
 
