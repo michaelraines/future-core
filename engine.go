@@ -112,20 +112,26 @@ func RunGame(game Game) error {
 // This function blocks until the game exits. It must be called from
 // the main goroutine on platforms that require it (macOS, iOS).
 func RunGameWithOptions(game Game, opts *RunGameOptions) error {
-	if opts != nil {
-		if opts.InitialWindowWidth > 0 {
-			pendingWindowWidth = opts.InitialWindowWidth
-		}
-		if opts.InitialWindowHeight > 0 {
-			pendingWindowHeight = opts.InitialWindowHeight
-		}
-		if opts.InitialWindowTitle != "" {
-			pendingWindowTitle = opts.InitialWindowTitle
-		}
-		pendingOrientation = opts.ScreenOrientation
-	}
+	applyRunGameOptions(opts)
 	e := newEngine(game)
 	return e.run()
+}
+
+// applyRunGameOptions applies the given options to the pending engine state.
+func applyRunGameOptions(opts *RunGameOptions) {
+	if opts == nil {
+		return
+	}
+	if opts.InitialWindowWidth > 0 {
+		pendingWindowWidth = opts.InitialWindowWidth
+	}
+	if opts.InitialWindowHeight > 0 {
+		pendingWindowHeight = opts.InitialWindowHeight
+	}
+	if opts.InitialWindowTitle != "" {
+		pendingWindowTitle = opts.InitialWindowTitle
+	}
+	pendingOrientation = opts.ScreenOrientation
 }
 
 // SetWindowSize sets the window size in logical pixels.

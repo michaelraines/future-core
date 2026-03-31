@@ -427,7 +427,7 @@ func TestSetScreenOrientation(t *testing.T) {
 
 // --- RunGameOptions ---
 
-func TestRunGameOptionsAppliesPending(t *testing.T) {
+func TestApplyRunGameOptions(t *testing.T) {
 	defer func() {
 		pendingWindowWidth = 800
 		pendingWindowHeight = 600
@@ -435,26 +435,12 @@ func TestRunGameOptionsAppliesPending(t *testing.T) {
 		pendingOrientation = OrientationDefault
 	}()
 
-	// RunGameWithOptions would start the engine, so we just test that
-	// the options are applied to pending state before engine creation.
-	opts := &RunGameOptions{
+	applyRunGameOptions(&RunGameOptions{
 		InitialWindowWidth:  1920,
 		InitialWindowHeight: 1080,
 		InitialWindowTitle:  "My Game",
 		ScreenOrientation:   OrientationLandscape,
-	}
-
-	// Apply options manually (same logic as RunGameWithOptions).
-	if opts.InitialWindowWidth > 0 {
-		pendingWindowWidth = opts.InitialWindowWidth
-	}
-	if opts.InitialWindowHeight > 0 {
-		pendingWindowHeight = opts.InitialWindowHeight
-	}
-	if opts.InitialWindowTitle != "" {
-		pendingWindowTitle = opts.InitialWindowTitle
-	}
-	pendingOrientation = opts.ScreenOrientation
+	})
 
 	require.Equal(t, 1920, pendingWindowWidth)
 	require.Equal(t, 1080, pendingWindowHeight)
@@ -462,7 +448,24 @@ func TestRunGameOptionsAppliesPending(t *testing.T) {
 	require.Equal(t, OrientationLandscape, pendingOrientation)
 }
 
-func TestRunGameOptionsZeroValuesKeepDefaults(t *testing.T) {
+func TestApplyRunGameOptionsNil(t *testing.T) {
+	defer func() {
+		pendingWindowWidth = 800
+		pendingWindowHeight = 600
+		pendingWindowTitle = "Future Render"
+		pendingOrientation = OrientationDefault
+	}()
+
+	// Nil options should not change anything.
+	applyRunGameOptions(nil)
+
+	require.Equal(t, 800, pendingWindowWidth)
+	require.Equal(t, 600, pendingWindowHeight)
+	require.Equal(t, "Future Render", pendingWindowTitle)
+	require.Equal(t, OrientationDefault, pendingOrientation)
+}
+
+func TestApplyRunGameOptionsZeroValuesKeepDefaults(t *testing.T) {
 	defer func() {
 		pendingWindowWidth = 800
 		pendingWindowHeight = 600
@@ -471,17 +474,7 @@ func TestRunGameOptionsZeroValuesKeepDefaults(t *testing.T) {
 	}()
 
 	// Zero values should not override defaults.
-	opts := &RunGameOptions{}
-
-	if opts.InitialWindowWidth > 0 {
-		pendingWindowWidth = opts.InitialWindowWidth
-	}
-	if opts.InitialWindowHeight > 0 {
-		pendingWindowHeight = opts.InitialWindowHeight
-	}
-	if opts.InitialWindowTitle != "" {
-		pendingWindowTitle = opts.InitialWindowTitle
-	}
+	applyRunGameOptions(&RunGameOptions{})
 
 	require.Equal(t, 800, pendingWindowWidth)
 	require.Equal(t, 600, pendingWindowHeight)
