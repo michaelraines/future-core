@@ -19,6 +19,9 @@ type Encoder struct {
 	passEncoder     js.Value
 	cmdEncoder      js.Value
 
+	// Format of the current render target (set in BeginRenderPass).
+	targetFormat string
+
 	// Current sampler filter per slot.
 	slotFilters map[int]string
 }
@@ -31,9 +34,16 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	w, h := e.width, e.height
 	var depthView js.Value
 
+	// Determine the target format: canvas preferred format or rgba8unorm for offscreen.
+	e.targetFormat = "rgba8unorm"
+	if e.dev.hasContext && e.dev.preferredFormat != "" {
+		e.targetFormat = e.dev.preferredFormat
+	}
+
 	if desc.Target != nil {
 		if rt, ok := desc.Target.(*RenderTarget); ok {
 			view = rt.colorTex.view
+			e.targetFormat = jsTextureFormat(rt.colorTex.format)
 			w = rt.w
 			h = rt.h
 			if rt.depthTex != nil {
@@ -105,9 +115,8 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 	e.currentPipeline = p
 
-	if p.handle.IsUndefined() || p.handle.IsNull() {
-		p.createPipeline()
-	}
+	// Lazily create (or recreate) the pipeline for the current target format.
+	p.ensurePipelineForFormat(e.targetFormat)
 
 	if !p.handle.IsUndefined() && !p.handle.IsNull() && e.inRenderPass {
 		e.passEncoder.Call("setPipeline", p.handle)
@@ -126,11 +135,11 @@ func (e *Encoder) bindUniforms() {
 		return
 	}
 
+	// Use the combined uniform layout (vertex + fragment fields at
+	// non-overlapping offsets) so the buffer satisfies both stages.
 	var data []byte
-	if len(shader.vertexUniformLayout) > 0 {
-		data = shader.packUniforms(shader.vertexUniformLayout)
-	} else if len(shader.fragmentUniformLayout) > 0 {
-		data = shader.packUniforms(shader.fragmentUniformLayout)
+	if len(shader.combinedUniformLayout) > 0 {
+		data = shader.packUniforms(shader.combinedUniformLayout)
 	}
 	if len(data) == 0 {
 		return

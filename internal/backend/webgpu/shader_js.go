@@ -22,6 +22,7 @@ type Shader struct {
 	// Uniform layout from GLSL→WGSL translation.
 	vertexUniformLayout   []shadertranslate.UniformField
 	fragmentUniformLayout []shadertranslate.UniformField
+	combinedUniformLayout []shadertranslate.UniformField
 
 	// Compiled shader modules (lazily created).
 	vertexModule   js.Value
@@ -30,29 +31,55 @@ type Shader struct {
 }
 
 // compile translates GLSL to WGSL and creates shader modules.
+// Both stages share a single combined uniform struct at @group(0) @binding(0)
+// so that vertex and fragment uniforms occupy non-overlapping offsets.
 func (s *Shader) compile() {
 	if s.compiled {
 		return
 	}
 	s.compiled = true
 
+	var vertexWGSL, fragmentWGSL string
+
 	if s.vertexSource != "" {
 		result, err := shadertranslate.GLSLToWGSLVertex(s.vertexSource)
 		if err == nil {
-			desc := js.Global().Get("Object").New()
-			desc.Set("code", result.Source)
-			s.vertexModule = s.dev.device.Call("createShaderModule", desc)
+			vertexWGSL = result.Source
 			s.vertexUniformLayout = result.Uniforms
 		}
 	}
 	if s.fragmentSource != "" {
 		result, err := shadertranslate.GLSLToWGSLFragment(s.fragmentSource)
 		if err == nil {
-			desc := js.Global().Get("Object").New()
-			desc.Set("code", result.Source)
-			s.fragmentModule = s.dev.device.Call("createShaderModule", desc)
+			fragmentWGSL = result.Source
 			s.fragmentUniformLayout = result.Uniforms
 		}
+	}
+
+	// Build a combined uniform layout so both stages share one buffer
+	// with non-overlapping offsets.
+	s.combinedUniformLayout = buildCombinedUniformLayout(
+		s.vertexUniformLayout, s.fragmentUniformLayout)
+
+	if len(s.combinedUniformLayout) > 0 {
+		structSrc := buildUniformStructWGSL("Uniforms", s.combinedUniformLayout)
+		if vertexWGSL != "" && len(s.vertexUniformLayout) > 0 {
+			vertexWGSL = replaceUniformStruct(vertexWGSL, "VertexUniforms", "Uniforms", structSrc)
+		}
+		if fragmentWGSL != "" && len(s.fragmentUniformLayout) > 0 {
+			fragmentWGSL = replaceUniformStruct(fragmentWGSL, "FragmentUniforms", "Uniforms", structSrc)
+		}
+	}
+
+	if vertexWGSL != "" {
+		desc := js.Global().Get("Object").New()
+		desc.Set("code", vertexWGSL)
+		s.vertexModule = s.dev.device.Call("createShaderModule", desc)
+	}
+	if fragmentWGSL != "" {
+		desc := js.Global().Get("Object").New()
+		desc.Set("code", fragmentWGSL)
+		s.fragmentModule = s.dev.device.Call("createShaderModule", desc)
 	}
 }
 

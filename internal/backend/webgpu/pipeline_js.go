@@ -14,6 +14,9 @@ type Pipeline struct {
 	desc   backend.PipelineDescriptor
 	handle js.Value
 
+	// The texture format this pipeline was compiled for.
+	createdFormat string
+
 	// Cached bind group layouts.
 	uniformBGL js.Value
 	textureBGL js.Value
@@ -22,6 +25,17 @@ type Pipeline struct {
 
 // InnerPipeline returns nil for GPU pipelines (no soft delegation).
 func (p *Pipeline) InnerPipeline() backend.Pipeline { return nil }
+
+// ensurePipelineForFormat creates or recreates the pipeline if the target
+// format has changed (e.g. switching between canvas and offscreen targets).
+func (p *Pipeline) ensurePipelineForFormat(format string) {
+	hasHandle := !p.handle.IsUndefined() && !p.handle.IsNull()
+	if hasHandle && p.createdFormat == format {
+		return
+	}
+	p.createdFormat = format
+	p.createPipeline()
+}
 
 // createPipeline lazily compiles the shader and creates the render pipeline.
 func (p *Pipeline) createPipeline() {
@@ -80,10 +94,10 @@ func (p *Pipeline) createPipeline() {
 
 	// Fragment state with blend.
 	target := js.Global().Get("Object").New()
-	// Use the preferred canvas format when rendering to the surface, otherwise rgba8unorm.
-	targetFormat := "rgba8unorm"
-	if p.dev.hasContext && p.dev.preferredFormat != "" {
-		targetFormat = p.dev.preferredFormat
+	// Use the format determined by the encoder's current render target.
+	targetFormat := p.createdFormat
+	if targetFormat == "" {
+		targetFormat = "rgba8unorm"
 	}
 	target.Set("format", targetFormat)
 	target.Set("writeMask", 0xF)
