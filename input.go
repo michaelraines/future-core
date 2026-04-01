@@ -4,6 +4,8 @@ package futurerender
 // with user-friendly functions matching Ebitengine's API.
 
 import (
+	"fmt"
+
 	"github.com/michaelraines/future-core/internal/platform"
 )
 
@@ -339,6 +341,56 @@ const (
 	KeyNumpadMultiply = KeyKPMultiply
 	KeyNumpadSubtract = KeyKPSubtract
 )
+
+// keyNames maps Key values to their string names.
+var keyNames = [keyCount]string{
+	KeyA: "A", KeyB: "B", KeyC: "C", KeyD: "D", KeyE: "E",
+	KeyF: "F", KeyG: "G", KeyH: "H", KeyI: "I", KeyJ: "J",
+	KeyK: "K", KeyL: "L", KeyM: "M", KeyN: "N", KeyO: "O",
+	KeyP: "P", KeyQ: "Q", KeyR: "R", KeyS: "S", KeyT: "T",
+	KeyU: "U", KeyV: "V", KeyW: "W", KeyX: "X", KeyY: "Y",
+	KeyZ: "Z",
+	Key0: "0", Key1: "1", Key2: "2", Key3: "3", Key4: "4",
+	Key5: "5", Key6: "6", Key7: "7", Key8: "8", Key9: "9",
+	KeySpace: "Space", KeyApostrophe: "Apostrophe", KeyComma: "Comma",
+	KeyMinus: "Minus", KeyPeriod: "Period", KeySlash: "Slash",
+	KeySemicolon: "Semicolon", KeyEqual: "Equal",
+	KeyLeftBracket: "LeftBracket", KeyBackslash: "Backslash",
+	KeyRightBracket: "RightBracket", KeyGraveAccent: "GraveAccent",
+	KeyEnter: "Enter", KeyEscape: "Escape", KeyTab: "Tab",
+	KeyBackspace: "Backspace", KeyInsert: "Insert", KeyDelete: "Delete",
+	KeyRight: "Right", KeyLeft: "Left", KeyDown: "Down", KeyUp: "Up",
+	KeyPageUp: "PageUp", KeyPageDown: "PageDown",
+	KeyHome: "Home", KeyEnd: "End",
+	KeyCapsLock: "CapsLock", KeyScrollLock: "ScrollLock",
+	KeyNumLock: "NumLock", KeyPrintScreen: "PrintScreen", KeyPause: "Pause",
+	KeyF1: "F1", KeyF2: "F2", KeyF3: "F3", KeyF4: "F4",
+	KeyF5: "F5", KeyF6: "F6", KeyF7: "F7", KeyF8: "F8",
+	KeyF9: "F9", KeyF10: "F10", KeyF11: "F11", KeyF12: "F12",
+	KeyF13: "F13", KeyF14: "F14", KeyF15: "F15", KeyF16: "F16",
+	KeyF17: "F17", KeyF18: "F18", KeyF19: "F19", KeyF20: "F20",
+	KeyF21: "F21", KeyF22: "F22", KeyF23: "F23", KeyF24: "F24",
+	KeyKP0: "KP0", KeyKP1: "KP1", KeyKP2: "KP2", KeyKP3: "KP3",
+	KeyKP4: "KP4", KeyKP5: "KP5", KeyKP6: "KP6", KeyKP7: "KP7",
+	KeyKP8: "KP8", KeyKP9: "KP9",
+	KeyKPDecimal: "KPDecimal", KeyKPDivide: "KPDivide",
+	KeyKPMultiply: "KPMultiply", KeyKPSubtract: "KPSubtract",
+	KeyKPAdd: "KPAdd", KeyKPEnter: "KPEnter", KeyKPEqual: "KPEqual",
+	KeyLeftShift: "LeftShift", KeyLeftControl: "LeftControl",
+	KeyLeftAlt: "LeftAlt", KeyLeftSuper: "LeftSuper",
+	KeyRightShift: "RightShift", KeyRightControl: "RightControl",
+	KeyRightAlt: "RightAlt", KeyRightSuper: "RightSuper",
+	KeyMenu: "Menu",
+}
+
+// String returns the name of the key (e.g. "A", "Space", "Enter").
+// For unknown or out-of-range keys it returns "Unknown(N)".
+func (k Key) String() string {
+	if k >= 0 && int(k) < len(keyNames) && keyNames[k] != "" {
+		return keyNames[k]
+	}
+	return fmt.Sprintf("Unknown(%d)", int(k))
+}
 
 // keyMap maps public Key values to platform.Key values.
 var keyMap [keyCount]platform.Key
