@@ -88,8 +88,13 @@ func (p *Pipeline) createPipeline() {
 	// Configure blend state.
 	blendEnabled, blend := wgpuBlendState(p.desc.BlendMode)
 
+	// Use the surface format when rendering to the surface, otherwise RGBA8Unorm.
+	targetFormat := wgpu.TextureFormatRGBA8Unorm
+	if p.dev.hasSurface {
+		targetFormat = p.dev.surfaceFormat
+	}
 	target := wgpu.ColorTargetState{
-		Format:    wgpu.TextureFormatRGBA8Unorm,
+		Format:    targetFormat,
 		WriteMask: wgpu.ColorWriteMaskAll,
 	}
 	if blendEnabled {
