@@ -143,8 +143,15 @@ func (d *Device) createSurface(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("surface factory returned nil")
 	}
 
-	// Configure the surface for presentation.
-	d.surfaceFormat = wgpu.TextureFormatRGBA8Unorm
+	// Query the preferred surface format from the adapter.
+	d.surfaceFormat = wgpu.TextureFormatBGRA8Unorm // sensible default
+	var caps wgpu.SurfaceCapabilities
+	wgpu.SurfaceGetCapabilities(d.surface, d.adapter, &caps)
+	if caps.FormatCount > 0 && caps.Formats != 0 {
+		formats := unsafe.Slice((*wgpu.TextureFormat)(unsafe.Pointer(caps.Formats)), caps.FormatCount)
+		d.surfaceFormat = formats[0]
+	}
+
 	surfaceCfg := wgpu.SurfaceConfiguration{
 		Device:      d.device,
 		Format:      d.surfaceFormat,
@@ -459,6 +466,9 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 
 	wgpuFmt := wgpuTextureFormatEnum(desc.Format)
 	usage := wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst | wgpu.TextureUsageCopySrc
+	if desc.RenderTarget {
+		usage |= wgpu.TextureUsageRenderAttachment
+	}
 
 	texDesc := wgpu.TextureDescriptor{
 		Usage:         wgpu.TextureUsage(usage),
@@ -553,9 +563,10 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 	}
 
 	colorTex, err := d.NewTexture(backend.TextureDescriptor{
-		Width:  desc.Width,
-		Height: desc.Height,
-		Format: colorFmt,
+		Width:        desc.Width,
+		Height:       desc.Height,
+		Format:       colorFmt,
+		RenderTarget: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("webgpu: render target color: %w", err)
@@ -568,9 +579,10 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 			depthFmt = backend.TextureFormatDepth24
 		}
 		dt, err := d.NewTexture(backend.TextureDescriptor{
-			Width:  desc.Width,
-			Height: desc.Height,
-			Format: depthFmt,
+			Width:        desc.Width,
+			Height:       desc.Height,
+			Format:       depthFmt,
+			RenderTarget: true,
 		})
 		if err != nil {
 			colorTex.Dispose()
