@@ -32,6 +32,10 @@ type Device struct {
 
 	// Sampler cache keyed by filter string ("nearest" or "linear").
 	samplers map[string]js.Value
+
+	// Default 1x1 white texture used as a placeholder for bind group 1
+	// when SetTexture has not been called before a draw call.
+	defaultWhiteTex *Texture
 }
 
 // New creates a new WebGPU device.
@@ -105,6 +109,9 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		d.createDefaultTexture()
 	}
 
+	// Create a 1x1 white placeholder texture for default bind group 1.
+	d.createDefaultWhiteTexture()
+
 	return nil
 }
 
@@ -123,10 +130,26 @@ func (d *Device) createDefaultTexture() {
 	d.defaultColorView = d.defaultColorTex.Call("createView")
 }
 
+// createDefaultWhiteTexture creates a 1x1 RGBA white texture used as a
+// placeholder binding for group 1 when no texture has been explicitly set.
+func (d *Device) createDefaultWhiteTexture() {
+	tex, err := d.NewTexture(backend.TextureDescriptor{
+		Width:  1,
+		Height: 1,
+		Format: backend.TextureFormatRGBA8,
+		Data:   []byte{255, 255, 255, 255},
+	})
+	if err != nil {
+		return
+	}
+	d.defaultWhiteTex = tex.(*Texture)
+}
+
 // Dispose releases all WebGPU resources.
 func (d *Device) Dispose() {
 	// GPU objects are garbage-collected by the browser.
 	d.samplers = nil
+	d.defaultWhiteTex = nil
 }
 
 // ReadScreen copies the default color texture pixels into dst.
