@@ -80,7 +80,12 @@ func (p *Pipeline) createPipeline() {
 
 	// Fragment state with blend.
 	target := js.Global().Get("Object").New()
-	target.Set("format", "rgba8unorm")
+	// Use the preferred canvas format when rendering to the surface, otherwise rgba8unorm.
+	targetFormat := "rgba8unorm"
+	if p.dev.hasContext && p.dev.preferredFormat != "" {
+		targetFormat = p.dev.preferredFormat
+	}
+	target.Set("format", targetFormat)
 	target.Set("writeMask", 0xF)
 
 	blend := jsBlendState(p.desc.BlendMode)

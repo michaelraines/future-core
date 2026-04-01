@@ -27,7 +27,8 @@ type Device struct {
 	defaultColorView js.Value
 
 	// Presentation state.
-	hasContext bool
+	hasContext      bool
+	preferredFormat string // e.g. "bgra8unorm" or "rgba8unorm"
 
 	// Sampler cache keyed by filter string ("nearest" or "linear").
 	samplers map[string]js.Value
@@ -89,6 +90,7 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		d.context = d.canvas.Call("getContext", "webgpu")
 		if !d.context.IsUndefined() && !d.context.IsNull() {
 			preferredFormat := d.gpu.Call("getPreferredCanvasFormat")
+			d.preferredFormat = preferredFormat.String()
 			configObj := js.Global().Get("Object").New()
 			configObj.Set("device", d.device)
 			configObj.Set("format", preferredFormat)
@@ -210,10 +212,13 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 	sizeArr := js.Global().Get("Array").New(desc.Width, desc.Height, 1)
 	texDesc.Set("size", sizeArr)
 	texDesc.Set("format", jsTextureFormat(desc.Format))
-	texDesc.Set("usage",
-		jsGPUTextureUsage(d.device, "TEXTURE_BINDING")|
-			jsGPUTextureUsage(d.device, "COPY_DST")|
-			jsGPUTextureUsage(d.device, "COPY_SRC"))
+	usage := jsGPUTextureUsage(d.device, "TEXTURE_BINDING") |
+		jsGPUTextureUsage(d.device, "COPY_DST") |
+		jsGPUTextureUsage(d.device, "COPY_SRC")
+	if desc.RenderTarget {
+		usage |= jsGPUTextureUsage(d.device, "RENDER_ATTACHMENT")
+	}
+	texDesc.Set("usage", usage)
 
 	handle := d.device.Call("createTexture", texDesc)
 	if handle.IsNull() || handle.IsUndefined() {
@@ -297,6 +302,7 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 
 	colorTex, err := d.NewTexture(backend.TextureDescriptor{
 		Width: desc.Width, Height: desc.Height, Format: colorFmt,
+		RenderTarget: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("webgpu: render target color: %w", err)
@@ -310,6 +316,7 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 		}
 		dt, err := d.NewTexture(backend.TextureDescriptor{
 			Width: desc.Width, Height: desc.Height, Format: depthFmt,
+			RenderTarget: true,
 		})
 		if err != nil {
 			colorTex.Dispose()
