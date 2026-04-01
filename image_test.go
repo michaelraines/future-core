@@ -1119,6 +1119,53 @@ func TestColorMatrixToUniforms(t *testing.T) {
 	require.InDelta(t, float32(0.4), trans[3], 1e-6)
 }
 
+func TestSetPixel(t *testing.T) {
+	img := &Image{
+		width: 10, height: 10,
+		texture: &mockTexture{w: 10, h: 10},
+		u0:      0, v0: 0, u1: 1, v1: 1,
+	}
+	// Should not panic — writes a single pixel via UploadRegion.
+	img.Set(5, 5, color.NRGBA{R: 255, G: 128, B: 64, A: 255})
+}
+
+func TestSetPixelOutOfBounds(t *testing.T) {
+	img := &Image{
+		width: 10, height: 10,
+		texture: &mockTexture{w: 10, h: 10},
+		u0:      0, v0: 0, u1: 1, v1: 1,
+	}
+	// All out-of-bounds — should be no-ops, no panic.
+	img.Set(-1, 0, color.White)
+	img.Set(0, -1, color.White)
+	img.Set(10, 0, color.White)
+	img.Set(0, 10, color.White)
+}
+
+func TestSetPixelDisposed(t *testing.T) {
+	img := &Image{
+		width: 10, height: 10, disposed: true,
+		texture: &mockTexture{w: 10, h: 10},
+		u0:      0, v0: 0, u1: 1, v1: 1,
+	}
+	img.Set(0, 0, color.White) // no-op, no panic
+}
+
+func TestSetPixelNoTexture(t *testing.T) {
+	img := &Image{width: 10, height: 10, u0: 0, v0: 0, u1: 1, v1: 1}
+	img.Set(0, 0, color.White) // no-op, no panic
+}
+
+func TestDrawTrianglesAntiAliasField(t *testing.T) {
+	opts := &DrawTrianglesOptions{AntiAlias: true}
+	require.True(t, opts.AntiAlias)
+}
+
+func TestDrawTrianglesShaderAntiAliasField(t *testing.T) {
+	opts := &DrawTrianglesShaderOptions{AntiAlias: true}
+	require.True(t, opts.AntiAlias)
+}
+
 func TestDrawImageSubImage(t *testing.T) {
 	b := withBatchRenderer(t, 1)
 

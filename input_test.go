@@ -365,6 +365,37 @@ func TestEbitenKeyAliases(t *testing.T) {
 	require.Equal(t, KeyKPSubtract, KeyNumpadSubtract)
 }
 
+func TestKeyString(t *testing.T) {
+	tests := []struct {
+		key  Key
+		want string
+	}{
+		{KeyA, "A"},
+		{KeyZ, "Z"},
+		{Key0, "0"},
+		{Key9, "9"},
+		{KeySpace, "Space"},
+		{KeyEnter, "Enter"},
+		{KeyEscape, "Escape"},
+		{KeyF1, "F1"},
+		{KeyF12, "F12"},
+		{KeyLeftShift, "LeftShift"},
+		{KeyMenu, "Menu"},
+		{KeyKP0, "KP0"},
+		{KeyKPAdd, "KPAdd"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.key.String())
+		})
+	}
+}
+
+func TestKeyStringUnknown(t *testing.T) {
+	require.Equal(t, "Unknown(-1)", Key(-1).String())
+	require.Equal(t, "Unknown(9999)", Key(9999).String())
+}
+
 func TestKeyToInternalOutOfBounds(t *testing.T) {
 	require.Equal(t, platform.KeyUnknown, keyToInternal(Key(-1)))
 	require.Equal(t, platform.KeyUnknown, keyToInternal(Key(9999)))

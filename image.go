@@ -395,6 +395,21 @@ func (img *Image) Dispose() {
 	}
 }
 
+// Set writes a single pixel at (x, y) with the given color.
+// If the coordinate is outside the image bounds, Set is a no-op.
+// This matches ebiten.Image.Set and satisfies the draw.Image interface.
+func (img *Image) Set(x, y int, clr color.Color) {
+	if img.disposed || img.texture == nil {
+		return
+	}
+	if x < 0 || y < 0 || x >= img.width || y >= img.height {
+		return
+	}
+	r, g, b, a := clr.RGBA()
+	pix := []byte{byte(r >> 8), byte(g >> 8), byte(b >> 8), byte(a >> 8)}
+	img.texture.UploadRegion(pix, x, y, 1, 1, 0)
+}
+
 // WritePixels uploads RGBA pixel data to the entire image.
 // The data must be len(pix) == 4*width*height bytes in RGBA order.
 // This matches Ebitengine's Image.WritePixels signature (single arg, full image).
@@ -445,6 +460,10 @@ type DrawTrianglesOptions struct {
 
 	// FillRule specifies the fill rule for overlapping triangles.
 	FillRule FillRule
+
+	// AntiAlias indicates whether anti-aliasing should be applied to
+	// triangle edges. This matches ebiten.DrawTrianglesOptions.AntiAlias.
+	AntiAlias bool
 }
 
 // DrawRectShaderOptions holds options for DrawRectShader.
@@ -477,6 +496,10 @@ type DrawTrianglesShaderOptions struct {
 
 	// FillRule specifies the fill rule for overlapping triangles.
 	FillRule FillRule
+
+	// AntiAlias indicates whether anti-aliasing should be applied to
+	// triangle edges. This matches ebiten.DrawTrianglesShaderOptions.AntiAlias.
+	AntiAlias bool
 
 	// Uniforms maps uniform names to values.
 	Uniforms map[string]any
