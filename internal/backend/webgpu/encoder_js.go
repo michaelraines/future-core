@@ -123,6 +123,11 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 
 	e.bindUniforms()
+
+	// Bind default texture to group 1 so that draw calls without an
+	// explicit SetTexture don't fail with "No bind group set at group index 1".
+	// Any subsequent SetTexture call will override this.
+	e.bindDefaultTexture()
 }
 
 // bindUniforms uploads shader uniforms and binds them to group 0.
@@ -176,6 +181,39 @@ func (e *Encoder) bindUniforms() {
 	bg := e.dev.device.Call("createBindGroup", bgDesc)
 
 	e.passEncoder.Call("setBindGroup", 0, bg)
+}
+
+// bindDefaultTexture binds a 1x1 white placeholder texture to group 1,
+// ensuring that draw calls without an explicit SetTexture don't trigger
+// "No bind group set at group index 1" validation errors.
+func (e *Encoder) bindDefaultTexture() {
+	if e.currentPipeline == nil || !e.inRenderPass {
+		return
+	}
+	t := e.dev.defaultWhiteTex
+	if t == nil || t.view.IsUndefined() || t.view.IsNull() {
+		return
+	}
+	bgl := e.currentPipeline.textureBGL
+	if bgl.IsUndefined() || bgl.IsNull() {
+		return
+	}
+	sampler := e.dev.getSampler("nearest")
+
+	texEntry := js.Global().Get("Object").New()
+	texEntry.Set("binding", 0)
+	texEntry.Set("resource", t.view)
+
+	sampEntry := js.Global().Get("Object").New()
+	sampEntry.Set("binding", 1)
+	sampEntry.Set("resource", sampler)
+
+	bgDesc := js.Global().Get("Object").New()
+	bgDesc.Set("layout", bgl)
+	bgDesc.Set("entries", js.Global().Get("Array").New(texEntry, sampEntry))
+	bg := e.dev.device.Call("createBindGroup", bgDesc)
+
+	e.passEncoder.Call("setBindGroup", 1, bg)
 }
 
 // SetVertexBuffer binds a vertex buffer.
