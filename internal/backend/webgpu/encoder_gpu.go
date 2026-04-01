@@ -135,6 +135,11 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 
 	// Bind uniform buffer (group 0) if the shader has uniforms.
 	e.bindUniforms()
+
+	// Bind default texture to group 1 so that draw calls without an
+	// explicit SetTexture don't fail with "No bind group set at group index 1".
+	// Any subsequent SetTexture call will override this.
+	e.bindDefaultTexture()
 }
 
 // bindUniforms writes the shader's recorded uniforms into the ring buffer
@@ -187,6 +192,49 @@ func (e *Encoder) bindUniforms() {
 	runtime.KeepAlive(bgEntries)
 	if bg != 0 {
 		wgpu.RenderPassSetBindGroup(e.passEncoder, 0, bg)
+		wgpu.BindGroupRelease(bg)
+	}
+}
+
+// bindDefaultTexture binds a 1x1 white placeholder texture to group 1,
+// ensuring that draw calls without an explicit SetTexture don't trigger
+// "No bind group set at group index 1" validation errors.
+func (e *Encoder) bindDefaultTexture() {
+	if e.currentPipeline == nil || e.passEncoder == 0 || e.dev.device == 0 {
+		return
+	}
+	t := e.dev.defaultWhiteTex
+	if t == nil || t.view == 0 {
+		return
+	}
+	bgl := e.currentPipeline.textureBGL
+	if bgl == 0 {
+		return
+	}
+	sampler := e.dev.getSampler(wgpu.FilterModeNearest)
+	if sampler == 0 {
+		return
+	}
+
+	bgEntries := []wgpu.BindGroupEntry{
+		{
+			Binding:      0,
+			TextureView_: t.view,
+		},
+		{
+			Binding:  1,
+			Sampler_: sampler,
+		},
+	}
+	bgDesc := wgpu.BindGroupDescriptor{
+		Layout:     bgl,
+		EntryCount: uint32(len(bgEntries)),
+		Entries:    uintptr(unsafe.Pointer(&bgEntries[0])),
+	}
+	bg := wgpu.DeviceCreateBindGroup(e.dev.device, &bgDesc)
+	runtime.KeepAlive(bgEntries)
+	if bg != 0 {
+		wgpu.RenderPassSetBindGroup(e.passEncoder, 1, bg)
 		wgpu.BindGroupRelease(bg)
 	}
 }

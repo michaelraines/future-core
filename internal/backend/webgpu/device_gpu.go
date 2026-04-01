@@ -47,6 +47,10 @@ type Device struct {
 
 	// Sampler cache: keyed by filter mode.
 	samplers map[wgpu.FilterMode]wgpu.Sampler
+
+	// Default 1x1 white texture used as a placeholder for bind group 1
+	// when SetTexture has not been called before a draw call.
+	defaultWhiteTex *Texture
 }
 
 // New creates a new WebGPU device.
@@ -127,6 +131,9 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 
 		// Create persistent uniform ring buffer.
 		d.createUniformRingBuffer()
+
+		// Create a 1x1 white placeholder texture for default bind group 1.
+		d.createDefaultWhiteTexture()
 	}
 
 	return nil
@@ -203,6 +210,24 @@ func (d *Device) writeUniformRing(data []byte) (offset, alignedSize int) {
 	return offset, alignedSize
 }
 
+// createDefaultWhiteTexture creates a 1x1 RGBA white texture used as a
+// placeholder binding for group 1 when no texture has been explicitly set.
+func (d *Device) createDefaultWhiteTexture() {
+	if d.device == 0 {
+		return
+	}
+	tex, err := d.NewTexture(backend.TextureDescriptor{
+		Width:  1,
+		Height: 1,
+		Format: backend.TextureFormatRGBA8,
+		Data:   []byte{255, 255, 255, 255},
+	})
+	if err != nil {
+		return
+	}
+	d.defaultWhiteTex = tex.(*Texture)
+}
+
 // getSampler returns a cached sampler for the given filter mode, creating one if needed.
 func (d *Device) getSampler(filter wgpu.FilterMode) wgpu.Sampler {
 	if d.device == 0 {
@@ -232,6 +257,10 @@ func (d *Device) getSampler(filter wgpu.FilterMode) wgpu.Sampler {
 
 // Dispose releases all WebGPU resources.
 func (d *Device) Dispose() {
+	if d.defaultWhiteTex != nil {
+		d.defaultWhiteTex.Dispose()
+		d.defaultWhiteTex = nil
+	}
 	for k, s := range d.samplers {
 		wgpu.SamplerRelease(s)
 		delete(d.samplers, k)
