@@ -22,6 +22,9 @@ type Encoder struct {
 	cmdEncoder      wgpu.CommandEncoder
 	boundTexture    *Texture
 
+	// Format of the current render target (set in BeginRenderPass).
+	targetFormat wgpu.TextureFormat
+
 	// Current sampler filter per slot (default: nearest).
 	slotFilters map[int]wgpu.FilterMode
 }
@@ -32,14 +35,17 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 
 	// Use surface texture if presenting, otherwise offscreen default.
 	view := e.dev.defaultColorView
+	e.targetFormat = wgpu.TextureFormatRGBA8Unorm // offscreen default
 	if e.dev.hasSurface && e.dev.currentTexView != 0 {
 		view = e.dev.currentTexView
+		e.targetFormat = e.dev.surfaceFormat
 	}
 	w, h := uint32(e.width), uint32(e.height)
 	var depthView wgpu.TextureView
 	if desc.Target != nil {
 		if rt, ok := desc.Target.(*RenderTarget); ok {
 			view = rt.colorTex.view
+			e.targetFormat = wgpuTextureFormatEnum(rt.colorTex.format)
 			w = uint32(rt.w)
 			h = uint32(rt.h)
 			if rt.depthTex != nil {
@@ -120,10 +126,8 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 	e.currentPipeline = p
 
-	// Lazily create the WGPURenderPipeline.
-	if p.handle == 0 {
-		p.createPipeline()
-	}
+	// Lazily create (or recreate) the pipeline for the current target format.
+	p.ensurePipelineForFormat(e.targetFormat)
 
 	if p.handle != 0 && e.passEncoder != 0 {
 		wgpu.RenderPassSetPipeline(e.passEncoder, p.handle)
@@ -144,13 +148,11 @@ func (e *Encoder) bindUniforms() {
 		return
 	}
 
-	// Use the vertex uniform layout (most common for projection matrices).
-	// If the fragment shader also has uniforms, pack those too.
+	// Use the combined uniform layout (vertex + fragment fields at
+	// non-overlapping offsets) so the buffer satisfies both stages.
 	var data []byte
-	if len(shader.vertexUniformLayout) > 0 {
-		data = shader.packUniforms(shader.vertexUniformLayout)
-	} else if len(shader.fragmentUniformLayout) > 0 {
-		data = shader.packUniforms(shader.fragmentUniformLayout)
+	if len(shader.combinedUniformLayout) > 0 {
+		data = shader.packUniforms(shader.combinedUniformLayout)
 	}
 	if len(data) == 0 {
 		return

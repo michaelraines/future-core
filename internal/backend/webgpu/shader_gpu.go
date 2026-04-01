@@ -4,7 +4,10 @@ package webgpu
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
+	"regexp"
+	"strings"
 
 	"github.com/michaelraines/future-core/internal/backend"
 	"github.com/michaelraines/future-core/internal/shadertranslate"
@@ -23,6 +26,7 @@ type Shader struct {
 	// Uniform layout from GLSL→WGSL translation.
 	vertexUniformLayout   []shadertranslate.UniformField
 	fragmentUniformLayout []shadertranslate.UniformField
+	combinedUniformLayout []shadertranslate.UniformField
 
 	// Compiled shader modules (lazily created).
 	vertexModule   wgpu.ShaderModule
@@ -31,26 +35,132 @@ type Shader struct {
 }
 
 // compile translates GLSL to WGSL and compiles the source into shader modules.
+// Both stages share a single combined uniform struct at @group(0) @binding(0)
+// so that vertex and fragment uniforms occupy non-overlapping offsets.
 func (s *Shader) compile() {
 	if s.compiled || s.dev.device == 0 {
 		return
 	}
 	s.compiled = true
 
+	var vertexWGSL, fragmentWGSL string
+
 	if s.vertexSource != "" {
 		result, err := shadertranslate.GLSLToWGSLVertex(s.vertexSource)
 		if err == nil {
-			s.vertexModule = wgpu.DeviceCreateShaderModuleWGSL(s.dev.device, result.Source)
+			vertexWGSL = result.Source
 			s.vertexUniformLayout = result.Uniforms
 		}
 	}
 	if s.fragmentSource != "" {
 		result, err := shadertranslate.GLSLToWGSLFragment(s.fragmentSource)
 		if err == nil {
-			s.fragmentModule = wgpu.DeviceCreateShaderModuleWGSL(s.dev.device, result.Source)
+			fragmentWGSL = result.Source
 			s.fragmentUniformLayout = result.Uniforms
 		}
 	}
+
+	// Build a combined uniform layout so both stages share one buffer
+	// with non-overlapping offsets.
+	s.combinedUniformLayout = buildCombinedUniformLayout(
+		s.vertexUniformLayout, s.fragmentUniformLayout)
+
+	if len(s.combinedUniformLayout) > 0 {
+		structSrc := buildUniformStructWGSL("Uniforms", s.combinedUniformLayout)
+		if vertexWGSL != "" && len(s.vertexUniformLayout) > 0 {
+			vertexWGSL = replaceUniformStruct(vertexWGSL, "VertexUniforms", "Uniforms", structSrc)
+		}
+		if fragmentWGSL != "" && len(s.fragmentUniformLayout) > 0 {
+			fragmentWGSL = replaceUniformStruct(fragmentWGSL, "FragmentUniforms", "Uniforms", structSrc)
+		}
+	}
+
+	if vertexWGSL != "" {
+		s.vertexModule = wgpu.DeviceCreateShaderModuleWGSL(s.dev.device, vertexWGSL)
+	}
+	if fragmentWGSL != "" {
+		s.fragmentModule = wgpu.DeviceCreateShaderModuleWGSL(s.dev.device, fragmentWGSL)
+	}
+}
+
+// buildCombinedUniformLayout merges vertex and fragment uniform layouts into a
+// single layout where all fields have non-overlapping offsets. Vertex fields
+// come first, then fragment-only fields are appended.
+func buildCombinedUniformLayout(vertex, fragment []shadertranslate.UniformField) []shadertranslate.UniformField {
+	if len(vertex) == 0 && len(fragment) == 0 {
+		return nil
+	}
+	if len(fragment) == 0 {
+		return vertex
+	}
+	if len(vertex) == 0 {
+		return fragment
+	}
+
+	seen := make(map[string]bool, len(vertex))
+	combined := make([]shadertranslate.UniformField, len(vertex))
+	copy(combined, vertex)
+	for _, f := range vertex {
+		seen[f.Name] = true
+	}
+
+	// Next available offset after vertex fields.
+	offset := 0
+	if len(vertex) > 0 {
+		last := vertex[len(vertex)-1]
+		offset = last.Offset + last.Size
+	}
+
+	for _, f := range fragment {
+		if seen[f.Name] {
+			continue
+		}
+		// Apply WGSL/std140 alignment rules.
+		align := 4
+		if f.Size >= 16 {
+			align = 16
+		} else if f.Size == 8 {
+			align = 8
+		}
+		if offset%align != 0 {
+			offset += align - (offset % align)
+		}
+		combined = append(combined, shadertranslate.UniformField{
+			Name:   f.Name,
+			Type:   f.Type,
+			Offset: offset,
+			Size:   f.Size,
+		})
+		seen[f.Name] = true
+		offset += f.Size
+	}
+
+	return combined
+}
+
+// buildUniformStructWGSL generates a WGSL struct declaration from uniform fields.
+func buildUniformStructWGSL(name string, fields []shadertranslate.UniformField) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "struct %s {\n", name)
+	for _, f := range fields {
+		fmt.Fprintf(&b, "    %s: %s,\n", f.Name, f.Type)
+	}
+	b.WriteString("};\n")
+	return b.String()
+}
+
+// reUniformStruct matches a WGSL uniform struct declaration block.
+var reUniformStruct = regexp.MustCompile(`struct (\w+) \{[^}]*\};\n`)
+
+// replaceUniformStruct patches WGSL source to replace a per-stage uniform
+// struct with the combined struct.
+func replaceUniformStruct(source, oldName, newName, newStruct string) string {
+	// Replace the struct block for oldName with the combined struct.
+	re := regexp.MustCompile(`struct ` + regexp.QuoteMeta(oldName) + ` \{[^}]*\};\n`)
+	source = re.ReplaceAllString(source, newStruct)
+	// Update the var<uniform> type reference.
+	source = strings.ReplaceAll(source, "uniforms: "+oldName, "uniforms: "+newName)
+	return source
 }
 
 // packUniforms packs recorded uniforms into a byte buffer using the given layout.

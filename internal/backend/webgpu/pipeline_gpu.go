@@ -17,6 +17,9 @@ type Pipeline struct {
 	desc   backend.PipelineDescriptor
 	handle wgpu.RenderPipeline
 
+	// The texture format this pipeline was compiled for.
+	createdFormat wgpu.TextureFormat
+
 	// Cached bind group layouts for this pipeline.
 	uniformBGL wgpu.BindGroupLayout // group 0: uniforms
 	textureBGL wgpu.BindGroupLayout // group 1: texture + sampler
@@ -25,6 +28,20 @@ type Pipeline struct {
 
 // InnerPipeline returns nil for GPU pipelines (no soft delegation).
 func (p *Pipeline) InnerPipeline() backend.Pipeline { return nil }
+
+// ensurePipelineForFormat creates or recreates the pipeline if the target
+// format has changed (e.g. switching between surface and offscreen targets).
+func (p *Pipeline) ensurePipelineForFormat(format wgpu.TextureFormat) {
+	if p.handle != 0 && p.createdFormat == format {
+		return
+	}
+	if p.handle != 0 {
+		// Format changed — release old resources and recreate.
+		p.Dispose()
+	}
+	p.createdFormat = format
+	p.createPipeline()
+}
 
 // createPipeline lazily compiles the shader and creates the render pipeline.
 func (p *Pipeline) createPipeline() {
@@ -88,10 +105,10 @@ func (p *Pipeline) createPipeline() {
 	// Configure blend state.
 	blendEnabled, blend := wgpuBlendState(p.desc.BlendMode)
 
-	// Use the surface format when rendering to the surface, otherwise RGBA8Unorm.
-	targetFormat := wgpu.TextureFormatRGBA8Unorm
-	if p.dev.hasSurface {
-		targetFormat = p.dev.surfaceFormat
+	// Use the format determined by the encoder's current render target.
+	targetFormat := p.createdFormat
+	if targetFormat == 0 {
+		targetFormat = wgpu.TextureFormatRGBA8Unorm
 	}
 	target := wgpu.ColorTargetState{
 		Format:    targetFormat,
