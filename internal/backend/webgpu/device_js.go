@@ -85,11 +85,16 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	d.queue = d.device.Get("queue")
 
 	// Set up canvas and GPUCanvasContext if DOM is available.
+	// Use the existing "game-canvas" element so that WebGPU renders directly
+	// to the visible canvas (auto-presented on queue.submit).
 	doc := js.Global().Get("document")
 	if !doc.IsUndefined() && !doc.IsNull() {
-		d.canvas = doc.Call("createElement", "canvas")
-		d.canvas.Set("width", d.width)
-		d.canvas.Set("height", d.height)
+		d.canvas = doc.Call("getElementById", "game-canvas")
+		if d.canvas.IsNull() || d.canvas.IsUndefined() {
+			d.canvas = doc.Call("createElement", "canvas")
+			d.canvas.Set("width", d.width)
+			d.canvas.Set("height", d.height)
+		}
 
 		d.context = d.canvas.Call("getContext", "webgpu")
 		if !d.context.IsUndefined() && !d.context.IsNull() {
