@@ -269,9 +269,9 @@ func NullStringView() StringView {
 type CallbackMode uint32
 
 const (
-	CallbackModeWaitAnyOnly       CallbackMode = 1
+	CallbackModeWaitAnyOnly        CallbackMode = 1
 	CallbackModeAllowProcessEvents CallbackMode = 2
-	CallbackModeAllowSpontaneous  CallbackMode = 3
+	CallbackModeAllowSpontaneous   CallbackMode = 3
 )
 
 // RequestAdapterStatus mirrors WGPURequestAdapterStatus.
@@ -402,8 +402,8 @@ type FragmentState struct {
 type ColorTargetState struct {
 	NextInChain uintptr
 	Format      TextureFormat
-	_           [4]byte // padding to align Blend ptr
-	Blend       uintptr // *BlendState, 0 for no blending
+	_           [4]byte        // padding to align Blend ptr
+	Blend       uintptr        // *BlendState, 0 for no blending
 	WriteMask   ColorWriteMask // uint64
 }
 
@@ -481,7 +481,7 @@ type BindGroupLayoutEntry struct {
 	NextInChain    uintptr
 	Binding        uint32
 	_              [4]byte // padding
-	Visibility     uint64 // WGPUShaderStage (WGPUFlags = uint64)
+	Visibility     uint64  // WGPUShaderStage (WGPUFlags = uint64)
 	Buffer_        BindGroupLayoutEntryBuffer
 	Sampler_       BindGroupLayoutEntrySampler
 	Texture_       BindGroupLayoutEntryTexture
@@ -664,7 +664,7 @@ type SurfaceConfiguration struct {
 	NextInChain     uintptr
 	Device          Device
 	Format          TextureFormat
-	_               [4]byte // padding after format (uint32) to align usage (uint64)
+	_               [4]byte      // padding after format (uint32) to align usage (uint64)
 	Usage           TextureUsage // uint64
 	Width           uint32
 	Height          uint32
@@ -746,10 +746,10 @@ var (
 	fnCreateInstance func(uintptr) Instance
 	// fnInstanceRequestAdapter and fnAdapterRequestDevice use SyscallN
 	// because they take callback-info structs by value and return WGPUFuture.
-	symInstanceRequestAdapter uintptr
-	symAdapterRequestDevice   uintptr
-	symInstanceWaitAny        uintptr
-	fnDeviceGetQueue          func(Device) Queue
+	symInstanceRequestAdapter          uintptr
+	symAdapterRequestDevice            uintptr
+	symInstanceWaitAny                 uintptr
+	fnDeviceGetQueue                   func(Device) Queue
 	fnDeviceCreateTexture              func(Device, *TextureDescriptor) Texture
 	fnDeviceCreateBuffer               func(Device, *BufferDescriptor) Buffer
 	fnDeviceCreateShaderModule         func(Device, uintptr) ShaderModule
@@ -1354,4 +1354,3 @@ func Init() error {
 
 	return err
 }
-
