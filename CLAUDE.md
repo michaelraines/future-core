@@ -357,9 +357,9 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   Destroying early causes the GPU to read freed descriptors (zeros).
 - **Never leave debug code in `bindUniforms`** — filling the UBO with identity
   matrices or debug patterns overwrites actual uniform data every frame.
-- **Only Vulkan uses `NoGL`** — Metal and DX12 still use the GL presenter
-  (soft-delegation → ReadScreen → GL blit). Setting `needsNoGL` for non-Vulkan
-  backends breaks their display path.
+- **Only Vulkan and WebGPU use `NoGL`** — Metal and DX12 still use the GL
+  presenter (soft-delegation → ReadScreen → GL blit). Setting `needsNoGL`
+  for non-Vulkan/WebGPU backends breaks their display path.
 - **Always use `scripts/visual-test.sh`** for rendering validation, not
   `go run` directly. The script handles headless capture via env vars.
 - **WebGPU has three build modes** — soft (CI), native GPU (`_gpu.go` via
@@ -378,6 +378,28 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
 - **Known test requirement**: WebGPU native GPU tests require `libwgpu_native`
   at runtime. See `internal/backend/webgpu/GPU_TESTING.md` for the 7-tier
   validation checklist.
+- **wgpu-native v27 API breaks** — All enums shifted by +1 (old `0` values are
+  now `Undefined`; e.g. `LoadOp_Clear` is `2` not `1`, `TriangleList` is `4`
+  not `3`). `WGPUFlags` (TextureUsage, BufferUsage, ColorWriteMask, ShaderStage)
+  changed from `uint32` to `uint64`. Descriptor structs gained `StringView label`
+  fields (16 bytes, not `uintptr`). Always cross-reference enum/struct values
+  against the installed header: `grep "WGPUFoo_" /opt/homebrew/Cellar/wgpu-native/*/include/webgpu.h`.
+- **wgpu-native struct-by-value on ARM64** — `wgpuInstanceRequestAdapter`,
+  `wgpuAdapterRequestDevice`, and `wgpuBufferMapAsync` take `CallbackInfo`
+  structs by value (>16 bytes). On ARM64, these are passed by hidden pointer.
+  Use `purego.SyscallN` with `uintptr(unsafe.Pointer(&info))`, not flattened
+  fields. `purego.RegisterFunc` cannot handle struct-by-value parameters.
+- **wgpu-native library path** — Set `WGPU_NATIVE_LIB_PATH` env var to point
+  to the directory or file path of `libwgpu_native.dylib`. On macOS with
+  Homebrew: `WGPU_NATIVE_LIB_PATH=/opt/homebrew/Cellar/wgpu-native/*/lib`.
+- **WebGPU `DepthSlice` must be `0xFFFFFFFF`** for 2D render targets — v27
+  interprets `0` as "depth slice 0 of a 3D texture", causing validation errors.
+  Set `DepthSlice: 0xFFFFFFFF` (WGPU_DEPTH_SLICE_UNDEFINED) in
+  `RenderPassColorAttachment`.
+- **WebGPU `TextureAspect` must be `1` (All)** — v27 changed `All` from `0`
+  to `1`. Using `0` (now `Undefined`) silently produces zero-filled readbacks.
+- **WebGPU `TextureDimension` 2D is `2`** — v27 changed from `1` to `2`.
+  Using `1` (now `1D`) causes "Dimension Y exceeds limit" errors.
 - **Use `make build` not `go build ./...`** — the repo has CGo GLFW source
   files that require build tag filtering handled by the Makefile.
 

@@ -92,7 +92,7 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	d.adapter = adapter
 
 	// Request device (synchronous — wgpu-native calls callback inline).
-	device, err := wgpu.AdapterRequestDeviceSync(d.adapter)
+	device, err := wgpu.AdapterRequestDeviceSync(d.adapter, d.instance)
 	if err != nil {
 		wgpu.AdapterRelease(d.adapter)
 		d.adapter = 0
@@ -117,7 +117,7 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 			// Offscreen path: create default color texture.
 			texDesc := wgpu.TextureDescriptor{
 				Usage:         wgpu.TextureUsage(wgpu.TextureUsageTextureBinding | wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageCopyDst | wgpu.TextureUsageCopySrc),
-				Dimension:     1, // 2D
+				Dimension:     2, // WGPUTextureDimension_2D
 				Size:          wgpu.Extent3D{Width: uint32(d.width), Height: uint32(d.height), DepthOrArrayLayers: 1},
 				Format:        wgpu.TextureFormatRGBA8Unorm,
 				MipLevelCount: 1,
@@ -328,7 +328,7 @@ func (d *Device) ReadScreen(dst []byte) bool {
 		Texture_: d.defaultColorTex,
 		MipLevel: 0,
 		Origin:   wgpu.Origin3D{},
-		Aspect:   0,
+		Aspect:   1, // WGPUTextureAspect_All
 	}
 	dstCopy := wgpu.ImageCopyBuffer{
 		Layout: wgpu.TextureDataLayout{
@@ -347,6 +347,9 @@ func (d *Device) ReadScreen(dst []byte) bool {
 	wgpu.QueueSubmit(d.queue, []wgpu.CommandBuffer{cmdBuf})
 	wgpu.CommandBufferRelease(cmdBuf)
 	wgpu.CommandEncoderRelease(enc)
+
+	// Ensure the GPU copy completes before mapping.
+	wgpu.DevicePoll(d.device, true)
 
 	// Map the staging buffer and copy data.
 	wgpu.BufferMapAsync(stagingBuf, wgpu.MapModeRead, 0, dataSize)
@@ -475,7 +478,7 @@ func (d *Device) recreateDefaultTexture() {
 	}
 	texDesc := wgpu.TextureDescriptor{
 		Usage:         wgpu.TextureUsage(wgpu.TextureUsageTextureBinding | wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageCopyDst | wgpu.TextureUsageCopySrc),
-		Dimension:     1,
+		Dimension:     2, // WGPUTextureDimension_2D
 		Size:          wgpu.Extent3D{Width: uint32(d.width), Height: uint32(d.height), DepthOrArrayLayers: 1},
 		Format:        wgpu.TextureFormatRGBA8Unorm,
 		MipLevelCount: 1,
@@ -501,7 +504,7 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 
 	texDesc := wgpu.TextureDescriptor{
 		Usage:         wgpu.TextureUsage(usage),
-		Dimension:     1, // 2D
+		Dimension:     2, // WGPUTextureDimension_2D
 		Size:          wgpu.Extent3D{Width: uint32(desc.Width), Height: uint32(desc.Height), DepthOrArrayLayers: 1},
 		Format:        wgpuFmt,
 		MipLevelCount: 1,
@@ -685,13 +688,13 @@ func wgpuTextureFormatEnum(f backend.TextureFormat) wgpu.TextureFormat {
 func wgpuBufferUsageEnum(u backend.BufferUsage) wgpu.BufferUsage {
 	switch u {
 	case backend.BufferUsageVertex:
-		return wgpu.BufferUsageVertex
+		return wgpu.BufferUsageVertex | wgpu.BufferUsageIndex
 	case backend.BufferUsageIndex:
-		return wgpu.BufferUsageIndex
+		return wgpu.BufferUsageIndex | wgpu.BufferUsageVertex
 	case backend.BufferUsageUniform:
 		return wgpu.BufferUsageUniform
 	default:
-		return wgpu.BufferUsageVertex
+		return wgpu.BufferUsageVertex | wgpu.BufferUsageIndex
 	}
 }
 

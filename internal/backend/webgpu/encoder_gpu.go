@@ -62,9 +62,10 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	}
 
 	colorAttachment := wgpu.RenderPassColorAttachment{
-		View:     view,
-		LoadOp_:  loadOp,
-		StoreOp_: wgpu.StoreOpStore,
+		View:       view,
+		DepthSlice: 0xFFFFFFFF, // WGPU_DEPTH_SLICE_UNDEFINED
+		LoadOp_:    loadOp,
+		StoreOp_:   wgpu.StoreOpStore,
 		ClearValue: wgpu.Color{
 			R: float64(desc.ClearColor[0]),
 			G: float64(desc.ClearColor[1]),
@@ -228,7 +229,7 @@ func (e *Encoder) bindDefaultTexture() {
 	}
 	bgDesc := wgpu.BindGroupDescriptor{
 		Layout:     bgl,
-		EntryCount: uint32(len(bgEntries)),
+		EntryCount: uintptr(len(bgEntries)),
 		Entries:    uintptr(unsafe.Pointer(&bgEntries[0])),
 	}
 	bg := wgpu.DeviceCreateBindGroup(e.dev.device, &bgDesc)
@@ -303,7 +304,7 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 
 	bgDesc := wgpu.BindGroupDescriptor{
 		Layout:     bgl,
-		EntryCount: uint32(len(bgEntries)),
+		EntryCount: uintptr(len(bgEntries)),
 		Entries:    uintptr(unsafe.Pointer(&bgEntries[0])),
 	}
 	bg := wgpu.DeviceCreateBindGroup(e.dev.device, &bgDesc)
