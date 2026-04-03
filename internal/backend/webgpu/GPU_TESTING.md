@@ -8,11 +8,24 @@ needs to be tested and how.
 
 Install wgpu-native for your platform:
 
-- **macOS**: `libwgpu_native.dylib` in library path
+- **macOS**: `libwgpu_native.dylib` (e.g. `brew install wgpu-native`)
 - **Linux**: `libwgpu_native.so` in `LD_LIBRARY_PATH`
 - **Windows**: `wgpu_native.dll` in `PATH`
 
 Download from: https://github.com/gfx-rs/wgpu-native/releases
+
+### Configuring the library path
+
+Set `WGPU_NATIVE_LIB_PATH` to point to the library file or the directory
+containing it. If unset, the dynamic linker's default search is used.
+
+```bash
+# Exact file path
+export WGPU_NATIVE_LIB_PATH=/opt/homebrew/Cellar/wgpu-native/27.0.4.0/lib/libwgpu_native.dylib
+
+# Directory containing the library
+export WGPU_NATIVE_LIB_PATH=/opt/homebrew/Cellar/wgpu-native/27.0.4.0/lib
+```
 
 ## Test Tiers
 
@@ -38,72 +51,39 @@ go test ./internal/backend/webgpu/ -run TestDeviceInit -v
 Validates the offscreen rendering path end-to-end:
 
 ```bash
-go test ./internal/backend/webgpu/ -run TestClearAndReadPixels -v
+go test ./internal/backend/webgpu/ -run TestWebGPUGPUClearAndRead -v
 ```
 
-**What to add** (test does not exist yet):
-```go
-func TestClearAndReadPixels(t *testing.T) {
-    dev, enc := newTestDevice(t)
-    rt, err := dev.NewRenderTarget(backend.RenderTargetDescriptor{
-        Width: 4, Height: 4, ColorFormat: backend.TextureFormatRGBA8,
-    })
-    require.NoError(t, err)
-    defer rt.Dispose()
-
-    enc.BeginRenderPass(backend.RenderPassDescriptor{
-        Target: rt, LoadAction: backend.LoadActionClear,
-        ClearColor: [4]float32{1, 0, 0, 1},
-    })
-    enc.EndRenderPass()
-
-    dst := make([]byte, 4*4*4)
-    rt.ColorTexture().ReadPixels(dst)
-    // Every pixel should be red (255, 0, 0, 255).
-    for i := 0; i < len(dst); i += 4 {
-        require.Equal(t, byte(255), dst[i], "R")
-        require.Equal(t, byte(0), dst[i+1], "G")
-        require.Equal(t, byte(0), dst[i+2], "B")
-        require.Equal(t, byte(255), dst[i+3], "A")
-    }
-}
-```
+**Status:** Implemented in `webgpu_gpu_test.go` as `TestWebGPUGPUClearAndRead`.
+Clears to red, calls `ReadScreen()`, verifies pixel values with tolerance for
+potential channel swaps.
 
 ### Tier 3 — Shader Compilation
 
 Validates GLSL→WGSL translation + `wgpuDeviceCreateShaderModule`:
 
 ```bash
-go test ./internal/backend/webgpu/ -run TestShaderCompilation -v
+go test ./internal/backend/webgpu/ -run TestWebGPUGPUShaderCompile -v
 ```
 
-**What to add:**
-```go
-func TestShaderCompilation(t *testing.T) {
-    dev, _ := newTestDevice(t)
-    shader, err := dev.NewShader(backend.ShaderDescriptor{
-        VertexSource: spriteVertexGLSL,
-        FragmentSource: spriteFragmentGLSL,
-    })
-    require.NoError(t, err)
-    defer shader.Dispose()
-    // Force compilation.
-    s := shader.(*Shader)
-    s.compile()
-    require.NotZero(t, s.vertexModule, "vertex module should be non-zero")
-    require.NotZero(t, s.fragmentModule, "fragment module should be non-zero")
-}
-```
+**Status:** Implemented in `webgpu_gpu_test.go` as `TestWebGPUGPUShaderCompile`.
+Creates shader with standard sprite GLSL, calls `compile()`, verifies both
+`vertexModule` and `fragmentModule` are non-zero.
 
 ### Tier 4 — Draw a Solid-Color Quad
 
 Full pipeline: shader → pipeline → vertex buffer → draw → readback:
 
 ```bash
-go test ./internal/backend/webgpu/ -run TestDrawGreenQuad -v
+go test ./internal/backend/webgpu/ -run TestWebGPUGPUDrawGreenQuad -v
+go test ./internal/backend/webgpu/ -run TestWebGPUGPUDrawWithSubmit -v
 ```
 
-**What this validates:**
+**Status:** Implemented in `webgpu_gpu_test.go` as `TestWebGPUGPUDrawGreenQuad`
+(direct draw path) and `TestWebGPUGPUDrawWithSubmit` (full BeginFrame→Draw→
+EndFrame→ReadScreen engine path).
+
+**What these validate:**
 - Pipeline creation (bind group layouts, pipeline layout, render pipeline)
 - Vertex buffer binding
 - Uniform ring buffer writes

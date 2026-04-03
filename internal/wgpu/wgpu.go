@@ -7,6 +7,8 @@ package wgpu
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"unsafe"
 
@@ -57,8 +59,8 @@ const (
 	TextureFormatDepth32Float TextureFormat = 42
 )
 
-// TextureUsage mirrors WGPUTextureUsage flags.
-type TextureUsage uint32
+// TextureUsage mirrors WGPUTextureUsage flags (WGPUFlags = uint64).
+type TextureUsage uint64
 
 const (
 	TextureUsageCopySrc          TextureUsage = 0x01
@@ -68,8 +70,8 @@ const (
 	TextureUsageRenderAttachment TextureUsage = 0x10
 )
 
-// BufferUsage mirrors WGPUBufferUsage flags.
-type BufferUsage uint32
+// BufferUsage mirrors WGPUBufferUsage flags (WGPUFlags = uint64).
+type BufferUsage uint64
 
 const (
 	BufferUsageMapRead  BufferUsage = 0x0001
@@ -86,8 +88,8 @@ const (
 type LoadOp uint32
 
 const (
-	LoadOpClear LoadOp = 1
-	LoadOpLoad  LoadOp = 2
+	LoadOpLoad  LoadOp = 1
+	LoadOpClear LoadOp = 2
 )
 
 // StoreOp mirrors WGPUStoreOp.
@@ -102,19 +104,23 @@ const (
 type BlendFactor uint32
 
 const (
-	BlendFactorZero             BlendFactor = 0
-	BlendFactorOne              BlendFactor = 1
-	BlendFactorDst              BlendFactor = 4
-	BlendFactorDstAlpha         BlendFactor = 8
-	BlendFactorSrcAlpha         BlendFactor = 6
-	BlendFactorOneMinusSrcAlpha BlendFactor = 7
+	BlendFactorZero             BlendFactor = 1
+	BlendFactorOne              BlendFactor = 2
+	BlendFactorSrc              BlendFactor = 3
+	BlendFactorOneMinusSrc      BlendFactor = 4
+	BlendFactorSrcAlpha         BlendFactor = 5
+	BlendFactorOneMinusSrcAlpha BlendFactor = 6
+	BlendFactorDst              BlendFactor = 7
+	BlendFactorOneMinusDst      BlendFactor = 8
+	BlendFactorDstAlpha         BlendFactor = 9
+	BlendFactorOneMinusDstAlpha BlendFactor = 10
 )
 
 // BlendOperation mirrors WGPUBlendOperation.
 type BlendOperation uint32
 
 const (
-	BlendOperationAdd BlendOperation = 0
+	BlendOperationAdd BlendOperation = 1
 )
 
 // IndexFormat mirrors WGPUIndexFormat.
@@ -129,51 +135,51 @@ const (
 type PrimitiveTopology uint32
 
 const (
-	PrimitiveTopologyPointList     PrimitiveTopology = 0
-	PrimitiveTopologyLineList      PrimitiveTopology = 1
-	PrimitiveTopologyLineStrip     PrimitiveTopology = 2
-	PrimitiveTopologyTriangleList  PrimitiveTopology = 3
-	PrimitiveTopologyTriangleStrip PrimitiveTopology = 4
+	PrimitiveTopologyPointList     PrimitiveTopology = 1
+	PrimitiveTopologyLineList      PrimitiveTopology = 2
+	PrimitiveTopologyLineStrip     PrimitiveTopology = 3
+	PrimitiveTopologyTriangleList  PrimitiveTopology = 4
+	PrimitiveTopologyTriangleStrip PrimitiveTopology = 5
 )
 
 // VertexFormat mirrors WGPUVertexFormat.
 type VertexFormat uint32
 
 const (
-	VertexFormatFloat32x2 VertexFormat = 9
-	VertexFormatFloat32x3 VertexFormat = 11
-	VertexFormatFloat32x4 VertexFormat = 12
-	VertexFormatUint8x4   VertexFormat = 3
-	VertexFormatUnorm8x4  VertexFormat = 19
+	VertexFormatUnorm8x4  VertexFormat = 0x09 // WGPUVertexFormat_Unorm8x4
+	VertexFormatFloat32x2 VertexFormat = 0x1D // WGPUVertexFormat_Float32x2
+	VertexFormatFloat32x3 VertexFormat = 0x1E // WGPUVertexFormat_Float32x3
+	VertexFormatFloat32x4 VertexFormat = 0x1F // WGPUVertexFormat_Float32x4
+	VertexFormatUint8x4   VertexFormat = 0x03 // WGPUVertexFormat_Uint8x4
 )
 
 // VertexStepMode mirrors WGPUVertexStepMode.
 type VertexStepMode uint32
 
 const (
-	VertexStepModeVertex   VertexStepMode = 0
-	VertexStepModeInstance VertexStepMode = 1
+	VertexStepModeVertex   VertexStepMode = 2
+	VertexStepModeInstance VertexStepMode = 3
 )
 
 // CullMode mirrors WGPUCullMode.
 type CullMode uint32
 
 const (
-	CullModeNone  CullMode = 0
-	CullModeFront CullMode = 1
-	CullModeBack  CullMode = 2
+	CullModeNone  CullMode = 1
+	CullModeFront CullMode = 2
+	CullModeBack  CullMode = 3
 )
 
 // FrontFace mirrors WGPUFrontFace.
 type FrontFace uint32
 
 const (
-	FrontFaceCCW FrontFace = 0
-	FrontFaceCW  FrontFace = 1
+	FrontFaceCCW FrontFace = 1
+	FrontFaceCW  FrontFace = 2
 )
 
-// ColorWriteMask mirrors WGPUColorWriteMask.
-type ColorWriteMask uint32
+// ColorWriteMask mirrors WGPUColorWriteMask (WGPUFlags = uint64).
+type ColorWriteMask uint64
 
 const (
 	ColorWriteMaskAll ColorWriteMask = 0xF
@@ -220,8 +226,8 @@ const (
 type FilterMode uint32
 
 const (
-	FilterModeNearest FilterMode = 0
-	FilterModeLinear  FilterMode = 1
+	FilterModeNearest FilterMode = 1
+	FilterModeLinear  FilterMode = 2
 )
 
 // RenderPassDepthStencilAttachment is WGPURenderPassDepthStencilAttachment.
@@ -237,10 +243,85 @@ type RenderPassDepthStencilAttachment struct {
 	StencilReadOnly   uint32
 }
 
+// StringView is WGPUStringView (data pointer + length).
+type StringView struct {
+	Data   uintptr
+	Length uintptr
+}
+
+// MakeStringView creates a StringView from a Go string. The caller must keep
+// the byte slice alive (use runtime.KeepAlive) until the C call completes.
+func MakeStringView(s string) (StringView, []byte) {
+	b := make([]byte, len(s)+1)
+	copy(b, s)
+	return StringView{
+		Data:   uintptr(unsafe.Pointer(&b[0])),
+		Length: uintptr(len(s)),
+	}, b
+}
+
+// NullStringView returns a StringView with WGPU_STRING_VIEW_INIT (null data, 0 length).
+func NullStringView() StringView {
+	return StringView{}
+}
+
+// CallbackMode mirrors WGPUCallbackMode.
+type CallbackMode uint32
+
+const (
+	CallbackModeWaitAnyOnly       CallbackMode = 1
+	CallbackModeAllowProcessEvents CallbackMode = 2
+	CallbackModeAllowSpontaneous  CallbackMode = 3
+)
+
+// RequestAdapterStatus mirrors WGPURequestAdapterStatus.
+const RequestAdapterStatusSuccess uint32 = 1
+
+// RequestDeviceStatus mirrors WGPURequestDeviceStatus.
+const RequestDeviceStatusSuccess uint32 = 1
+
+// MapAsyncStatusSuccess mirrors WGPUMapAsyncStatus_Success.
+const MapAsyncStatusSuccess uint32 = 1
+
+// Future is WGPUFuture.
+type Future struct {
+	ID uint64
+}
+
+// RequestAdapterCallbackInfo is WGPURequestAdapterCallbackInfo.
+type RequestAdapterCallbackInfo struct {
+	NextInChain uintptr
+	Mode        CallbackMode
+	_           [4]byte // padding to align Callback
+	Callback    uintptr
+	Userdata1   uintptr
+	Userdata2   uintptr
+}
+
+// RequestDeviceCallbackInfo is WGPURequestDeviceCallbackInfo.
+type RequestDeviceCallbackInfo struct {
+	NextInChain uintptr
+	Mode        CallbackMode
+	_           [4]byte // padding to align Callback
+	Callback    uintptr
+	Userdata1   uintptr
+	Userdata2   uintptr
+}
+
+// BufferMapCallbackInfo is WGPUBufferMapCallbackInfo.
+type BufferMapCallbackInfo struct {
+	NextInChain uintptr
+	Mode        CallbackMode
+	_           [4]byte // padding to align Callback
+	Callback    uintptr
+	Userdata1   uintptr
+	Userdata2   uintptr
+}
+
 // SamplerDescriptor is WGPUSamplerDescriptor.
 type SamplerDescriptor struct {
 	NextInChain   uintptr
-	Label         uintptr
+	Label         StringView
 	AddressModeU  AddressMode
 	AddressModeV  AddressMode
 	AddressModeW  AddressMode
@@ -258,10 +339,10 @@ type SamplerDescriptor struct {
 // Pipeline creation structs (C-compatible layout)
 // ---------------------------------------------------------------------------
 
-// ShaderModuleWGSLDescriptor is the WGSL chained struct for shader creation.
+// ShaderModuleWGSLDescriptor is the WGSL chained struct (WGPUShaderSourceWGSL) for shader creation.
 type ShaderModuleWGSLDescriptor struct {
 	Chain SChainedStruct
-	Code  uintptr // *C.char
+	Code  StringView
 }
 
 // SChainedStruct is the chained struct header.
@@ -274,7 +355,7 @@ type SChainedStruct struct {
 // ShaderModuleDescriptor is WGPUShaderModuleDescriptor.
 type ShaderModuleDescriptor struct {
 	NextInChain uintptr
-	Label       uintptr
+	Label       StringView
 }
 
 // VertexAttribute is WGPUVertexAttribute.
@@ -288,9 +369,10 @@ type VertexAttribute struct {
 
 // VertexBufferLayout is WGPUVertexBufferLayout.
 type VertexBufferLayout struct {
-	ArrayStride    uint64
 	StepMode       VertexStepMode
-	AttributeCount uint32
+	_              [4]byte // padding
+	ArrayStride    uint64
+	AttributeCount uintptr
 	Attributes     uintptr
 }
 
@@ -298,12 +380,10 @@ type VertexBufferLayout struct {
 type VertexState struct {
 	NextInChain   uintptr
 	Module        ShaderModule
-	EntryPoint    uintptr // *C.char
-	ConstantCount uint32
-	_             [4]byte
+	EntryPoint    StringView
+	ConstantCount uintptr
 	Constants     uintptr
-	BufferCount   uint32
-	_             [4]byte
+	BufferCount   uintptr
 	Buffers       uintptr
 }
 
@@ -311,12 +391,10 @@ type VertexState struct {
 type FragmentState struct {
 	NextInChain   uintptr
 	Module        ShaderModule
-	EntryPoint    uintptr
-	ConstantCount uint32
-	_             [4]byte
+	EntryPoint    StringView
+	ConstantCount uintptr
 	Constants     uintptr
-	TargetCount   uint32
-	_             [4]byte
+	TargetCount   uintptr
 	Targets       uintptr
 }
 
@@ -324,10 +402,9 @@ type FragmentState struct {
 type ColorTargetState struct {
 	NextInChain uintptr
 	Format      TextureFormat
-	_           [4]byte
+	_           [4]byte // padding to align Blend ptr
 	Blend       uintptr // *BlendState, 0 for no blending
-	WriteMask   ColorWriteMask
-	_           [4]byte
+	WriteMask   ColorWriteMask // uint64
 }
 
 // BlendState is WGPUBlendState.
@@ -350,6 +427,8 @@ type PrimitiveState struct {
 	StripIndexFormat IndexFormat
 	FrontFace_       FrontFace
 	CullMode_        CullMode
+	UnclippedDepth   uint32
+	_                [4]byte // padding
 }
 
 // MultisampleState is WGPUMultisampleState.
@@ -358,7 +437,7 @@ type MultisampleState struct {
 	Count                  uint32
 	Mask                   uint32
 	AlphaToCoverageEnabled uint32
-	_                      [4]byte
+	_                      [4]byte // padding
 }
 
 // DepthStencilState is WGPUDepthStencilState.
@@ -388,7 +467,7 @@ type StencilFaceState struct {
 // RenderPipelineDescriptor is WGPURenderPipelineDescriptor.
 type RenderPipelineDescriptor struct {
 	NextInChain  uintptr
-	Label        uintptr
+	Label        StringView
 	Layout       PipelineLayout
 	Vertex       VertexState
 	Primitive    PrimitiveState
@@ -401,7 +480,8 @@ type RenderPipelineDescriptor struct {
 type BindGroupLayoutEntry struct {
 	NextInChain    uintptr
 	Binding        uint32
-	Visibility     uint32
+	_              [4]byte // padding
+	Visibility     uint64 // WGPUShaderStage (WGPUFlags = uint64)
 	Buffer_        BindGroupLayoutEntryBuffer
 	Sampler_       BindGroupLayoutEntrySampler
 	Texture_       BindGroupLayoutEntryTexture
@@ -444,9 +524,8 @@ type BindGroupLayoutEntryStorageTexture struct {
 // BindGroupLayoutDescriptor is WGPUBindGroupLayoutDescriptor.
 type BindGroupLayoutDescriptor struct {
 	NextInChain uintptr
-	Label       uintptr
-	EntryCount  uint32
-	_           [4]byte
+	Label       StringView
+	EntryCount  uintptr
 	Entries     uintptr
 }
 
@@ -465,25 +544,23 @@ type BindGroupEntry struct {
 // BindGroupDescriptor is WGPUBindGroupDescriptor.
 type BindGroupDescriptor struct {
 	NextInChain uintptr
-	Label       uintptr
+	Label       StringView
 	Layout      BindGroupLayout
-	EntryCount  uint32
-	_           [4]byte
+	EntryCount  uintptr
 	Entries     uintptr
 }
 
 // PipelineLayoutDescriptor is WGPUPipelineLayoutDescriptor.
 type PipelineLayoutDescriptor struct {
 	NextInChain          uintptr
-	Label                uintptr
-	BindGroupLayoutCount uint32
-	_                    [4]byte
+	Label                StringView
+	BindGroupLayoutCount uintptr
 	BindGroupLayouts     uintptr
 }
 
 // SType constants for chained structs.
 const (
-	STypeShaderModuleWGSLDescriptor uint32 = 6
+	STypeShaderModuleWGSLDescriptor uint32 = 2 // WGPUSType_ShaderSourceWGSL
 )
 
 // ---------------------------------------------------------------------------
@@ -508,50 +585,53 @@ type Origin3D struct {
 // TextureDescriptor is WGPUTextureDescriptor.
 type TextureDescriptor struct {
 	NextInChain     uintptr
-	Label           uintptr
-	Usage           TextureUsage
+	Label           StringView
+	Usage           TextureUsage // uint64
 	Dimension       uint32
-	Size            Extent3D
+	Size            Extent3D // 12 bytes, starts at offset 36
 	Format          TextureFormat
 	MipLevelCount   uint32
 	SampleCount     uint32
-	ViewFormatCount uint32
+	_               [4]byte // padding to align ViewFormatCount to 8
+	ViewFormatCount uintptr
 	ViewFormats     uintptr
 }
 
 // BufferDescriptor is WGPUBufferDescriptor.
 type BufferDescriptor struct {
 	NextInChain      uintptr
-	Label            uintptr
-	Usage            BufferUsage
+	Label            StringView
+	Usage            BufferUsage // uint64
 	Size             uint64
 	MappedAtCreation uint32
 	_                [4]byte // padding
 }
 
-// ImageCopyTexture is WGPUImageCopyTexture.
-type ImageCopyTexture struct {
-	NextInChain uintptr
-	Texture_    Texture
-	MipLevel    uint32
-	Origin      Origin3D
-	Aspect      uint32
+// TexelCopyTextureInfo is WGPUTexelCopyTextureInfo (formerly ImageCopyTexture).
+type TexelCopyTextureInfo struct {
+	Texture_ Texture
+	MipLevel uint32
+	Origin   Origin3D
+	Aspect   uint32
 }
 
-// ImageCopyBuffer is WGPUImageCopyBuffer.
-type ImageCopyBuffer struct {
-	NextInChain uintptr
-	Layout      TextureDataLayout
-	Buffer_     Buffer
+// TexelCopyBufferInfo is WGPUTexelCopyBufferInfo (formerly ImageCopyBuffer).
+type TexelCopyBufferInfo struct {
+	Layout  TexelCopyBufferLayout
+	Buffer_ Buffer
 }
 
-// TextureDataLayout is WGPUTextureDataLayout.
-type TextureDataLayout struct {
-	NextInChain  uintptr
+// TexelCopyBufferLayout is WGPUTexelCopyBufferLayout (formerly TextureDataLayout).
+type TexelCopyBufferLayout struct {
 	Offset       uint64
 	BytesPerRow  uint32
 	RowsPerImage uint32
 }
+
+// Aliases for backward compatibility within this package.
+type ImageCopyTexture = TexelCopyTextureInfo
+type ImageCopyBuffer = TexelCopyBufferInfo
+type TextureDataLayout = TexelCopyBufferLayout
 
 // RenderPassColorAttachment is WGPURenderPassColorAttachment.
 type RenderPassColorAttachment struct {
@@ -584,35 +664,33 @@ type SurfaceConfiguration struct {
 	NextInChain     uintptr
 	Device          Device
 	Format          TextureFormat
-	Usage           TextureUsage
-	ViewFormatCount uint32
-	_               [4]byte
-	ViewFormats     uintptr
-	AlphaMode       CompositeAlphaMode
+	_               [4]byte // padding after format (uint32) to align usage (uint64)
+	Usage           TextureUsage // uint64
 	Width           uint32
 	Height          uint32
+	ViewFormatCount uintptr
+	ViewFormats     uintptr
+	AlphaMode       CompositeAlphaMode
 	PresentMode     PresentMode
-	_               [4]byte
 }
 
 // SurfaceTexture is WGPUSurfaceTexture (returned by GetCurrentTexture).
 type SurfaceTexture struct {
-	Texture_   Texture
-	Suboptimal uint32
-	Status     uint32
+	NextInChain uintptr
+	Texture_    Texture
+	Status      uint32
+	_           [4]byte // padding
 }
 
 // SurfaceCapabilities is WGPUSurfaceCapabilities.
 type SurfaceCapabilities struct {
 	NextInChain      uintptr
-	FormatCount      uint32
-	_                [4]byte
+	Usages           TextureUsage // uint64
+	FormatCount      uintptr
 	Formats          uintptr
-	PresentModeCount uint32
-	_2               [4]byte
+	PresentModeCount uintptr
 	PresentModes     uintptr
-	AlphaModeCount   uint32
-	_3               [4]byte
+	AlphaModeCount   uintptr
 	AlphaModes       uintptr
 }
 
@@ -639,22 +717,21 @@ type SurfaceDescriptorFromXlibWindow struct {
 // SurfaceDescriptor is WGPUSurfaceDescriptor.
 type SurfaceDescriptor struct {
 	NextInChain uintptr
-	Label       uintptr
+	Label       StringView
 }
 
 // SType constants for surface chained structs.
 const (
-	STypeSurfaceDescriptorFromMetalLayer  uint32 = 1
-	STypeSurfaceDescriptorFromWindowsHWND uint32 = 2
-	STypeSurfaceDescriptorFromXlibWindow  uint32 = 3
+	STypeSurfaceDescriptorFromMetalLayer  uint32 = 4 // WGPUSType_SurfaceSourceMetalLayer
+	STypeSurfaceDescriptorFromWindowsHWND uint32 = 5 // WGPUSType_SurfaceSourceWindowsHWND
+	STypeSurfaceDescriptorFromXlibWindow  uint32 = 6 // WGPUSType_SurfaceSourceXlibWindow
 )
 
 // RenderPassDescriptor is WGPURenderPassDescriptor.
 type RenderPassDescriptor struct {
 	NextInChain            uintptr
-	Label                  uintptr
-	ColorAttachmentCount   uint32
-	_                      [4]byte // padding
+	Label                  StringView
+	ColorAttachmentCount   uintptr
 	ColorAttachments       uintptr
 	DepthStencilAttachment uintptr
 	OcclusionQuerySet      QuerySet
@@ -666,10 +743,13 @@ type RenderPassDescriptor struct {
 // ---------------------------------------------------------------------------
 
 var (
-	fnCreateInstance                   func(uintptr) Instance
-	fnInstanceRequestAdapter           func(Instance, uintptr, uintptr, uintptr)
-	fnAdapterRequestDevice             func(Adapter, uintptr, uintptr, uintptr)
-	fnDeviceGetQueue                   func(Device) Queue
+	fnCreateInstance func(uintptr) Instance
+	// fnInstanceRequestAdapter and fnAdapterRequestDevice use SyscallN
+	// because they take callback-info structs by value and return WGPUFuture.
+	symInstanceRequestAdapter uintptr
+	symAdapterRequestDevice   uintptr
+	symInstanceWaitAny        uintptr
+	fnDeviceGetQueue          func(Device) Queue
 	fnDeviceCreateTexture              func(Device, *TextureDescriptor) Texture
 	fnDeviceCreateBuffer               func(Device, *BufferDescriptor) Buffer
 	fnDeviceCreateShaderModule         func(Device, uintptr) ShaderModule
@@ -688,7 +768,7 @@ var (
 	fnRenderPipelineRelease            func(RenderPipeline)
 	fnQueueWriteBuffer                 func(Queue, Buffer, uint64, uintptr, uint64)
 	fnQueueWriteTexture                func(Queue, *ImageCopyTexture, uintptr, uint64, *TextureDataLayout, *Extent3D)
-	fnQueueSubmit                      func(Queue, uint32, uintptr)
+	fnQueueSubmit                      func(Queue, uintptr, uintptr)
 	fnCommandEncoderBeginRenderPass    func(CommandEncoder, *RenderPassDescriptor) RenderPassEncoder
 	fnCommandEncoderFinish             func(CommandEncoder, uintptr) CommandBuffer
 	fnCommandEncoderRelease            func(CommandEncoder)
@@ -719,8 +799,8 @@ var (
 	fnDeviceCreateBindGroupLayout       func(Device, *BindGroupLayoutDescriptor) BindGroupLayout
 	fnDeviceCreateBindGroup             func(Device, *BindGroupDescriptor) BindGroup
 	fnDeviceCreatePipelineLayout        func(Device, *PipelineLayoutDescriptor) PipelineLayout
-	fnCommandEncoderCopyTextureToBuffer func(CommandEncoder, *ImageCopyTexture, *ImageCopyBuffer, *Extent3D)
-	fnBufferMapAsync                    func(Buffer, uint32, uint64, uint64, uintptr, uintptr)
+	fnCommandEncoderCopyTextureToBuffer func(CommandEncoder, *TexelCopyTextureInfo, *TexelCopyBufferInfo, *Extent3D)
+	symBufferMapAsync                   uintptr
 	fnBufferGetMappedRange              func(Buffer, uint64, uint64) uintptr
 	fnBufferUnmap                       func(Buffer)
 	fnBindGroupLayoutRelease            func(BindGroupLayout)
@@ -831,7 +911,7 @@ func QueueSubmit(queue Queue, cmds []CommandBuffer) {
 	if len(cmds) == 0 {
 		return
 	}
-	fnQueueSubmit(queue, uint32(len(cmds)), uintptr(unsafe.Pointer(&cmds[0])))
+	fnQueueSubmit(queue, uintptr(len(cmds)), uintptr(unsafe.Pointer(&cmds[0])))
 }
 
 // CommandEncoderBeginRenderPass begins a render pass.
@@ -901,16 +981,16 @@ func RenderPassRelease(rpe RenderPassEncoder) {
 
 // DeviceCreateShaderModuleWGSL creates a shader module from WGSL source.
 func DeviceCreateShaderModuleWGSL(dev Device, code string) ShaderModule {
-	codeBytes := cstr(code)
+	codeSV, codeKeep := MakeStringView(code)
 	wgslDesc := ShaderModuleWGSLDescriptor{
 		Chain: SChainedStruct{SType: STypeShaderModuleWGSLDescriptor},
-		Code:  uintptr(unsafe.Pointer(codeBytes)),
+		Code:  codeSV,
 	}
 	desc := ShaderModuleDescriptor{
 		NextInChain: uintptr(unsafe.Pointer(&wgslDesc)),
 	}
 	ret := fnDeviceCreateShaderModule(dev, uintptr(unsafe.Pointer(&desc)))
-	runtime.KeepAlive(codeBytes)
+	runtime.KeepAlive(codeKeep)
 	runtime.KeepAlive(wgslDesc)
 	return ret
 }
@@ -941,8 +1021,19 @@ func CommandEncoderCopyTextureToBuffer(enc CommandEncoder, src *ImageCopyTexture
 }
 
 // BufferMapAsync maps a buffer for reading.
+// v27: wgpuBufferMapAsync(buffer, mode, offset, size, callbackInfo) -> WGPUFuture
 func BufferMapAsync(buf Buffer, mode uint32, offset, size uint64) {
-	fnBufferMapAsync(buf, mode, offset, size, 0, 0)
+	// Use AllowProcessEvents mode so DevicePoll triggers the callback.
+	cb := purego.NewCallback(func(status uint32, msgData uintptr, msgLen uintptr, userdata1 uintptr, userdata2 uintptr) {
+	})
+	info := BufferMapCallbackInfo{
+		Mode:     CallbackModeAllowProcessEvents,
+		Callback: cb,
+	}
+	purego.SyscallN(symBufferMapAsync,
+		uintptr(buf), uintptr(mode), uintptr(offset), uintptr(size),
+		uintptr(unsafe.Pointer(&info)))
+	runtime.KeepAlive(info)
 }
 
 // BufferGetMappedRange returns the mapped pointer.
@@ -1000,19 +1091,31 @@ func SamplerRelease(s Sampler) {
 }
 
 // InstanceRequestAdapterSync synchronously requests an adapter from the instance.
-// wgpu-native calls the callback inline before returning.
+// Uses AllowSpontaneous mode — wgpu-native fires the callback inline before returning.
 func InstanceRequestAdapterSync(inst Instance) (Adapter, error) {
 	var result Adapter
 	var resultErr error
 
-	cb := purego.NewCallback(func(status uint32, adapter uintptr, msg uintptr, userdata uintptr) {
-		if status != 0 {
+	// v27 callback: (status, adapter, message{data,len}, userdata1, userdata2)
+	cb := purego.NewCallback(func(status uint32, adapter uintptr, msgData uintptr, msgLen uintptr, userdata1 uintptr, userdata2 uintptr) {
+		if status != RequestAdapterStatusSuccess {
 			resultErr = fmt.Errorf("adapter request failed (status %d)", status)
 			return
 		}
 		result = Adapter(adapter)
 	})
-	fnInstanceRequestAdapter(inst, 0, cb, 0)
+
+	info := RequestAdapterCallbackInfo{
+		Mode:     CallbackModeAllowSpontaneous,
+		Callback: cb,
+	}
+
+	// On ARM64, structs > 16 bytes are passed by hidden pointer.
+	purego.SyscallN(symInstanceRequestAdapter,
+		uintptr(inst), 0,
+		uintptr(unsafe.Pointer(&info)))
+	runtime.KeepAlive(info)
+
 	if resultErr != nil {
 		return 0, resultErr
 	}
@@ -1023,19 +1126,28 @@ func InstanceRequestAdapterSync(inst Instance) (Adapter, error) {
 }
 
 // AdapterRequestDeviceSync synchronously requests a device from the adapter.
-// wgpu-native calls the callback inline before returning.
-func AdapterRequestDeviceSync(adapter Adapter) (Device, error) {
+func AdapterRequestDeviceSync(adapter Adapter, inst Instance) (Device, error) {
 	var result Device
 	var resultErr error
 
-	cb := purego.NewCallback(func(status uint32, device uintptr, msg uintptr, userdata uintptr) {
-		if status != 0 {
+	cb := purego.NewCallback(func(status uint32, device uintptr, msgData uintptr, msgLen uintptr, userdata1 uintptr, userdata2 uintptr) {
+		if status != RequestDeviceStatusSuccess {
 			resultErr = fmt.Errorf("device request failed (status %d)", status)
 			return
 		}
 		result = Device(device)
 	})
-	fnAdapterRequestDevice(adapter, 0, cb, 0)
+
+	info := RequestDeviceCallbackInfo{
+		Mode:     CallbackModeAllowSpontaneous,
+		Callback: cb,
+	}
+
+	purego.SyscallN(symAdapterRequestDevice,
+		uintptr(adapter), 0,
+		uintptr(unsafe.Pointer(&info)))
+	runtime.KeepAlive(info)
+
 	if resultErr != nil {
 		return 0, resultErr
 	}
@@ -1099,10 +1211,45 @@ func SurfaceGetCapabilities(surface Surface, adapter Adapter, caps *SurfaceCapab
 }
 
 // ---------------------------------------------------------------------------
+// Library loading
+// ---------------------------------------------------------------------------
+
+// loadWGPULib attempts to load the wgpu-native shared library. It checks
+// WGPU_NATIVE_LIB_PATH first (which may be an exact file path or a directory
+// containing the library), then falls back to the platform default name.
+func loadWGPULib(defaultName string) (uintptr, error) {
+	var names []string
+	if p := os.Getenv("WGPU_NATIVE_LIB_PATH"); p != "" {
+		info, err := os.Stat(p)
+		if err == nil && info.IsDir() {
+			names = append(names, filepath.Join(p, defaultName))
+		} else {
+			names = append(names, p)
+		}
+	}
+	names = append(names, defaultName)
+
+	var firstErr error
+	for _, name := range names {
+		h, err := purego.Dlopen(name, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+		if err == nil {
+			return h, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return 0, fmt.Errorf("failed to load %s: %w", defaultName, firstErr)
+}
+
+// ---------------------------------------------------------------------------
 // Init loads libwgpu_native and resolves all function symbols
 // ---------------------------------------------------------------------------
 
 // Init loads the wgpu-native shared library and resolves symbols.
+// The library search order is:
+//  1. WGPU_NATIVE_LIB_PATH env var (exact file path or directory)
+//  2. Platform default name via dynamic linker search (LD_LIBRARY_PATH, etc.)
 func Init() error {
 	var libName string
 	switch runtime.GOOS {
@@ -1116,9 +1263,9 @@ func Init() error {
 		return fmt.Errorf("wgpu: unsupported platform %s", runtime.GOOS)
 	}
 
-	lib, err := purego.Dlopen(libName, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+	lib, err := loadWGPULib(libName)
 	if err != nil {
-		return fmt.Errorf("wgpu: failed to load %s: %w", libName, err)
+		return fmt.Errorf("wgpu: %w", err)
 	}
 
 	reg := func(fn interface{}, name string) {
@@ -1134,8 +1281,16 @@ func Init() error {
 	}
 
 	reg(&fnCreateInstance, "wgpuCreateInstance")
-	reg(&fnInstanceRequestAdapter, "wgpuInstanceRequestAdapter")
-	reg(&fnAdapterRequestDevice, "wgpuAdapterRequestDevice")
+	// InstanceRequestAdapter and AdapterRequestDevice use SyscallN (struct-by-value params).
+	if err == nil {
+		symInstanceRequestAdapter, err = purego.Dlsym(lib, "wgpuInstanceRequestAdapter")
+	}
+	if err == nil {
+		symAdapterRequestDevice, err = purego.Dlsym(lib, "wgpuAdapterRequestDevice")
+	}
+	if err == nil {
+		symInstanceWaitAny, err = purego.Dlsym(lib, "wgpuInstanceWaitAny")
+	}
 	reg(&fnDeviceGetQueue, "wgpuDeviceGetQueue")
 	reg(&fnDeviceCreateTexture, "wgpuDeviceCreateTexture")
 	reg(&fnDeviceCreateBuffer, "wgpuDeviceCreateBuffer")
@@ -1176,7 +1331,10 @@ func Init() error {
 	reg(&fnDeviceCreateBindGroup, "wgpuDeviceCreateBindGroup")
 	reg(&fnDeviceCreatePipelineLayout, "wgpuDeviceCreatePipelineLayout")
 	reg(&fnCommandEncoderCopyTextureToBuffer, "wgpuCommandEncoderCopyTextureToBuffer")
-	reg(&fnBufferMapAsync, "wgpuBufferMapAsync")
+	// BufferMapAsync uses SyscallN (struct-by-value param).
+	if err == nil {
+		symBufferMapAsync, err = purego.Dlsym(lib, "wgpuBufferMapAsync")
+	}
 	reg(&fnBufferGetMappedRange, "wgpuBufferGetMappedRange")
 	reg(&fnBufferUnmap, "wgpuBufferUnmap")
 	reg(&fnBindGroupLayoutRelease, "wgpuBindGroupLayoutRelease")
@@ -1197,9 +1355,3 @@ func Init() error {
 	return err
 }
 
-// cstr converts a Go string to a null-terminated C string.
-func cstr(s string) *byte {
-	b := make([]byte, len(s)+1)
-	copy(b, s)
-	return &b[0]
-}

@@ -33,7 +33,7 @@ func (t *Texture) Upload(data []byte, mipLevel int) {
 		Texture_: t.handle,
 		MipLevel: uint32(mipLevel),
 		Origin:   wgpu.Origin3D{},
-		Aspect:   0, // All
+		Aspect:   1, // WGPUTextureAspect_All // All
 	}
 	layout := wgpu.TextureDataLayout{
 		BytesPerRow:  uint32(t.w * bpp),
@@ -60,7 +60,7 @@ func (t *Texture) UploadRegion(data []byte, x, y, w, h, mipLevel int) {
 		Texture_: t.handle,
 		MipLevel: uint32(mipLevel),
 		Origin:   wgpu.Origin3D{X: uint32(x), Y: uint32(y)},
-		Aspect:   0,
+		Aspect:   1, // WGPUTextureAspect_All
 	}
 	layout := wgpu.TextureDataLayout{
 		BytesPerRow:  uint32(w * bpp),
@@ -104,7 +104,7 @@ func (t *Texture) ReadPixels(dst []byte) {
 		Texture_: t.handle,
 		MipLevel: 0,
 		Origin:   wgpu.Origin3D{},
-		Aspect:   0,
+		Aspect:   1, // WGPUTextureAspect_All
 	}
 	dstCopy := wgpu.ImageCopyBuffer{
 		Layout: wgpu.TextureDataLayout{

@@ -65,8 +65,8 @@ func (p *Pipeline) createPipeline() {
 		return
 	}
 
-	vertexEntry := cstr("vs_main")
-	fragmentEntry := cstr("fs_main")
+	vertexEntrySV, vertexEntryKeep := wgpu.MakeStringView("vs_main")
+	fragmentEntrySV, fragmentEntryKeep := wgpu.MakeStringView("fs_main")
 
 	// Build vertex attributes from pipeline vertex format.
 	var attrs []wgpu.VertexAttribute
@@ -89,13 +89,13 @@ func (p *Pipeline) createPipeline() {
 	}
 
 	var buffersPtr uintptr
-	var bufferCount uint32
+	var bufferCount uintptr
 	var vbl wgpu.VertexBufferLayout
 	if len(attrs) > 0 {
 		vbl = wgpu.VertexBufferLayout{
 			ArrayStride:    stride,
 			StepMode:       wgpu.VertexStepModeVertex,
-			AttributeCount: uint32(len(attrs)),
+			AttributeCount: uintptr(len(attrs)),
 			Attributes:     uintptr(unsafe.Pointer(&attrs[0])),
 		}
 		buffersPtr = uintptr(unsafe.Pointer(&vbl))
@@ -120,7 +120,7 @@ func (p *Pipeline) createPipeline() {
 
 	fragment := wgpu.FragmentState{
 		Module:      shader.fragmentModule,
-		EntryPoint:  uintptr(unsafe.Pointer(fragmentEntry)),
+		EntryPoint:  fragmentEntrySV,
 		TargetCount: 1,
 		Targets:     uintptr(unsafe.Pointer(&target)),
 	}
@@ -129,7 +129,7 @@ func (p *Pipeline) createPipeline() {
 		Layout: p.layout,
 		Vertex: wgpu.VertexState{
 			Module:      shader.vertexModule,
-			EntryPoint:  uintptr(unsafe.Pointer(vertexEntry)),
+			EntryPoint:  vertexEntrySV,
 			BufferCount: bufferCount,
 			Buffers:     buffersPtr,
 		},
@@ -165,8 +165,8 @@ func (p *Pipeline) createPipeline() {
 	}
 
 	p.handle = wgpu.DeviceCreateRenderPipelineTyped(p.dev.device, &desc)
-	runtime.KeepAlive(vertexEntry)
-	runtime.KeepAlive(fragmentEntry)
+	runtime.KeepAlive(vertexEntryKeep)
+	runtime.KeepAlive(fragmentEntryKeep)
 	runtime.KeepAlive(attrs)
 	runtime.KeepAlive(vbl)
 	runtime.KeepAlive(blend)
@@ -193,7 +193,7 @@ func (p *Pipeline) createBindGroupLayouts() {
 		},
 	}
 	uniformBGLDesc := wgpu.BindGroupLayoutDescriptor{
-		EntryCount: uint32(len(uniformEntries)),
+		EntryCount: uintptr(len(uniformEntries)),
 		Entries:    uintptr(unsafe.Pointer(&uniformEntries[0])),
 	}
 	p.uniformBGL = wgpu.DeviceCreateBindGroupLayout(p.dev.device, &uniformBGLDesc)
@@ -218,7 +218,7 @@ func (p *Pipeline) createBindGroupLayouts() {
 		},
 	}
 	textureBGLDesc := wgpu.BindGroupLayoutDescriptor{
-		EntryCount: uint32(len(textureEntries)),
+		EntryCount: uintptr(len(textureEntries)),
 		Entries:    uintptr(unsafe.Pointer(&textureEntries[0])),
 	}
 	p.textureBGL = wgpu.DeviceCreateBindGroupLayout(p.dev.device, &textureBGLDesc)
@@ -227,7 +227,7 @@ func (p *Pipeline) createBindGroupLayouts() {
 	// Pipeline layout with both groups.
 	bgls := []wgpu.BindGroupLayout{p.uniformBGL, p.textureBGL}
 	plDesc := wgpu.PipelineLayoutDescriptor{
-		BindGroupLayoutCount: uint32(len(bgls)),
+		BindGroupLayoutCount: uintptr(len(bgls)),
 		BindGroupLayouts:     uintptr(unsafe.Pointer(&bgls[0])),
 	}
 	p.layout = wgpu.DeviceCreatePipelineLayout(p.dev.device, &plDesc)

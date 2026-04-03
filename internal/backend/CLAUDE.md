@@ -234,6 +234,13 @@ implementation details:
   the offscreen texture.
 - **GPU testing checklist**: See `internal/backend/webgpu/GPU_TESTING.md` for
   the 7-tier validation plan (device init → visual presentation).
+- **wgpu-native v27 compatibility**: The Go bindings in `internal/wgpu/wgpu.go`
+  target wgpu-native v27+. When updating bindings, check the installed header
+  at `$(brew --prefix wgpu-native)/include/webgpu.h` for current enum values,
+  struct layouts, and function signatures. Key differences from older versions:
+  all enums add `Undefined = 0` sentinel, `WGPUFlags` types are `uint64`,
+  descriptors use `WGPUStringView` labels, async functions use `CallbackInfo`
+  structs by value.
 
 ## Coverage Requirements
 
