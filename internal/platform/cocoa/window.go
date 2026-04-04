@@ -386,6 +386,11 @@ func (w *Window) PollGamepads() {
 	pollGamepadsGC(w.handler)
 }
 
+// MetalLayer returns the CAMetalLayer pointer for this window.
+func (w *Window) MetalLayer() uintptr {
+	return uintptr(w.metalLayer)
+}
+
 // CreateVulkanSurface creates a VkSurfaceKHR using vkCreateMetalSurfaceEXT
 // with the CAMetalLayer from this window's content view. The Vulkan library
 // must already be loaded before calling this method.

@@ -86,6 +86,7 @@ type engine struct {
 	windowTitle string
 	windowW     int
 	windowH     int
+	fbW, fbH    int // physical framebuffer dimensions
 
 	// Canvas presentation (2D readback path).
 	pixelBuf []byte
@@ -143,9 +144,9 @@ func (e *engine) run() error {
 		return err
 	}
 
-	fbW, fbH := win.FramebufferSize()
+	e.fbW, e.fbH = win.FramebufferSize()
 	if err := dev.Init(backend.DeviceConfig{
-		Width: fbW, Height: fbH, VSync: true,
+		Width: e.fbW, Height: e.fbH, VSync: true,
 	}); err != nil {
 		return err
 	}
@@ -356,7 +357,7 @@ func (e *engine) frame() {
 
 	e.device.BeginFrame()
 
-	ctx := pipeline.NewPassContext(e.windowW, e.windowH)
+	ctx := pipeline.NewPassContext(e.fbW, e.fbH)
 	ctx.ScreenClearEnabled = IsScreenClearedEveryFrame()
 	e.renderPipeline.Execute(e.encoder, ctx)
 
@@ -381,7 +382,7 @@ func (e *engine) frame() {
 
 // presentToCanvas copies rendered pixels to the visible canvas via ReadScreen + putImageData.
 func (e *engine) presentToCanvas() {
-	w, h := e.windowW, e.windowH
+	w, h := e.fbW, e.fbH
 	size := w * h * 4
 	if len(e.pixelBuf) != size {
 		e.pixelBuf = make([]byte, size)

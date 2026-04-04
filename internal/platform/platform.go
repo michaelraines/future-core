@@ -79,6 +79,13 @@ type VulkanSurfaceCreator interface {
 	CreateVulkanSurface(instance uintptr) (uintptr, error)
 }
 
+// MetalLayerProvider is an optional interface that platform windows can
+// implement to expose the CAMetalLayer handle for WebGPU surface creation.
+type MetalLayerProvider interface {
+	// MetalLayer returns the CAMetalLayer pointer for this window.
+	MetalLayer() uintptr
+}
+
 // DefaultWindowConfig returns a reasonable default window configuration.
 func DefaultWindowConfig() WindowConfig {
 	return WindowConfig{
