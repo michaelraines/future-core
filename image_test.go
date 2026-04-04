@@ -74,7 +74,8 @@ func (d *mockDevice) NewShader(_ backend.ShaderDescriptor) (backend.Shader, erro
 	return nil, nil
 }
 func (d *mockDevice) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.RenderTarget, error) {
-	rt := &mockRenderTarget{w: desc.Width, h: desc.Height}
+	colorTex := &mockTexture{w: desc.Width, h: desc.Height}
+	rt := &mockRenderTarget{colorTex: colorTex, w: desc.Width, h: desc.Height}
 	d.renderTargets = append(d.renderTargets, rt)
 	return rt, nil
 }
@@ -143,9 +144,11 @@ func TestNewImageWithDevice(t *testing.T) {
 	require.NotEqual(t, uint32(0), img.textureID, "textureID should be non-zero")
 	require.NotNil(t, registered[img.textureID], "texture should be registered")
 
-	mt := dev.textures[len(dev.textures)-1]
-	require.Equal(t, 64, mt.w)
-	require.Equal(t, 128, mt.h)
+	// The image texture comes from the render target's color texture.
+	require.NotEmpty(t, dev.renderTargets, "render target should be created")
+	rt := dev.renderTargets[len(dev.renderTargets)-1]
+	require.Equal(t, 64, rt.w)
+	require.Equal(t, 128, rt.h)
 }
 
 func TestNewImageFromImageWithDevice(t *testing.T) {
@@ -188,12 +191,16 @@ func TestDisposeReleasesTexture(t *testing.T) {
 	img := NewImage(32, 32)
 	require.NotNil(t, img.texture, "texture should be allocated")
 
-	mt := dev.textures[len(dev.textures)-1]
+	// The texture comes from the render target's color texture.
+	require.NotEmpty(t, dev.renderTargets, "render target should be created")
+	rt := dev.renderTargets[len(dev.renderTargets)-1]
+	mt := rt.colorTex
 	require.False(t, mt.disposed, "texture should not be disposed yet")
 
 	img.Dispose()
 	require.True(t, img.disposed, "image should be disposed")
-	require.True(t, mt.disposed, "GPU texture should be disposed when image is disposed")
+	// The render target dispose cascades to its color texture.
+	require.True(t, rt.disposed, "render target should be disposed when image is disposed")
 	require.Nil(t, img.texture, "texture reference should be nil after dispose")
 }
 
@@ -207,17 +214,14 @@ func TestDisposeIdempotent(t *testing.T) {
 }
 
 func TestWritePixels(t *testing.T) {
-	dev, _ := withMockRenderer(t)
+	_, _ = withMockRenderer(t)
 
 	img := NewImage(64, 64)
 	require.NotNil(t, img.texture)
 
 	pix := make([]byte, 64*64*4)
+	// Verify WritePixels doesn't panic.
 	img.WritePixels(pix)
-
-	mt := dev.textures[len(dev.textures)-1]
-	// mockTexture.Upload is a no-op, but we verify no panic.
-	_ = mt
 }
 
 func TestWritePixelsNoTexture(t *testing.T) {
