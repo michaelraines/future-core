@@ -491,13 +491,14 @@ func TestSpritePassRenderTargetSwitch(t *testing.T) {
 	enc := &mockEncoder{}
 	sp.Execute(enc, NewPassContext(800, 600))
 
-	// Should have 2 BeginRenderPass calls (screen first due to sort, then offscreen).
+	// Should have 2 BeginRenderPass calls (offscreen first so content is
+	// ready when the screen pass samples it, then screen).
 	begins := enc.callsByMethod("BeginRenderPass")
 	require.Len(t, begins, 2)
-	// First pass targets nil (screen, TargetID 0 sorts first).
-	require.Nil(t, begins[0].Args[0])
-	// Second pass targets the mock RT.
-	require.Equal(t, backend.RenderTarget(mockRT), begins[1].Args[0])
+	// First pass targets the mock RT (offscreen renders before screen).
+	require.Equal(t, backend.RenderTarget(mockRT), begins[0].Args[0])
+	// Second pass targets nil (screen, TargetID 0 sorts last).
+	require.Nil(t, begins[1].Args[0])
 
 	// Should have 2 EndRenderPass calls.
 	ends := enc.callsByMethod("EndRenderPass")
