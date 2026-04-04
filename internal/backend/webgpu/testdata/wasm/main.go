@@ -15,11 +15,9 @@ import (
 )
 
 func init() {
-	// Force soft backend in headless browser (SwiftShader WebGPU canvas
-	// compositing doesn't work in headless Chromium). The soft rasterizer's
-	// ReadScreen is a simple memcpy that works everywhere.
-	if err := os.Setenv("FUTURE_CORE_BACKEND", "soft"); err != nil {
-		// Fallback: os.Setenv may not work in all WASM runtimes.
+	// Use the WebGPU backend in the browser. The browser's native
+	// navigator.gpu API handles rendering and canvas presentation.
+	if err := os.Setenv("FUTURE_CORE_BACKEND", "webgpu"); err != nil {
 		_ = err
 	}
 }

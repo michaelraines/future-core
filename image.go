@@ -43,26 +43,12 @@ func NewImage(width, height int) *Image {
 		u1: 1, v1: 1,
 	}
 
-	// Allocate GPU texture and render target if a device is available.
+	// Allocate GPU render target if a device is available. The render
+	// target's color texture is used as the image's texture so that
+	// content drawn TO this image is visible when the image is sampled.
 	if rend := getRenderer(); rend != nil && rend.device != nil {
-		tex, err := rend.device.NewTexture(backend.TextureDescriptor{
-			Width:        width,
-			Height:       height,
-			Format:       backend.TextureFormatRGBA8,
-			Filter:       backend.FilterNearest,
-			WrapU:        backend.WrapClamp,
-			WrapV:        backend.WrapClamp,
-			RenderTarget: true,
-		})
-		if err == nil {
-			img.texture = tex
-			img.textureID = rend.allocTextureID()
-			if rend.registerTexture != nil {
-				rend.registerTexture(img.textureID, tex)
-			}
-		}
+		img.textureID = rend.allocTextureID()
 
-		// Create render target so this image can be drawn to.
 		rt, rtErr := rend.device.NewRenderTarget(backend.RenderTargetDescriptor{
 			Width:       width,
 			Height:      height,
@@ -70,6 +56,12 @@ func NewImage(width, height int) *Image {
 		})
 		if rtErr == nil {
 			img.renderTarget = rt
+			// Use the render target's color texture as the image texture
+			// so draws into this image are visible when it's sampled.
+			img.texture = rt.ColorTexture()
+			if rend.registerTexture != nil {
+				rend.registerTexture(img.textureID, img.texture)
+			}
 			if rend.registerRenderTarget != nil {
 				rend.registerRenderTarget(img.textureID, rt)
 			}
