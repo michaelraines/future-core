@@ -68,6 +68,11 @@ type DeviceConfig struct {
 	// return value is a VkSurfaceKHR. If nil, the backend renders to an
 	// offscreen target and relies on ReadScreen + GL presenter.
 	SurfaceFactory func(instance uintptr) (surface uintptr, err error)
+
+	// MetalLayer is a CAMetalLayer pointer for creating a WebGPU surface
+	// on macOS. Used by the WebGPU backend's InstanceCreateSurface. If 0,
+	// the WebGPU backend falls back to offscreen rendering.
+	MetalLayer uintptr
 }
 
 // DeviceCapabilities reports what the device supports.

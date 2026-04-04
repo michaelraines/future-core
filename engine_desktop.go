@@ -300,7 +300,13 @@ func (e *engine) run() error {
 	// In headless mode, skip swapchain creation so the backend renders to its
 	// offscreen target, which supports ReadScreen for screenshot capture.
 	if needsNoGL && headless == nil {
-		if creator, ok := win.(platform.VulkanSurfaceCreator); ok {
+		if resolvedName == "webgpu" {
+			// WebGPU uses wgpu.InstanceCreateSurface with the native layer,
+			// not the Vulkan surface factory.
+			if provider, ok := win.(platform.MetalLayerProvider); ok {
+				devCfg.MetalLayer = provider.MetalLayer()
+			}
+		} else if creator, ok := win.(platform.VulkanSurfaceCreator); ok {
 			devCfg.SurfaceFactory = func(instance uintptr) (uintptr, error) {
 				return creator.CreateVulkanSurface(instance)
 			}

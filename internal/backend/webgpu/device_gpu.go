@@ -105,10 +105,14 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	if d.device != 0 {
 		d.queue = wgpu.DeviceGetQueue(d.device)
 
-		// Create surface if a factory is provided.
-		if cfg.SurfaceFactory != nil {
+		// Create surface: prefer MetalLayer (native wgpu surface), fall back
+		// to SurfaceFactory (Vulkan-style).
+		if cfg.MetalLayer != 0 {
+			if err := d.createSurfaceFromMetalLayer(cfg.MetalLayer); err != nil {
+				d.hasSurface = false
+			}
+		} else if cfg.SurfaceFactory != nil {
 			if err := d.createSurface(cfg); err != nil {
-				// Non-fatal: fall back to offscreen rendering.
 				d.hasSurface = false
 			}
 		}
@@ -139,6 +143,24 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	return nil
 }
 
+// createSurfaceFromMetalLayer creates a wgpu surface from a CAMetalLayer
+// using wgpu.InstanceCreateSurface with SurfaceDescriptorFromMetalLayer.
+func (d *Device) createSurfaceFromMetalLayer(metalLayer uintptr) error {
+	chainedDesc := wgpu.SurfaceDescriptorFromMetalLayer{
+		Chain: wgpu.SChainedStruct{SType: wgpu.STypeSurfaceDescriptorFromMetalLayer},
+		Layer: metalLayer,
+	}
+	surfaceDesc := wgpu.SurfaceDescriptor{
+		NextInChain: uintptr(unsafe.Pointer(&chainedDesc)),
+	}
+	d.surface = wgpu.InstanceCreateSurface(d.instance, &surfaceDesc)
+	runtime.KeepAlive(chainedDesc)
+	if d.surface == 0 {
+		return fmt.Errorf("wgpu: InstanceCreateSurface returned nil")
+	}
+	return d.configureSurface()
+}
+
 // createSurface creates a presentation surface from the SurfaceFactory.
 func (d *Device) createSurface(cfg backend.DeviceConfig) error {
 	surfaceHandle, err := cfg.SurfaceFactory(uintptr(d.instance))
@@ -149,7 +171,12 @@ func (d *Device) createSurface(cfg backend.DeviceConfig) error {
 	if d.surface == 0 {
 		return fmt.Errorf("surface factory returned nil")
 	}
+	return d.configureSurface()
+}
 
+// configureSurface queries the preferred format and configures the surface
+// for presentation. Called after d.surface is set.
+func (d *Device) configureSurface() error {
 	// Query the preferred surface format from the adapter.
 	d.surfaceFormat = wgpu.TextureFormatBGRA8Unorm // sensible default
 	var caps wgpu.SurfaceCapabilities
