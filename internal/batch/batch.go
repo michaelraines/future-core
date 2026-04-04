@@ -207,9 +207,18 @@ func (b *Batcher) Flush() []Batch {
 
 	// Sort for optimal batching: group by state.
 	// TargetID is first so all draws to the same render target are contiguous.
+	// Off-screen targets (ID > 0) are sorted before the screen target (ID == 0)
+	// so their content is ready when the screen pass samples them as textures.
 	sort.Slice(b.commands, func(i, j int) bool {
 		ci, cj := b.commands[i], b.commands[j]
 		if ci.TargetID != cj.TargetID {
+			// Screen target (0) sorts last; off-screen targets sort first.
+			if ci.TargetID == 0 {
+				return false
+			}
+			if cj.TargetID == 0 {
+				return true
+			}
 			return ci.TargetID < cj.TargetID
 		}
 		if ci.ShaderID != cj.ShaderID {
