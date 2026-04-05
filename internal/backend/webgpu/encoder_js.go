@@ -118,7 +118,8 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	// Lazily create (or recreate) the pipeline for the current target format.
 	p.ensurePipelineForFormat(e.targetFormat)
 
-	if !p.handle.IsUndefined() && !p.handle.IsNull() && e.inRenderPass {
+	pipelineOK := !p.handle.IsUndefined() && !p.handle.IsNull()
+	if pipelineOK && e.inRenderPass {
 		e.passEncoder.Call("setPipeline", p.handle)
 	}
 
@@ -153,6 +154,7 @@ func (e *Encoder) bindUniforms() {
 	if e.currentPipeline.uniformBGL.IsUndefined() || e.currentPipeline.uniformBGL.IsNull() {
 		return
 	}
+
 
 	// Write uniform data to a temporary buffer.
 	alignedSize := (len(data) + 3) &^ 3
@@ -323,8 +325,11 @@ func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
 }
 
 // DrawIndexed issues an indexed draw call.
+// Uniforms are re-bound before each draw to pick up per-batch changes
+// (e.g., color matrix) that were set on the shader after SetPipeline.
 func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 	if e.inRenderPass {
+		e.bindUniforms()
 		e.passEncoder.Call("drawIndexed", indexCount, instanceCount, firstIndex, 0, 0)
 	}
 }

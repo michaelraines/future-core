@@ -132,11 +132,12 @@ try {
   }
 
   // Wait for several frames to render and composite.
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(8000);
 
-  // Save a screenshot of the rendered output.
+  // Save a screenshot of just the canvas element.
   const screenshotPath = resolve("testdata/visual/webgpu_wasm_browser.png");
-  await page.screenshot({ path: screenshotPath, fullPage: true });
+  const canvas = await page.locator("#game-canvas");
+  await canvas.screenshot({ path: screenshotPath });
   log(`Screenshot saved to ${screenshotPath}`);
 } catch (e) {
   if (e.message && e.message.includes("playwright")) {
