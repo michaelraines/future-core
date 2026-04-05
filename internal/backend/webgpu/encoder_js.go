@@ -24,6 +24,11 @@ type Encoder struct {
 
 	// Current sampler filter per slot.
 	slotFilters map[int]string
+
+	// Keep temporary uniform buffers and bind groups alive until
+	// EndRenderPass submits the command buffer. Without this, the Go GC
+	// may release JS references before the GPU executes the draws.
+	tempRefs []js.Value
 }
 
 // BeginRenderPass begins a WebGPU render pass.
@@ -104,6 +109,9 @@ func (e *Encoder) EndRenderPass() {
 		cmdBuf := e.cmdEncoder.Call("finish")
 		e.dev.queue.Call("submit", js.Global().Get("Array").New(cmdBuf))
 		e.cmdEncoder = js.Undefined()
+
+		// Release temporary references now that the GPU has the commands.
+		e.tempRefs = e.tempRefs[:0]
 	}
 }
 
@@ -156,17 +164,22 @@ func (e *Encoder) bindUniforms() {
 	}
 
 
-	// Write uniform data to a temporary buffer.
+	// Write uniform data to a temporary buffer using mappedAtCreation
+	// to avoid queue.writeBuffer timing issues with command recording.
 	alignedSize := (len(data) + 3) &^ 3
 	bufDesc := js.Global().Get("Object").New()
 	bufDesc.Set("size", alignedSize)
-	bufDesc.Set("usage",
-		jsGPUBufferUsage(e.dev.device, "UNIFORM")|jsGPUBufferUsage(e.dev.device, "COPY_DST"))
+	bufDesc.Set("usage", jsGPUBufferUsage(e.dev.device, "UNIFORM"))
+	bufDesc.Set("mappedAtCreation", true)
 	uboBuf := e.dev.device.Call("createBuffer", bufDesc)
 
-	arr := js.Global().Get("Uint8Array").New(len(data))
-	js.CopyBytesToJS(arr, data)
-	e.dev.queue.Call("writeBuffer", uboBuf, 0, arr)
+	// Write data directly into the mapped range.
+	mapped := uboBuf.Call("getMappedRange")
+	arr := js.Global().Get("Uint8Array").New(mapped)
+	srcArr := js.Global().Get("Uint8Array").New(len(data))
+	js.CopyBytesToJS(srcArr, data)
+	arr.Call("set", srcArr)
+	uboBuf.Call("unmap")
 
 	// Create bind group.
 	entry := js.Global().Get("Object").New()
@@ -183,6 +196,9 @@ func (e *Encoder) bindUniforms() {
 	bg := e.dev.device.Call("createBindGroup", bgDesc)
 
 	e.passEncoder.Call("setBindGroup", 0, bg)
+
+	// Keep the buffer and bind group alive until the command buffer is submitted.
+	e.tempRefs = append(e.tempRefs, uboBuf, bg)
 }
 
 // bindDefaultTexture binds a 1x1 white placeholder texture to group 1,
@@ -216,6 +232,7 @@ func (e *Encoder) bindDefaultTexture() {
 	bg := e.dev.device.Call("createBindGroup", bgDesc)
 
 	e.passEncoder.Call("setBindGroup", 1, bg)
+	e.tempRefs = append(e.tempRefs, bg)
 }
 
 // SetVertexBuffer binds a vertex buffer.
@@ -276,6 +293,7 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 	bg := e.dev.device.Call("createBindGroup", bgDesc)
 
 	e.passEncoder.Call("setBindGroup", 1, bg)
+	e.tempRefs = append(e.tempRefs, bg)
 }
 
 // SetTextureFilter overrides the texture filter for a slot.
