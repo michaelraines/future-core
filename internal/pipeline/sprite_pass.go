@@ -261,7 +261,7 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 // current render target. Screen targets use sp.Projection (set by the
 // engine from Layout dimensions). Off-screen targets use a per-target
 // ortho projection so draws map 1:1 to the target's pixels.
-func (sp *SpritePass) setProjectionForTarget(enc backend.CommandEncoder, ctx *PassContext, targetID uint32) {
+func (sp *SpritePass) setProjectionForTarget(_ backend.CommandEncoder, _ *PassContext, targetID uint32) {
 	if targetID == 0 {
 		// Screen: use the engine-provided projection (logical dimensions).
 		sp.shader.SetUniformMat4("uProjection", sp.Projection)
