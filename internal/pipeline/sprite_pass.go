@@ -109,6 +109,43 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		return
 	}
 
+	// Pre-upload all vertex and index data before recording draw commands.
+	// This is required for deferred-execution backends (WebGPU, Vulkan) where
+	// buffer writes via queue.writeBuffer happen immediately but draw commands
+	// execute later at queue.submit. If we upload per-batch, each upload
+	// overwrites the buffer at offset 0, and all draws see only the last
+	// batch's geometry. By uploading everything at contiguous offsets first,
+	// each draw can reference its own region via firstIndex.
+	type batchRegion struct {
+		firstIndex int // starting index in the combined index buffer
+		indexCount int
+	}
+	regions := make([]batchRegion, len(batches))
+
+	// Accumulate all vertex data contiguously. Adjust index values to
+	// account for the vertex offset so each batch's indices reference
+	// the correct vertices in the combined buffer.
+	var allVertices []batch.Vertex2D
+	var allIndices []uint16
+	for i := range batches {
+		b := &batches[i]
+		baseVertex := uint16(len(allVertices))
+		regions[i].firstIndex = len(allIndices)
+		regions[i].indexCount = len(b.Indices)
+		allVertices = append(allVertices, b.Vertices...)
+		for _, idx := range b.Indices {
+			allIndices = append(allIndices, idx+baseVertex)
+		}
+	}
+
+	// Upload all vertex/index data at once.
+	if len(allVertices) > 0 {
+		sp.vertexBuf.Upload(vertexSliceToBytes(allVertices))
+	}
+	if len(allIndices) > 0 {
+		sp.indexBuf.Upload(indexSliceToBytes(allIndices))
+	}
+
 	// Track current render target and shader to minimize state changes.
 	currentTargetID := batches[0].TargetID
 	currentShaderID := uint32(0)
@@ -116,6 +153,10 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 	// Begin the first render pass.
 	sp.beginTargetPass(enc, ctx, currentTargetID)
 	sp.bindDefaultShader(enc)
+
+	// Bind vertex/index buffers (must be within a render pass).
+	enc.SetVertexBuffer(sp.vertexBuf, 0)
+	enc.SetIndexBuffer(sp.indexBuf, backend.IndexUint16)
 
 	for i := range batches {
 		b := &batches[i]
@@ -127,10 +168,12 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			currentShaderID = 0
 			sp.beginTargetPass(enc, ctx, currentTargetID)
 			sp.bindDefaultShader(enc)
+			// Re-bind buffers after render pass switch.
+			enc.SetVertexBuffer(sp.vertexBuf, 0)
+			enc.SetIndexBuffer(sp.indexBuf, backend.IndexUint16)
 		}
 
 		// Switch shader if this batch uses a different one.
-		// Resolve custom shader once for both pipeline binding and uniform setting.
 		var resolvedInfo *ShaderInfo
 		if b.ShaderID != 0 && sp.ResolveShader != nil {
 			resolvedInfo = sp.ResolveShader(b.ShaderID)
@@ -144,7 +187,6 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 				enc.SetPipeline(resolvedInfo.Pipeline)
 				resolvedInfo.Shader.SetUniformMat4("uProjection", sp.Projection)
 			default:
-				// Unregistered shader ID: fall back to default.
 				sp.bindDefaultShader(enc)
 			}
 			currentShaderID = b.ShaderID
@@ -158,16 +200,6 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		activeShader.SetUniformMat4("uColorBody", b.ColorBody)
 		activeShader.SetUniformVec4("uColorTranslation", b.ColorTranslation)
 
-		// Upload vertex data.
-		vertexData := vertexSliceToBytes(b.Vertices)
-		sp.vertexBuf.Upload(vertexData)
-		enc.SetVertexBuffer(sp.vertexBuf, 0)
-
-		// Upload index data.
-		indexData := indexSliceToBytes(b.Indices)
-		sp.indexBuf.Upload(indexData)
-		enc.SetIndexBuffer(sp.indexBuf, backend.IndexUint16)
-
 		// Bind texture and set per-draw filter via sampler object.
 		if sp.ResolveTexture != nil {
 			tex := sp.ResolveTexture(b.TextureID)
@@ -177,11 +209,11 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		}
 		enc.SetTextureFilter(0, b.Filter)
 
-		// Handle fill rule.
+		// Draw using the pre-computed index region.
 		if b.FillRule == backend.FillRuleEvenOdd {
 			sp.drawEvenOdd(enc, b)
 		} else {
-			enc.DrawIndexed(len(b.Indices), 1, 0)
+			enc.DrawIndexed(regions[i].indexCount, 1, regions[i].firstIndex)
 		}
 	}
 

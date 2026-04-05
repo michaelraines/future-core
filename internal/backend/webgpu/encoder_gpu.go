@@ -363,7 +363,10 @@ func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
 }
 
 // DrawIndexed issues an indexed draw call.
+// Uniforms are re-bound before each draw to pick up per-batch changes
+// (e.g., color matrix) that were set on the shader after SetPipeline.
 func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
+	e.bindUniforms()
 	wgpu.RenderPassDrawIndexed(e.passEncoder,
 		uint32(indexCount), uint32(instanceCount), uint32(firstIndex), 0, 0)
 }
