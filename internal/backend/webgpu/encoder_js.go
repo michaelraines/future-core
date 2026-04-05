@@ -163,7 +163,6 @@ func (e *Encoder) bindUniforms() {
 		return
 	}
 
-
 	// Write uniform data to a temporary buffer using mappedAtCreation
 	// to avoid queue.writeBuffer timing issues with command recording.
 	alignedSize := (len(data) + 3) &^ 3
