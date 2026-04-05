@@ -153,6 +153,7 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 	// Begin the first render pass.
 	sp.beginTargetPass(enc, ctx, currentTargetID)
 	sp.bindDefaultShader(enc)
+	sp.setProjectionForTarget(enc, ctx, currentTargetID)
 
 	// Bind vertex/index buffers (must be within a render pass).
 	enc.SetVertexBuffer(sp.vertexBuf, 0)
@@ -168,6 +169,7 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			currentShaderID = 0
 			sp.beginTargetPass(enc, ctx, currentTargetID)
 			sp.bindDefaultShader(enc)
+			sp.setProjectionForTarget(enc, ctx, currentTargetID)
 			// Re-bind buffers after render pass switch.
 			enc.SetVertexBuffer(sp.vertexBuf, 0)
 			enc.SetIndexBuffer(sp.indexBuf, backend.IndexUint16)
@@ -253,6 +255,27 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 		Width:  w,
 		Height: h,
 	})
+}
+
+// setProjectionForTarget sets the projection matrix appropriate for the
+// current render target. Screen targets use sp.Projection (set by the
+// engine from Layout dimensions). Off-screen targets use a per-target
+// ortho projection so draws map 1:1 to the target's pixels.
+func (sp *SpritePass) setProjectionForTarget(enc backend.CommandEncoder, ctx *PassContext, targetID uint32) {
+	if targetID == 0 {
+		// Screen: use the engine-provided projection (logical dimensions).
+		sp.shader.SetUniformMat4("uProjection", sp.Projection)
+	} else if sp.ResolveRenderTarget != nil {
+		if rt := sp.ResolveRenderTarget(targetID); rt != nil {
+			w, h := float32(rt.Width()), float32(rt.Height())
+			sp.shader.SetUniformMat4("uProjection", [16]float32{
+				2 / w, 0, 0, 0,
+				0, -2 / h, 0, 0,
+				0, 0, -1, 0,
+				-1, 1, 0, 1,
+			})
+		}
+	}
 }
 
 // bindDefaultShader sets the default sprite pipeline and projection.
