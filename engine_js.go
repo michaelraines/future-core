@@ -136,6 +136,7 @@ func (e *engine) run() error {
 	if err := win.Create(winCfg); err != nil {
 		return err
 	}
+	e.window = win
 
 	// Resolve and create backend.
 	preferred := []string{"webgpu", "soft"}
