@@ -343,8 +343,12 @@ func (e *engine) frame() {
 		e.tickCount++
 	}
 
-	// Draw.
-	screenW, screenH := e.game.Layout(e.windowW, e.windowH)
+	// Draw. Use actual window size (which may differ from the requested
+	// size if the browser resized the canvas) so Layout receives the
+	// same dimensions as Ebitengine would provide.
+	winW, winH := e.window.Size()
+	e.fbW, e.fbH = e.window.FramebufferSize()
+	screenW, screenH := e.game.Layout(winW, winH)
 
 	screen := &Image{
 		width: screenW, height: screenH,

@@ -95,11 +95,23 @@ func (w *Window) PollEvents() {}
 // SwapBuffers is a no-op — the browser composites automatically.
 func (w *Window) SwapBuffers() {}
 
-// Size returns the logical window size.
-func (w *Window) Size() (int, int) { return w.width, w.height }
+// Size returns the logical window size based on the actual browser
+// window dimensions (not the initial requested size).
+func (w *Window) Size() (int, int) {
+	iw := js.Global().Get("innerWidth")
+	ih := js.Global().Get("innerHeight")
+	if !iw.IsUndefined() && !ih.IsUndefined() {
+		return iw.Int(), ih.Int()
+	}
+	return w.width, w.height
+}
 
-// FramebufferSize returns the physical framebuffer size.
-func (w *Window) FramebufferSize() (int, int) { return w.fbWidth, w.fbHeight }
+// FramebufferSize returns the physical framebuffer size based on
+// the actual browser window dimensions and device pixel ratio.
+func (w *Window) FramebufferSize() (int, int) {
+	ww, wh := w.Size()
+	return int(float64(ww) * w.dpr), int(float64(wh) * w.dpr)
+}
 
 // DevicePixelRatio returns the display scale factor.
 func (w *Window) DevicePixelRatio() float64 { return w.dpr }
