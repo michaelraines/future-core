@@ -95,22 +95,28 @@ func (w *Window) PollEvents() {}
 // SwapBuffers is a no-op — the browser composites automatically.
 func (w *Window) SwapBuffers() {}
 
-// Size returns the logical window size based on the actual browser
-// window dimensions (not the initial requested size).
+// Size returns the logical (CSS) size of the canvas element.
 func (w *Window) Size() (int, int) {
-	iw := js.Global().Get("innerWidth")
-	ih := js.Global().Get("innerHeight")
-	if !iw.IsUndefined() && !ih.IsUndefined() {
-		return iw.Int(), ih.Int()
+	if !w.canvas.IsUndefined() && !w.canvas.IsNull() {
+		cw := w.canvas.Get("clientWidth")
+		ch := w.canvas.Get("clientHeight")
+		if !cw.IsUndefined() && !ch.IsUndefined() && cw.Int() > 0 && ch.Int() > 0 {
+			return cw.Int(), ch.Int()
+		}
 	}
 	return w.width, w.height
 }
 
-// FramebufferSize returns the physical framebuffer size based on
-// the actual browser window dimensions and device pixel ratio.
+// FramebufferSize returns the physical framebuffer size (canvas pixel buffer).
 func (w *Window) FramebufferSize() (int, int) {
-	ww, wh := w.Size()
-	return int(float64(ww) * w.dpr), int(float64(wh) * w.dpr)
+	if !w.canvas.IsUndefined() && !w.canvas.IsNull() {
+		pw := w.canvas.Get("width")
+		ph := w.canvas.Get("height")
+		if !pw.IsUndefined() && !ph.IsUndefined() && pw.Int() > 0 && ph.Int() > 0 {
+			return pw.Int(), ph.Int()
+		}
+	}
+	return w.fbWidth, w.fbHeight
 }
 
 // DevicePixelRatio returns the display scale factor.
