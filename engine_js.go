@@ -344,9 +344,16 @@ func (e *engine) frame() {
 		e.tickCount++
 	}
 
-	// Draw. Use actual window size (which may differ from the requested
-	// size if the browser resized the canvas) so Layout receives the
-	// same dimensions as Ebitengine would provide.
+	// Sync the canvas pixel buffer to the current CSS size × DPI.
+	// This handles browser resizes and ensures the framebuffer matches
+	// the displayed canvas, just as Ebitengine does each frame.
+	type canvasSyncer interface{ SyncCanvasSize() }
+	if cs, ok := e.window.(canvasSyncer); ok {
+		cs.SyncCanvasSize()
+	}
+
+	// Draw. Use actual canvas CSS size so Layout receives the same
+	// dimensions as Ebitengine would provide.
 	winW, winH := e.window.Size()
 	e.fbW, e.fbH = e.window.FramebufferSize()
 	screenW, screenH := e.game.Layout(winW, winH)

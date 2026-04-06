@@ -60,10 +60,20 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 		w.doc.Get("body").Call("appendChild", w.canvas)
 	}
 
+	// Style the canvas to fill its container, matching Ebitengine's behavior.
+	style := w.canvas.Get("style")
+	style.Set("width", "100%")
+	style.Set("height", "100%")
+	style.Set("margin", "0px")
+	style.Set("padding", "0px")
+	style.Set("display", "block")
+	style.Set("outline", "none")
+	w.canvas.Set("tabIndex", 1)
+
+	// Set initial pixel buffer size. SyncCanvasSize() will update this
+	// each frame to match the actual CSS layout size × DPI.
 	w.canvas.Set("width", int(float64(cfg.Width)*w.dpr))
 	w.canvas.Set("height", int(float64(cfg.Height)*w.dpr))
-	w.canvas.Get("style").Set("width", js.ValueOf(cfg.Width).String()+"px")
-	w.canvas.Get("style").Set("height", js.ValueOf(cfg.Height).String()+"px")
 
 	w.fbWidth = int(float64(cfg.Width) * w.dpr)
 	w.fbHeight = int(float64(cfg.Height) * w.dpr)
@@ -136,6 +146,28 @@ func (w *Window) SetSize(width, height int) {
 	w.fbHeight = int(float64(height) * w.dpr)
 	w.canvas.Set("width", w.fbWidth)
 	w.canvas.Set("height", w.fbHeight)
+}
+
+// SyncCanvasSize updates the canvas pixel buffer to match its current
+// CSS layout size × device pixel ratio. This should be called each
+// frame to handle browser resizes, just as Ebitengine does.
+func (w *Window) SyncCanvasSize() {
+	cssW, cssH := w.Size()
+	newDPR := js.Global().Get("devicePixelRatio").Float()
+	if newDPR < 1 {
+		newDPR = 1
+	}
+	w.dpr = newDPR
+	fbW := int(float64(cssW) * w.dpr)
+	fbH := int(float64(cssH) * w.dpr)
+	if fbW != w.fbWidth || fbH != w.fbHeight {
+		w.width = cssW
+		w.height = cssH
+		w.fbWidth = fbW
+		w.fbHeight = fbH
+		w.canvas.Set("width", fbW)
+		w.canvas.Set("height", fbH)
+	}
 }
 
 // SetFullscreen toggles fullscreen via the Fullscreen API.
