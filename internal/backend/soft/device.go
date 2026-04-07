@@ -80,6 +80,29 @@ func (d *Device) ReadScreen(dst []byte) bool {
 // rendering, or nil if Init has not been called.
 func (d *Device) ScreenRenderTarget() *RenderTarget { return d.screenRT }
 
+// ResizeScreen recreates the internal screen render target when the
+// framebuffer dimensions change. This must be called before any draw
+// commands that reference the new dimensions.
+func (d *Device) ResizeScreen(width, height int) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+	if width == d.width && height == d.height {
+		return
+	}
+	d.width = width
+	d.height = height
+	rt, err := d.NewRenderTarget(backend.RenderTargetDescriptor{
+		Width:       width,
+		Height:      height,
+		ColorFormat: backend.TextureFormatRGBA8,
+	})
+	if err != nil {
+		return
+	}
+	d.screenRT = rt.(*RenderTarget)
+}
+
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {}
 

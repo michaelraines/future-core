@@ -358,6 +358,11 @@ func (e *engine) frame() {
 	e.fbW, e.fbH = e.window.FramebufferSize()
 	screenW, screenH := e.game.Layout(winW, winH)
 
+	// Resize the backend's internal screen render target if needed.
+	if resizer, ok := e.device.(interface{ ResizeScreen(int, int) }); ok {
+		resizer.ResizeScreen(e.fbW, e.fbH)
+	}
+
 	screen := &Image{
 		width: screenW, height: screenH,
 		u0: 0, v0: 0, u1: 1, v1: 1,
