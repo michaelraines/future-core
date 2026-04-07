@@ -558,7 +558,42 @@ macOS, and Windows with no system library installs beyond Go and a C compiler
 
 ---
 
-## Milestone 11 — 3D Rendering (Future)
+## Milestone 11 — WebGPU Browser Performance (In Progress)
+
+Goal: achieve FPS parity with Ebitengine (WebGL) when running FutureCore
+(WebGPU) in desktop and mobile browsers.
+
+### Investigation findings
+
+Profiling showed FutureCore WebGPU was ~50% slower than Ebitengine WebGL on
+desktop browsers and locked up mobile devices at ~5 FPS. Root causes:
+redundant CPU readback presentation, per-draw GPU buffer allocations crossing
+the expensive Go↔JS boundary, no caching of immutable WebGPU objects, and
+each unique texture forcing a separate draw batch.
+
+### Completed
+
+| Task | Status | Notes |
+|---|---|---|
+| Eliminate CPU readback canvas presentation | Done | Skip `presentToCanvas()` when `GPUCanvasContext` is active; browser auto-composites on `queue.submit()` |
+| Uniform ring buffer (JS path) | Done | 64 KB persistent GPUBuffer with 256-byte-aligned sub-allocations; `hasDynamicOffset` bind group reused across draws |
+| Texture bind group caching | Done | Cache by `(textureID, filter)`; eliminates per-draw `createBindGroup` after first frame |
+| SyncCanvasSize throttling | Done | `ResizeObserver` callback + dirty flag; eliminates per-frame DOM queries |
+| JS object pooling | Done | Pre-allocated `Uint32Array(1)` for dynamic offsets and `Uint8Array(256)` for uniform writes |
+| Automatic sprite atlasing | Done | Small images (≤256px) packed into shared 512→4096px atlas textures; reduces texture-change batch breaks dramatically |
+
+### Remaining (Future)
+
+| Task | Status | Notes |
+|---|---|---|
+| Batch color matrices into UBO array | Future | Pack N color matrices per UBO, index by vertex attribute; requires vertex format + shader + batch merge + translator changes |
+| Browser-side FPS benchmarking harness | Future | HTML page with FPS counter for A/B comparison with Ebitengine |
+| Mobile-specific profiling (iOS Safari, Android Chrome) | Future | Validate atlas + ring buffer improvements on real mobile hardware |
+| WebGPU compute-based particle system | Future | Leverage `SupportsCompute` for GPU-driven particles |
+
+---
+
+## Milestone 12 — 3D Rendering (Future)
 
 Goal: 3D mesh rendering, lighting, materials — as described in FUTURE_3D.md.
 
@@ -594,8 +629,10 @@ These guide every milestone:
    Ebitengine where possible, enabling straightforward migration.
 5. **3D-ready from day one** — no 2D-only assumptions in internal layers. See
    FUTURE_3D.md for constraints.
-6. **Manual texture management** — no automatic atlas. Users control GPU memory
-   explicitly, with optional atlas utilities.
+6. **Smart texture management** — small images from `NewImageFromImage` are
+   automatically packed into sprite atlases to reduce draw call batches.
+   Users can disable atlasing via `SetSpriteAtlasEnabled(false)` for explicit
+   GPU memory control.
 7. **Zero-install on macOS and Windows** — platform backends use only
    system-provided frameworks (Cocoa, Win32, OpenGL). No shared library
    installs required. Linux requires only a C compiler for CGo GLFW.

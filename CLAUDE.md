@@ -402,6 +402,20 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   Using `1` (now `1D`) causes "Dimension Y exceeds limit" errors.
 - **Use `make build` not `go build ./...`** — the repo has CGo GLFW source
   files that require build tag filtering handled by the Makefile.
+- **WebGPU browser performance** — the JS path has several critical
+  optimizations: (1) direct canvas presentation via `GPUCanvasContext`
+  (skip `ReadScreen`+`putImageData`), (2) 64 KB uniform ring buffer with
+  `hasDynamicOffset` bind groups, (3) texture bind group cache by
+  `(textureID, filter)`, (4) pre-allocated `Uint32Array`/`Uint8Array` for
+  per-draw JS calls. When modifying the WebGPU JS encoder, preserve these
+  patterns — per-draw `createBuffer` or `createBindGroup` calls cause severe
+  FPS drops, especially on mobile.
+- **Sprite atlas** — `NewImageFromImage` automatically packs small images
+  (≤256px) into shared atlas textures (`sprite_atlas.go`). Atlased images
+  share a `textureID`, so the batcher merges their draws. Atlased images do
+  not support `WritePixels`/`Set`/`ReadPixels` (no-ops). Disable with
+  `SetSpriteAtlasEnabled(false)`. Tests that inspect per-image textures
+  should disable atlasing in their setup (see `withMockRenderer` pattern).
 
 ## Test Coverage Requirements
 
