@@ -1,6 +1,12 @@
 // Compiles vendored GLFW 3.4 source for X11 on Linux/BSD.
 // _GLFW_X11 is set via CGo CFLAGS in glfwapi_cgo.go.
 // This file is only compiled when CGo is active (linux || freebsd builds).
+//
+// The __has_include guard allows this file to be empty when vendored via
+// "go mod vendor" (which strips subdirectories). In that case, consumers
+// must use -tags systemglfw and install libglfw3-dev.
+
+#if __has_include("cglfw/internal.h")
 
 #include "cglfw/context.c"
 #include "cglfw/init.c"
@@ -32,3 +38,5 @@
 
 // Null platform is compiled in glfw_null.c (separate translation unit)
 // to avoid static function name collisions with x11_window.c.
+
+#endif // __has_include("cglfw/internal.h")

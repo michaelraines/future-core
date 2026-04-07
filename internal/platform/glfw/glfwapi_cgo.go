@@ -6,8 +6,6 @@ package glfw
 
 /*
 #cgo CFLAGS: -D_GLFW_X11 -D_GNU_SOURCE -Icglfw
-#cgo linux LDFLAGS: -lm -ldl -lpthread -lrt -lX11 -lXrandr -lXi -lXcursor -lXinerama
-#cgo freebsd LDFLAGS: -lm -lpthread -lX11 -lXrandr -lXi -lXcursor -lXinerama
 
 #define GLFW_INCLUDE_NONE
 #include "glfw3.h"
