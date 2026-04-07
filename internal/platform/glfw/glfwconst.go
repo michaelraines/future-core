@@ -2,7 +2,7 @@
 
 // This file contains GLFW constants, types, and function pointer declarations
 // shared across all desktop platforms. The function pointers are populated by
-// platform-specific initGLFWAPI() implementations (purego or CGo).
+// platform-specific initGLFWAPI() implementations (purego).
 package glfw
 
 // ---------------------------------------------------------------------------

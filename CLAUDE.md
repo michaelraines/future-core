@@ -69,6 +69,12 @@ soft mode works with fewer frames. The script defaults to 60.
 
 - Go 1.24+
 - [golangci-lint](https://golangci-lint.run/welcome/install/) (for `make lint` and `make fix`)
+- GLFW 3 system library (for desktop builds):
+  - Debian/Ubuntu: `sudo apt-get install libglfw3-dev`
+  - Fedora: `sudo dnf install glfw-devel`
+  - Arch: `sudo pacman -S glfw`
+  - macOS (Homebrew): `brew install glfw`
+  - Windows: place `glfw3.dll` in PATH
 
 ### CI
 
@@ -134,11 +140,12 @@ These are non-negotiable. Violating them creates technical debt that compounds.
 
 4. **No CGo in core packages.** `math/`, `internal/batch/`,
    `internal/pipeline/`, `internal/input/` must remain pure Go. All native
-   API bindings (Vulkan, Metal, DX12, WebGPU, OpenGL, Cocoa, Win32) use
-   **purego** for dynamic symbol loading — no CGo. The only CGo usage is
-   GLFW on Linux/FreeBSD (`internal/platform/glfw/glfwapi_cgo.go`,
-   `callbacks_cgo.go`, build-tagged `linux || freebsd`). macOS and Windows
-   builds are fully CGo-free.
+   API bindings (Vulkan, Metal, DX12, WebGPU, OpenGL, Cocoa, Win32, GLFW)
+   use **purego** for dynamic symbol loading — no CGo. The entire project
+   is CGo-free (except for the `audio/` package which uses `oto/v3`).
+   GLFW is loaded as a system shared library on all platforms
+   (`libglfw3-dev` on Debian/Ubuntu, `libglfw.3.dylib` on macOS,
+   `glfw3.dll` on Windows).
 
 5. **Interfaces are defined by consumers, not implementors.** Follow Go
    interface design conventions. Keep interfaces small and focused.
@@ -225,15 +232,14 @@ Follow this cycle for every change:
   make TAGS=soft cover-check
   make TAGS=soft build
   ```
-- If X11 headers are not installed locally, install them first:
+- If GLFW is not installed locally, install it first:
   ```bash
-  sudo apt-get install -y libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev libxxf86vm-dev
+  sudo apt-get install -y libglfw3-dev
   ```
 - The CI workflow (`.github/workflows/ci.yml`) is the source of truth.
   Review it before pushing to ensure your changes match what CI validates.
 - **Never assume local `make` passing is sufficient.** The CI uses
-  `-tags soft` which changes which files are compiled (e.g., CGo GLFW
-  files are still built on Linux even with the soft tag).
+  `-tags soft` which changes which files are compiled.
 
 ### 6. Update Docs
 - Update `ROADMAP.md` when completing milestone tasks
@@ -400,8 +406,8 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   to `1`. Using `0` (now `Undefined`) silently produces zero-filled readbacks.
 - **WebGPU `TextureDimension` 2D is `2`** — v27 changed from `1` to `2`.
   Using `1` (now `1D`) causes "Dimension Y exceeds limit" errors.
-- **Use `make build` not `go build ./...`** — the repo has CGo GLFW source
-  files that require build tag filtering handled by the Makefile.
+- **Use `make build` not `go build ./...`** — the Makefile handles build
+  tag filtering and package exclusions (e.g., audio).
 - **WebGPU browser performance** — the JS path has several critical
   optimizations: (1) direct canvas presentation via `GPUCanvasContext`
   (skip `ReadScreen`+`putImageData`), (2) 64 KB uniform ring buffer with
