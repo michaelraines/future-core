@@ -41,6 +41,7 @@ type Device struct {
 	// draw calls in a frame, with 256-byte-aligned sub-allocations.
 	uniformBuf    js.Value
 	uniformCursor int
+	uniformArr    js.Value // pre-allocated Uint8Array(uniformAlignOffset) for writeBuffer
 
 	// Texture bind group cache keyed by (textureID, filter).
 	textureBindGroups map[texBindGroupKey]js.Value
@@ -181,6 +182,7 @@ func (d *Device) createUniformRingBuffer() {
 	bufDesc.Set("usage", jsGPUBufferUsage(d.device, "UNIFORM")|jsGPUBufferUsage(d.device, "COPY_DST"))
 	d.uniformBuf = d.device.Call("createBuffer", bufDesc)
 	d.uniformCursor = 0
+	d.uniformArr = js.Global().Get("Uint8Array").New(uniformAlignOffset)
 }
 
 // writeUniformRing copies data into the ring buffer at a 256-byte-aligned
@@ -198,9 +200,10 @@ func (d *Device) writeUniformRing(data []byte) (offset, alignedSize int) {
 	offset = d.uniformCursor
 	d.uniformCursor += alignedSize
 
-	srcArr := js.Global().Get("Uint8Array").New(len(data))
-	js.CopyBytesToJS(srcArr, data)
-	d.queue.Call("writeBuffer", d.uniformBuf, offset, srcArr)
+	// Reuse the pre-allocated Uint8Array to avoid per-draw JS allocation.
+	// Data always fits within uniformAlignOffset (256) bytes.
+	js.CopyBytesToJS(d.uniformArr, data)
+	d.queue.Call("writeBuffer", d.uniformBuf, offset, d.uniformArr, 0, len(data))
 	return offset, alignedSize
 }
 
@@ -450,9 +453,10 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 // Encoder returns the command encoder.
 func (d *Device) Encoder() backend.CommandEncoder {
 	return &Encoder{
-		dev:    d,
-		width:  d.width,
-		height: d.height,
+		dev:        d,
+		width:      d.width,
+		height:     d.height,
+		dynOffsets: js.Global().Get("Uint32Array").New(1),
 	}
 }
 

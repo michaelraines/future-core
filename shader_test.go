@@ -80,7 +80,14 @@ func withShaderRenderer(t *testing.T) *shaderMockDevice {
 	}
 	old := getRenderer()
 	setRenderer(rend)
-	t.Cleanup(func() { setRenderer(old) })
+
+	SetSpriteAtlasEnabled(false)
+
+	t.Cleanup(func() {
+		setRenderer(old)
+		SetSpriteAtlasEnabled(true)
+		ResetSpriteAtlas()
+	})
 	return dev
 }
 

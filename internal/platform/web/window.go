@@ -28,6 +28,9 @@ type Window struct {
 	lastMouseX, lastMouseY float64
 	mouseInited            bool
 
+	// Resize tracking — set by ResizeObserver, consumed by SyncCanvasSize.
+	resizeDirty bool
+
 	// Registered JS event listeners (for cleanup).
 	listeners []js.Func
 }
@@ -84,6 +87,20 @@ func (w *Window) Create(cfg platform.WindowConfig) error {
 
 	// Register input event listeners.
 	w.registerInputListeners()
+
+	// Use a ResizeObserver to detect canvas resize instead of polling
+	// the DOM every frame. SyncCanvasSize checks the dirty flag.
+	w.resizeDirty = true // sync once on first frame
+	resizeObserver := js.Global().Get("ResizeObserver")
+	if !resizeObserver.IsUndefined() {
+		cb := js.FuncOf(func(_ js.Value, _ []js.Value) interface{} {
+			w.resizeDirty = true
+			return nil
+		})
+		w.listeners = append(w.listeners, cb)
+		observer := resizeObserver.New(cb)
+		observer.Call("observe", w.canvas)
+	}
 
 	return nil
 }
@@ -149,9 +166,14 @@ func (w *Window) SetSize(width, height int) {
 }
 
 // SyncCanvasSize updates the canvas pixel buffer to match its current
-// CSS layout size × device pixel ratio. This should be called each
-// frame to handle browser resizes, just as Ebitengine does.
+// CSS layout size × device pixel ratio. Only queries the DOM when the
+// ResizeObserver fires, avoiding per-frame JS boundary crossings.
 func (w *Window) SyncCanvasSize() {
+	if !w.resizeDirty {
+		return
+	}
+	w.resizeDirty = false
+
 	cssW, cssH := w.Size()
 	newDPR := js.Global().Get("devicePixelRatio").Float()
 	if newDPR < 1 {

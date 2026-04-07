@@ -30,6 +30,10 @@ type Encoder struct {
 	uniformBG         js.Value
 	uniformBGPipeline *Pipeline // pipeline the cached BG was created for
 
+	// Pre-allocated Uint32Array(1) reused for dynamic-offset setBindGroup
+	// calls, avoiding a JS typed-array allocation per draw.
+	dynOffsets js.Value
+
 	// Keep temporary bind groups alive until EndRenderPass submits the
 	// command buffer. Without this, the Go GC may release JS references
 	// before the GPU executes the draws.
@@ -198,9 +202,8 @@ func (e *Encoder) bindUniforms() {
 	}
 
 	// Bind with dynamic offset pointing to this draw's data.
-	offsets := js.Global().Get("Uint32Array").New(1)
-	offsets.SetIndex(0, offset)
-	e.passEncoder.Call("setBindGroup", 0, e.uniformBG, offsets)
+	e.dynOffsets.SetIndex(0, offset)
+	e.passEncoder.Call("setBindGroup", 0, e.uniformBG, e.dynOffsets)
 }
 
 // bindDefaultTexture binds a 1x1 white placeholder texture to group 1,
