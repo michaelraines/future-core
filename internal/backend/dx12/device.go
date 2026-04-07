@@ -75,6 +75,9 @@ func (d *Device) Dispose() {
 // ReadScreen copies the rendered screen pixels into dst.
 func (d *Device) ReadScreen(dst []byte) bool { return d.inner.ReadScreen(dst) }
 
+// ResizeScreen delegates screen resize to the inner software device.
+func (d *Device) ResizeScreen(width, height int) { d.inner.ResizeScreen(width, height) }
+
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {
 	d.inner.BeginFrame()

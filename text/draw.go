@@ -119,15 +119,20 @@ func Draw(target *futurerender.Image, s string, face Face, opts *DrawOptions) {
 			continue
 		}
 		ox := 0.0
-		if primaryAlign != AlignStart && refWidth > 0 {
+		if primaryAlign != AlignStart {
 			lineWidth := face.advance(line)
 			switch primaryAlign {
 			case AlignStart:
 				// No offset needed.
 			case AlignCenter:
-				ox = (refWidth - lineWidth) / 2
+				// Ebitengine convention: the origin point (GeoM.Translate) is
+				// the center of the text block. Shift each line so the block's
+				// center aligns with the origin, then center shorter lines
+				// within the block.
+				ox = -refWidth/2 + (refWidth-lineWidth)/2
 			case AlignEnd:
-				ox = refWidth - lineWidth
+				// Origin is the right edge of the text block.
+				ox = -lineWidth
 			}
 		}
 
@@ -174,15 +179,15 @@ func DrawWrapped(target *futurerender.Image, s string, face Face, maxWidth float
 			continue
 		}
 		ox := 0.0
-		if primaryAlign != AlignStart && refWidth > 0 {
+		if primaryAlign != AlignStart {
 			lineWidth := face.advance(line)
 			switch primaryAlign {
 			case AlignStart:
 				// No offset needed.
 			case AlignCenter:
-				ox = (refWidth - lineWidth) / 2
+				ox = -refWidth/2 + (refWidth-lineWidth)/2
 			case AlignEnd:
-				ox = refWidth - lineWidth
+				ox = -lineWidth
 			}
 		}
 		oy := float64(i) * lineH

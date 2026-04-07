@@ -570,3 +570,106 @@ func TestClampByte(t *testing.T) {
 	require.Equal(t, byte(255), clampByte(1.0))
 	require.Equal(t, byte(255), clampByte(2.0))
 }
+
+// --- ResizeScreen tests ---
+
+func TestResizeScreen(t *testing.T) {
+	d := initDevice(t)
+
+	// Initial screen RT should match init dimensions.
+	rt := d.ScreenRenderTarget()
+	require.NotNil(t, rt)
+	require.Equal(t, 800, rt.rtWidth)
+	require.Equal(t, 600, rt.rtHeight)
+
+	// Resize to larger dimensions.
+	d.ResizeScreen(1024, 768)
+	rt = d.ScreenRenderTarget()
+	require.Equal(t, 1024, rt.rtWidth)
+	require.Equal(t, 768, rt.rtHeight)
+	require.Equal(t, 1024, d.width)
+	require.Equal(t, 768, d.height)
+}
+
+func TestResizeScreenSameDimensionsIsNoop(t *testing.T) {
+	d := initDevice(t)
+	rt1 := d.ScreenRenderTarget()
+
+	// Same dimensions should not recreate.
+	d.ResizeScreen(800, 600)
+	rt2 := d.ScreenRenderTarget()
+	require.Equal(t, rt1, rt2, "same dimensions should not recreate screen RT")
+}
+
+func TestResizeScreenInvalidDimensions(t *testing.T) {
+	d := initDevice(t)
+	rt1 := d.ScreenRenderTarget()
+
+	// Invalid dimensions should be ignored.
+	d.ResizeScreen(0, 600)
+	require.Equal(t, rt1, d.ScreenRenderTarget())
+
+	d.ResizeScreen(800, 0)
+	require.Equal(t, rt1, d.ScreenRenderTarget())
+
+	d.ResizeScreen(-1, -1)
+	require.Equal(t, rt1, d.ScreenRenderTarget())
+}
+
+func TestResizeScreenRasterizesCorrectly(t *testing.T) {
+	d := initDevice(t)
+
+	// Resize to 16x16.
+	d.ResizeScreen(16, 16)
+
+	// Draw a full-screen triangle into the resized screen RT.
+	tex, err := d.NewTexture(backend.TextureDescriptor{
+		Width: 1, Height: 1, Format: backend.TextureFormatRGBA8,
+		Data: []byte{255, 255, 255, 255},
+	})
+	require.NoError(t, err)
+
+	shader, err := d.NewShader(backend.ShaderDescriptor{})
+	require.NoError(t, err)
+
+	pipeline, err := d.NewPipeline(backend.PipelineDescriptor{
+		Shader: shader, BlendMode: backend.BlendNone,
+	})
+	require.NoError(t, err)
+
+	verts := makeVertexBytes(
+		vertex2D{px: -1, py: -1, r: 1, g: 0, b: 0, a: 1},
+		vertex2D{px: 3, py: -1, r: 1, g: 0, b: 0, a: 1},
+		vertex2D{px: -1, py: 3, r: 1, g: 0, b: 0, a: 1},
+	)
+	indices := makeIndexBytes(0, 1, 2)
+	vbuf, err := d.NewBuffer(backend.BufferDescriptor{Data: verts})
+	require.NoError(t, err)
+	ibuf, err := d.NewBuffer(backend.BufferDescriptor{Data: indices})
+	require.NoError(t, err)
+
+	enc := d.Encoder()
+	// Draw to screen RT (Target=nil).
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		Target:     nil,
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{0, 0, 0, 0},
+	})
+	enc.SetPipeline(pipeline)
+	enc.SetVertexBuffer(vbuf, 0)
+	enc.SetIndexBuffer(ibuf, backend.IndexUint16)
+	enc.SetTexture(tex, 0)
+	enc.DrawIndexed(3, 1, 0)
+	enc.EndRenderPass()
+
+	// Read pixels and verify the resized screen RT was used.
+	pixels := make([]byte, 16*16*4)
+	require.True(t, d.ReadScreen(pixels))
+
+	// Center pixel (8,8) should be red.
+	idx := (8*16 + 8) * 4
+	require.Equal(t, byte(255), pixels[idx], "red channel at center of resized screen")
+	require.Equal(t, byte(0), pixels[idx+1], "green channel")
+	require.Equal(t, byte(0), pixels[idx+2], "blue channel")
+	require.Equal(t, byte(255), pixels[idx+3], "alpha channel")
+}

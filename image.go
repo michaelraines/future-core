@@ -5,11 +5,36 @@ import (
 	goimage "image"
 	"image/color"
 	"image/draw"
+	gomath "math"
+	"sync/atomic"
 
 	"github.com/michaelraines/future-core/internal/backend"
 	"github.com/michaelraines/future-core/internal/batch"
 	fmath "github.com/michaelraines/future-core/math"
 )
+
+// pixelSnapEnabled is the global pixel-snap setting.
+// When enabled, DrawImage rounds transformed vertex positions to the nearest
+// integer pixel, eliminating sub-pixel shimmer and seams between adjacent
+// sprites. Individual DrawImageOptions.PixelSnap overrides this.
+var pixelSnapEnabled atomic.Bool
+
+// SetPixelSnapEnabled enables or disables global pixel snapping for DrawImage.
+// When enabled, all DrawImage calls round vertex positions to integer pixels
+// unless overridden by DrawImageOptions.PixelSnap.
+func SetPixelSnapEnabled(enabled bool) {
+	pixelSnapEnabled.Store(enabled)
+}
+
+// IsPixelSnapEnabled returns the current global pixel-snap setting.
+func IsPixelSnapEnabled() bool {
+	return pixelSnapEnabled.Load()
+}
+
+// pixelSnap rounds a float64 coordinate to the nearest integer pixel.
+func pixelSnap(v float64) float64 {
+	return gomath.Round(v)
+}
 
 // Image represents a renderable image (texture). It can be used as a
 // render target or as a source for drawing operations.
@@ -31,6 +56,11 @@ type Image struct {
 	// Full image: u0=0, v0=0, u1=1, v1=1.
 	parent         *Image
 	u0, v0, u1, v1 float32
+
+	// padded indicates the GPU texture has a 1px transparent border.
+	// When true, pixel operations (Set, WritePixels, ReadPixels) must
+	// offset coordinates by 1 to account for the padding.
+	padded bool
 }
 
 // NewImage creates a new blank image with the given dimensions.
@@ -93,6 +123,11 @@ func NewImageWithOptions(bounds goimage.Rectangle, opts *NewImageOptions) *Image
 
 // NewImageFromImage creates an Image from a Go image.Image.
 // The pixel data is uploaded to the GPU immediately.
+//
+// The GPU texture is allocated with a 1px transparent border (padding) around
+// the source content. This prevents bilinear filtering from bleeding in
+// neighboring texel data at sprite edges and sub-image boundaries. The image's
+// UV coordinates are adjusted to map to the padded content region.
 func NewImageFromImage(src goimage.Image) *Image {
 	bounds := src.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
@@ -104,22 +139,38 @@ func NewImageFromImage(src goimage.Image) *Image {
 		draw.Draw(rgba, bounds, src, bounds.Min, draw.Src)
 	}
 
+	// Allocate padded texture: 1px transparent border on all sides.
+	padW, padH := w+2, h+2
+	padded := make([]byte, padW*padH*4) // zero-initialized = transparent black
+	for row := 0; row < h; row++ {
+		srcOff := row * rgba.Stride
+		dstOff := ((row + 1) * padW * 4) + 4 // offset by 1 row and 1 col
+		copy(padded[dstOff:dstOff+w*4], rgba.Pix[srcOff:srcOff+w*4])
+	}
+
+	// UVs map to the content region within the padded texture.
+	u0 := float32(1) / float32(padW)
+	v0 := float32(1) / float32(padH)
+	u1 := float32(w+1) / float32(padW)
+	v1 := float32(h+1) / float32(padH)
+
 	img := &Image{
 		width:  w,
 		height: h,
-		u0:     0, v0: 0,
-		u1: 1, v1: 1,
+		u0:     u0, v0: v0,
+		u1: u1, v1: v1,
+		padded: true,
 	}
 
 	if rend := getRenderer(); rend != nil && rend.device != nil {
 		tex, err := rend.device.NewTexture(backend.TextureDescriptor{
-			Width:  w,
-			Height: h,
+			Width:  padW,
+			Height: padH,
 			Format: backend.TextureFormatRGBA8,
 			Filter: backend.FilterNearest,
 			WrapU:  backend.WrapClamp,
 			WrapV:  backend.WrapClamp,
-			Data:   rgba.Pix,
+			Data:   padded,
 		})
 		if err == nil {
 			img.texture = tex
@@ -130,7 +181,7 @@ func NewImageFromImage(src goimage.Image) *Image {
 		}
 	}
 
-	// Track for context loss recovery, preserving pixel data.
+	// Track for context loss recovery, preserving original pixel data.
 	if tracker := getTracker(); tracker != nil {
 		tracker.TrackImage(img, rgba.Pix, false)
 	}
@@ -175,6 +226,15 @@ func (img *Image) DrawImage(src *Image, opts *DrawImageOptions) {
 	x1, y1 := o.GeoM.Apply(float64(srcW), 0)
 	x2, y2 := o.GeoM.Apply(float64(srcW), float64(srcH))
 	x3, y3 := o.GeoM.Apply(0, float64(srcH))
+
+	// Pixel snapping: round vertex positions to nearest integer to eliminate
+	// sub-pixel shimmer and seams between adjacent sprites.
+	if o.PixelSnap || pixelSnapEnabled.Load() {
+		x0, y0 = pixelSnap(x0), pixelSnap(y0)
+		x1, y1 = pixelSnap(x1), pixelSnap(y1)
+		x2, y2 = pixelSnap(x2), pixelSnap(y2)
+		x3, y3 = pixelSnap(x3), pixelSnap(y3)
+	}
 
 	// Color scale (default to opaque white).
 	cr, cg, cb, ca := o.ColorScale.rgbaOrDefault()
@@ -353,6 +413,19 @@ func (img *Image) ReadPixels(dst []byte) {
 	if img.disposed || img.texture == nil {
 		return
 	}
+	if img.padded {
+		// Read the full padded texture, then extract the content region.
+		padW := img.width + 2
+		padH := img.height + 2
+		full := make([]byte, padW*padH*4)
+		img.texture.ReadPixels(full)
+		for row := 0; row < img.height; row++ {
+			srcOff := ((row + 1) * padW * 4) + 4
+			dstOff := row * img.width * 4
+			copy(dst[dstOff:dstOff+img.width*4], full[srcOff:srcOff+img.width*4])
+		}
+		return
+	}
 	img.texture.ReadPixels(dst)
 }
 
@@ -399,7 +472,12 @@ func (img *Image) Set(x, y int, clr color.Color) {
 	}
 	r, g, b, a := clr.RGBA()
 	pix := []byte{byte(r >> 8), byte(g >> 8), byte(b >> 8), byte(a >> 8)}
-	img.texture.UploadRegion(pix, x, y, 1, 1, 0)
+	tx, ty := x, y
+	if img.padded {
+		tx++
+		ty++
+	}
+	img.texture.UploadRegion(pix, tx, ty, 1, 1, 0)
 }
 
 // WritePixels uploads RGBA pixel data to the entire image.
@@ -407,6 +485,11 @@ func (img *Image) Set(x, y int, clr color.Color) {
 // This matches Ebitengine's Image.WritePixels signature (single arg, full image).
 func (img *Image) WritePixels(pix []byte) {
 	if img.disposed || img.texture == nil {
+		return
+	}
+	if img.padded {
+		// Upload into the content region of the padded texture.
+		img.texture.UploadRegion(pix, 1, 1, img.width, img.height, 0)
 		return
 	}
 	img.texture.Upload(pix, 0)
@@ -418,7 +501,12 @@ func (img *Image) WritePixelsRegion(pix []byte, x, y, width, height int) {
 	if img.disposed || img.texture == nil {
 		return
 	}
-	img.texture.UploadRegion(pix, x, y, width, height, 0)
+	tx, ty := x, y
+	if img.padded {
+		tx++
+		ty++
+	}
+	img.texture.UploadRegion(pix, tx, ty, width, height, 0)
 }
 
 // DrawImageOptions holds options for DrawImage.
@@ -440,6 +528,12 @@ type DrawImageOptions struct {
 
 	// Filter specifies the texture filter.
 	Filter Filter
+
+	// PixelSnap rounds transformed vertex positions to the nearest integer
+	// pixel. This eliminates sub-pixel shimmer and seams between adjacent
+	// sprites in pixel-art or tile-based games. When false, the global
+	// PixelSnapEnabled setting is checked as a fallback.
+	PixelSnap bool
 }
 
 // DrawTrianglesOptions holds options for DrawTriangles.

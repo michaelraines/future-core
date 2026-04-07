@@ -224,8 +224,8 @@ func (r *rasterizer) rasterizeTriangle(
 				continue
 			}
 
-			// Interpolate depth.
-			depth := math.FMA(w0, nz0, math.FMA(w1, nz1, w2*nz2))
+			// Interpolate depth (all terms via FMA for consistent rounding).
+			depth := math.FMA(w0, nz0, math.FMA(w1, nz1, math.FMA(w2, nz2, 0)))
 
 			// Depth test.
 			if r.depthTest {
@@ -239,9 +239,9 @@ func (r *rasterizer) rasterizeTriangle(
 				}
 			}
 
-			// Interpolate texcoords with FMA for determinism.
-			u := float32(math.FMA(w0, tu0, math.FMA(w1, tu1, w2*tu2)))
-			v := float32(math.FMA(w0, tv0, math.FMA(w1, tv1, w2*tv2)))
+			// Interpolate texcoords with FMA for determinism (all terms via FMA).
+			u := float32(math.FMA(w0, tu0, math.FMA(w1, tu1, math.FMA(w2, tu2, 0))))
+			v := float32(math.FMA(w0, tv0, math.FMA(w1, tv1, math.FMA(w2, tv2, 0))))
 
 			// Interpolate vertex color (float32 — ±3 tolerance absorbs any FMA diff).
 			w0f, w1f, w2f := float32(w0), float32(w1), float32(w2)
@@ -426,13 +426,15 @@ func bilerp(v00, v10, v01, v11, dx, dy float32) float32 {
 // --- Helpers ---
 
 // edgeFuncFMA computes the edge function using math.FMA for cross-platform
-// determinism. The result is (bx-ax)*(cy-ay) - (by-ay)*(cx-ax) with the
-// subtraction fused into the second multiply via FMA.
+// determinism. The result is (bx-ax)*(cy-ay) - (by-ay)*(cx-ax).
+// Both terms use FMA to ensure symmetric rounding at shared triangle edges,
+// preventing gaps or double-draws between adjacent triangles.
 func edgeFuncFMA(ax, ay, bx, by, cx, cy float64) float64 {
 	dx1, dy1 := bx-ax, cy-ay
 	dx2, dy2 := by-ay, cx-ax
-	// FMA computes dx1*dy1 + (-(dx2*dy2)) with single rounding.
-	return math.FMA(dx1, dy1, -(dx2 * dy2))
+	// Compute dx2*dy2 via FMA (with 0 addend) for symmetric rounding,
+	// then negate and fuse with dx1*dy1.
+	return math.FMA(dx1, dy1, -math.FMA(dx2, dy2, 0))
 }
 
 func edgeFunc(ax, ay, bx, by, cx, cy float32) float32 {
