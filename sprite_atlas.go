@@ -28,6 +28,9 @@ type atlasPage struct {
 	textureID uint32
 	size      int
 	rows      []atlasPageRow
+	// placed tracks all Images returned by tryPlace so that grow() can
+	// rescale their UV coordinates when the atlas texture is resized.
+	placed []*Image
 	// pixels is a CPU-side shadow of the atlas texture data (RGBA).
 	// Maintained on every UploadRegion so that grow() can copy old
 	// content to a new texture without calling ReadPixels. This avoids
@@ -133,7 +136,7 @@ func (ap *atlasPage) tryPlace(padded []byte, padW, padH, contentW, contentH int,
 	u1 := float32(x+1+contentW) / atlasW
 	v1 := float32(y+1+contentH) / atlasH
 
-	return &Image{
+	img := &Image{
 		width:     contentW,
 		height:    contentH,
 		texture:   ap.image.texture,
@@ -145,6 +148,8 @@ func (ap *atlasPage) tryPlace(padded []byte, padW, padH, contentW, contentH int,
 		v1:        v1,
 		atlased:   true,
 	}
+	ap.placed = append(ap.placed, img)
+	return img
 }
 
 // allocate finds space using row-based packing.
@@ -224,6 +229,17 @@ func (ap *atlasPage) grow(rend *renderer) bool {
 		}
 	}
 	ap.pixels = newPixels
+
+	// Rescale UV coordinates for all previously placed images. Their UVs
+	// were computed relative to the old atlas size and must be adjusted
+	// for the new (larger) texture.
+	scale := float32(oldSize) / float32(newSize)
+	for _, img := range ap.placed {
+		img.u0 *= scale
+		img.v0 *= scale
+		img.u1 *= scale
+		img.v1 *= scale
+	}
 
 	// Re-register the new texture under the original atlas textureID so
 	// existing Images (which still hold ap.textureID) resolve correctly.

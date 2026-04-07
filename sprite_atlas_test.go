@@ -206,6 +206,56 @@ func TestSpriteAtlasGrows(t *testing.T) {
 		"atlas should have grown beyond initial size")
 }
 
+func TestSpriteAtlasGrowRescalesUVs(t *testing.T) {
+	withMockRenderer(t)
+	SetSpriteAtlasEnabled(true)
+	defer ResetSpriteAtlas()
+
+	// Place images that fill the initial 512x512 atlas. Each 200x200 image
+	// becomes a 202x202 padded entry. Two fit per row (202+1+202=405 ≤ 512),
+	// two rows (202+1+202=405 ≤ 512), so 4 images fill the atlas.
+	var preGrowImages []*Image
+	for i := 0; i < 4; i++ {
+		src := goimage.NewRGBA(goimage.Rect(0, 0, 200, 200))
+		img := NewImageFromImage(src)
+		require.True(t, img.atlased)
+		preGrowImages = append(preGrowImages, img)
+	}
+
+	// Record the UV coordinates before growth.
+	type uvs struct{ u0, v0, u1, v1 float32 }
+	preUVs := make([]uvs, len(preGrowImages))
+	for i, img := range preGrowImages {
+		preUVs[i] = uvs{img.u0, img.v0, img.u1, img.v1}
+	}
+
+	// Verify atlas hasn't grown yet.
+	_, totalPixels := SpriteAtlasStats()
+	require.Equal(t, spriteAtlasInitialSize*spriteAtlasInitialSize, totalPixels)
+
+	// Add one more image to trigger growth from 512 to 1024.
+	src := goimage.NewRGBA(goimage.Rect(0, 0, 200, 200))
+	growImg := NewImageFromImage(src)
+	require.True(t, growImg.atlased)
+
+	// Verify atlas has grown.
+	_, totalPixels = SpriteAtlasStats()
+	require.Greater(t, totalPixels, spriteAtlasInitialSize*spriteAtlasInitialSize)
+
+	// Pre-growth images should have their UVs scaled by oldSize/newSize = 0.5.
+	for i, img := range preGrowImages {
+		require.InDelta(t, preUVs[i].u0*0.5, img.u0, 1e-6, "u0 not rescaled for image %d", i)
+		require.InDelta(t, preUVs[i].v0*0.5, img.v0, 1e-6, "v0 not rescaled for image %d", i)
+		require.InDelta(t, preUVs[i].u1*0.5, img.u1, 1e-6, "u1 not rescaled for image %d", i)
+		require.InDelta(t, preUVs[i].v1*0.5, img.v1, 1e-6, "v1 not rescaled for image %d", i)
+	}
+
+	// The post-growth image's UVs should be relative to the new atlas size.
+	// They should NOT need rescaling since they were computed after growth.
+	require.Greater(t, growImg.u1, float32(0))
+	require.Greater(t, growImg.v1, float32(0))
+}
+
 func TestAtlasEntryFits(t *testing.T) {
 	require.True(t, atlasEntryFits(1, 1))
 	require.True(t, atlasEntryFits(256, 256))
