@@ -85,6 +85,29 @@ library). Desktop platform code (GLFW, OpenGL) is gated by OS-based build
 constraints (`//go:build darwin || linux || freebsd || windows`) and compiles
 automatically on desktop platforms — no `-tags` flags needed.
 
+### Vendoring (`go mod vendor`)
+
+`go mod vendor` does **not** copy the vendored GLFW C source tree in
+`internal/platform/glfw/cglfw/` (Go only vendors files from the package
+directory itself, not subdirectories). The `glfw3.h` header is duplicated
+in the package root so CGo preambles compile, and the `.c` source files
+use `__has_include` guards to become empty when `cglfw/` is absent.
+
+Consumers who vendor this module on Linux/FreeBSD must install system GLFW
+and use the `systemglfw` build tag:
+
+```bash
+# Install system GLFW
+sudo apt-get install libglfw3-dev          # Debian/Ubuntu
+sudo dnf install glfw-devel                # Fedora
+sudo pacman -S glfw                        # Arch
+
+# Build with system GLFW
+go build -tags systemglfw ./...
+```
+
+macOS and Windows builds use purego (no CGo) and are unaffected by vendoring.
+
 ### Known CI Limitation: Audio Packages Excluded
 
 The `audio/` package depends on `github.com/ebitengine/oto/v3`, which uses
@@ -139,6 +162,10 @@ These are non-negotiable. Violating them creates technical debt that compounds.
    GLFW on Linux/FreeBSD (`internal/platform/glfw/glfwapi_cgo.go`,
    `callbacks_cgo.go`, build-tagged `linux || freebsd`). macOS and Windows
    builds are fully CGo-free.
+
+   **Vendoring note**: `go mod vendor` does not copy the `cglfw/`
+   subdirectory. Consumers who use vendor mode must install system GLFW
+   and build with `-tags systemglfw`. See "Vendoring (go mod vendor)" below.
 
 5. **Interfaces are defined by consumers, not implementors.** Follow Go
    interface design conventions. Keep interfaces small and focused.

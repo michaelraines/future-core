@@ -301,6 +301,11 @@ Phase 1 dependencies (all small, auditable):
 
 No dependency on Ebitengine or any of its sub-packages.
 
+**Vendoring note**: On Linux/FreeBSD, GLFW is compiled from vendored C source
+in `internal/platform/glfw/cglfw/`. Since `go mod vendor` strips subdirectories,
+consumers who vendor should use `-tags systemglfw` and install `libglfw3-dev`.
+See `CLAUDE.md` "Vendoring" section for details.
+
 ---
 
 ## Testing Strategy

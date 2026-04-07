@@ -78,7 +78,10 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 ### Limitations
 - No compute shaders (OpenGL 3.3 limitation)
 - Not available on WASM/mobile
-- Requires GLFW (vendored CGo on Linux, purego on macOS/Windows)
+- Requires GLFW (vendored CGo on Linux, purego on macOS/Windows).
+  When consuming via `go mod vendor`, use `-tags systemglfw` and install
+  `libglfw3-dev` (the vendored `cglfw/` subdirectory is not copied by
+  `go mod vendor`).
 
 ### Roadmap
 - Consider OpenGL 4.x path for compute shader support
