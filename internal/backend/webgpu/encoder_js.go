@@ -163,22 +163,20 @@ func (e *Encoder) bindUniforms() {
 		return
 	}
 
-	// Write uniform data to a temporary buffer using mappedAtCreation
-	// to avoid queue.writeBuffer timing issues with command recording.
+	// Create a uniform buffer and upload data via queue.writeBuffer.
+	// Avoids mappedAtCreation which can fail when the browser tab is
+	// backgrounded and the GPU device has constrained resources.
 	alignedSize := (len(data) + 3) &^ 3
 	bufDesc := js.Global().Get("Object").New()
 	bufDesc.Set("size", alignedSize)
-	bufDesc.Set("usage", jsGPUBufferUsage(e.dev.device, "UNIFORM"))
-	bufDesc.Set("mappedAtCreation", true)
+	bufDesc.Set("usage", jsGPUBufferUsage(e.dev.device, "UNIFORM")|jsGPUBufferUsage(e.dev.device, "COPY_DST"))
 	uboBuf := e.dev.device.Call("createBuffer", bufDesc)
 
-	// Write data directly into the mapped range.
-	mapped := uboBuf.Call("getMappedRange")
-	arr := js.Global().Get("Uint8Array").New(mapped)
-	srcArr := js.Global().Get("Uint8Array").New(len(data))
+	// Upload data via queue.writeBuffer — works reliably regardless of
+	// GPU device state (tab visibility, resource pressure).
+	srcArr := js.Global().Get("Uint8Array").New(alignedSize)
 	js.CopyBytesToJS(srcArr, data)
-	arr.Call("set", srcArr)
-	uboBuf.Call("unmap")
+	e.dev.queue.Call("writeBuffer", uboBuf, 0, srcArr)
 
 	// Create bind group.
 	entry := js.Global().Get("Object").New()
