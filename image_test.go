@@ -103,7 +103,16 @@ func withMockRenderer(t *testing.T) (dev *mockDevice, registered map[uint32]back
 	}
 	old := getRenderer()
 	setRenderer(rend)
-	t.Cleanup(func() { setRenderer(old) })
+
+	// Disable sprite atlasing so tests that inspect per-image textures
+	// and UV coordinates work as expected.
+	SetSpriteAtlasEnabled(false)
+
+	t.Cleanup(func() {
+		setRenderer(old)
+		SetSpriteAtlasEnabled(true)
+		ResetSpriteAtlas()
+	})
 	return dev, registered
 }
 

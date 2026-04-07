@@ -380,11 +380,14 @@ func (e *engine) frame() {
 
 	e.device.EndFrame()
 
-	// Present rendered pixels to the visible canvas via 2D ImageData.
-	// This is the browser equivalent of the desktop GL presenter —
-	// ReadScreen copies the soft/WebGPU offscreen buffer to CPU, then
-	// putImageData blits it to the canvas.
-	e.presentToCanvas()
+	// When the device renders directly to a GPUCanvasContext the browser
+	// composites automatically on queue.submit — no CPU readback needed.
+	// Fall back to the ReadScreen+putImageData path for backends that
+	// render to an offscreen buffer (e.g. the soft rasterizer).
+	type canvasPresenter interface{ PresentsToCanvas() bool }
+	if cp, ok := e.device.(canvasPresenter); !ok || !cp.PresentsToCanvas() {
+		e.presentToCanvas()
+	}
 
 	// FPS tracking.
 	e.frameCount++

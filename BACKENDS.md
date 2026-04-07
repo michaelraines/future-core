@@ -236,6 +236,21 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
   presentation, async adapter/device via Promise callbacks, GLSL→WGSL
   translation shared with native path
 
+### Browser Performance Optimizations (Done)
+- **Direct canvas presentation**: when `GPUCanvasContext` is available,
+  rendering goes directly to the canvas texture — the CPU readback path
+  (`ReadScreen` + `putImageData`) is bypassed entirely
+- **Uniform ring buffer**: 64 KB persistent GPUBuffer with 256-byte-aligned
+  sub-allocations; `hasDynamicOffset` bind group created once per pipeline
+  change, reused across all draws with dynamic offsets
+- **Texture bind group cache**: bind groups cached by `(textureID, filter)`;
+  `SetTexture` becomes a single `setBindGroup` call on cache hit
+- **JS object pooling**: pre-allocated `Uint32Array(1)` for dynamic offsets
+  and `Uint8Array(256)` for uniform writes, avoiding per-draw typed-array
+  allocation
+- **ResizeObserver**: canvas size sync uses a dirty flag from
+  `ResizeObserver` instead of querying DOM properties every frame
+
 ### Known Issues
 - No GPU tests yet — requires `libwgpu_native.{so,dylib,dll}` at runtime
 - SetStencil and SetColorWrite are no-ops (state baked into pipeline)
@@ -247,6 +262,8 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 2. Validate full sprite rendering pipeline with visual test
 3. Run conformance suite against GPU mode
 4. HTML harness example for browser WebGPU
+5. Mobile browser profiling (iOS Safari, Android Chrome)
+6. Batch color matrices into UBO array (requires shader + vertex format changes)
 
 ---
 

@@ -15,6 +15,7 @@ type Texture struct {
 	view   js.Value
 	w, h   int
 	format backend.TextureFormat
+	id     uint32 // unique ID for bind group caching
 }
 
 // InnerTexture returns nil for GPU textures (no soft delegation).
@@ -150,6 +151,11 @@ func (t *Texture) Format() backend.TextureFormat { return t.format }
 func (t *Texture) Dispose() {
 	if !t.handle.IsUndefined() && !t.handle.IsNull() {
 		t.handle.Call("destroy")
+	}
+	// Evict cached bind groups referencing this texture.
+	if t.dev != nil && t.dev.textureBindGroups != nil {
+		delete(t.dev.textureBindGroups, texBindGroupKey{texID: t.id, filter: "nearest"})
+		delete(t.dev.textureBindGroups, texBindGroupKey{texID: t.id, filter: "linear"})
 	}
 }
 

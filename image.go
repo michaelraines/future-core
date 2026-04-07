@@ -61,6 +61,11 @@ type Image struct {
 	// When true, pixel operations (Set, WritePixels, ReadPixels) must
 	// offset coordinates by 1 to account for the padding.
 	padded bool
+
+	// atlased indicates this image is packed into a shared sprite atlas.
+	// Atlased images do not support WritePixels, Set, or ReadPixels since
+	// their pixel data is interleaved with other images in the atlas.
+	atlased bool
 }
 
 // NewImage creates a new blank image with the given dimensions.
@@ -153,6 +158,18 @@ func NewImageFromImage(src goimage.Image) *Image {
 	v0 := float32(1) / float32(padH)
 	u1 := float32(w+1) / float32(padW)
 	v1 := float32(h+1) / float32(padH)
+
+	// Try to pack into a sprite atlas to share a GPU texture with other
+	// small images, reducing texture-change batch breaks.
+	if atlasEntryFits(w, h) {
+		if atlased := newImageFromImageAtlased(padded, padW, padH, w, h); atlased != nil {
+			// Track for context loss recovery.
+			if tracker := getTracker(); tracker != nil {
+				tracker.TrackImage(atlased, rgba.Pix, false)
+			}
+			return atlased
+		}
+	}
 
 	img := &Image{
 		width:  w,
@@ -410,7 +427,7 @@ func (img *Image) Clear() {
 // ReadPixels reads RGBA pixel data from the image into dst.
 // dst must be at least 4*width*height bytes.
 func (img *Image) ReadPixels(dst []byte) {
-	if img.disposed || img.texture == nil {
+	if img.disposed || img.texture == nil || img.atlased {
 		return
 	}
 	if img.padded {
@@ -464,7 +481,7 @@ func (img *Image) Dispose() {
 // If the coordinate is outside the image bounds, Set is a no-op.
 // This matches ebiten.Image.Set and satisfies the draw.Image interface.
 func (img *Image) Set(x, y int, clr color.Color) {
-	if img.disposed || img.texture == nil {
+	if img.disposed || img.texture == nil || img.atlased {
 		return
 	}
 	if x < 0 || y < 0 || x >= img.width || y >= img.height {
@@ -484,7 +501,7 @@ func (img *Image) Set(x, y int, clr color.Color) {
 // The data must be len(pix) == 4*width*height bytes in RGBA order.
 // This matches Ebitengine's Image.WritePixels signature (single arg, full image).
 func (img *Image) WritePixels(pix []byte) {
-	if img.disposed || img.texture == nil {
+	if img.disposed || img.texture == nil || img.atlased {
 		return
 	}
 	if img.padded {
@@ -498,7 +515,7 @@ func (img *Image) WritePixels(pix []byte) {
 // WritePixelsRegion uploads RGBA pixel data to a rectangular region of the image.
 // The data must be len(pix) == 4*width*height bytes in RGBA order.
 func (img *Image) WritePixelsRegion(pix []byte, x, y, width, height int) {
-	if img.disposed || img.texture == nil {
+	if img.disposed || img.texture == nil || img.atlased {
 		return
 	}
 	tx, ty := x, y

@@ -36,12 +36,33 @@ type Device struct {
 	// Default 1x1 white texture used as a placeholder for bind group 1
 	// when SetTexture has not been called before a draw call.
 	defaultWhiteTex *Texture
+
+	// Uniform ring buffer: a single persistent GPUBuffer reused across all
+	// draw calls in a frame, with 256-byte-aligned sub-allocations.
+	uniformBuf    js.Value
+	uniformCursor int
+	uniformArr    js.Value // pre-allocated Uint8Array(uniformAlignOffset) for writeBuffer
+
+	// Texture bind group cache keyed by (textureID, filter).
+	textureBindGroups map[texBindGroupKey]js.Value
+	nextTexID         uint32
+}
+
+const (
+	uniformRingBufSize = 64 * 1024 // 64 KB — supports ~256 draws at 256-byte alignment.
+	uniformAlignOffset = 256
+)
+
+type texBindGroupKey struct {
+	texID  uint32
+	filter string
 }
 
 // New creates a new WebGPU device.
 func New() *Device {
 	return &Device{
-		samplers: make(map[string]js.Value),
+		samplers:          make(map[string]js.Value),
+		textureBindGroups: make(map[texBindGroupKey]js.Value),
 	}
 }
 
@@ -117,6 +138,9 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	// Create a 1x1 white placeholder texture for default bind group 1.
 	d.createDefaultWhiteTexture()
 
+	// Create the persistent uniform ring buffer used by all draw calls.
+	d.createUniformRingBuffer()
+
 	return nil
 }
 
@@ -150,11 +174,51 @@ func (d *Device) createDefaultWhiteTexture() {
 	d.defaultWhiteTex = tex.(*Texture)
 }
 
+// createUniformRingBuffer allocates a single persistent GPUBuffer for
+// uniforms, reused across all draws in a frame via sub-allocations.
+func (d *Device) createUniformRingBuffer() {
+	bufDesc := js.Global().Get("Object").New()
+	bufDesc.Set("size", uniformRingBufSize)
+	bufDesc.Set("usage", jsGPUBufferUsage(d.device, "UNIFORM")|jsGPUBufferUsage(d.device, "COPY_DST"))
+	d.uniformBuf = d.device.Call("createBuffer", bufDesc)
+	d.uniformCursor = 0
+	d.uniformArr = js.Global().Get("Uint8Array").New(uniformAlignOffset)
+}
+
+// writeUniformRing copies data into the ring buffer at a 256-byte-aligned
+// offset and returns that offset and the aligned size. The cursor advances
+// for the next call; it wraps to 0 when there is insufficient room.
+func (d *Device) writeUniformRing(data []byte) (offset, alignedSize int) {
+	alignedSize = (len(data) + uniformAlignOffset - 1) &^ (uniformAlignOffset - 1)
+	if alignedSize > uniformRingBufSize {
+		// Data too large for ring buffer — should not happen in practice.
+		return 0, 0
+	}
+	if d.uniformCursor+alignedSize > uniformRingBufSize {
+		d.uniformCursor = 0 // wrap
+	}
+	offset = d.uniformCursor
+	d.uniformCursor += alignedSize
+
+	// Reuse the pre-allocated Uint8Array to avoid per-draw JS allocation.
+	// Data always fits within uniformAlignOffset (256) bytes.
+	js.CopyBytesToJS(d.uniformArr, data)
+	d.queue.Call("writeBuffer", d.uniformBuf, offset, d.uniformArr, 0, len(data))
+	return offset, alignedSize
+}
+
+// PresentsToCanvas reports whether this device renders directly to a
+// GPUCanvasContext, making CPU-side ReadScreen+putImageData unnecessary.
+func (d *Device) PresentsToCanvas() bool { return d.hasContext }
+
 // Dispose releases all WebGPU resources.
 func (d *Device) Dispose() {
-	// GPU objects are garbage-collected by the browser.
+	if !d.uniformBuf.IsUndefined() && !d.uniformBuf.IsNull() {
+		d.uniformBuf.Call("destroy")
+	}
 	d.samplers = nil
 	d.defaultWhiteTex = nil
+	d.textureBindGroups = nil
 }
 
 // ReadScreen copies the default color texture pixels into dst.
@@ -225,7 +289,9 @@ func (d *Device) ReadScreen(dst []byte) bool {
 }
 
 // BeginFrame prepares for a new frame.
-func (d *Device) BeginFrame() {}
+func (d *Device) BeginFrame() {
+	d.uniformCursor = 0
+}
 
 // EndFrame finalizes the frame.
 func (d *Device) EndFrame() {}
@@ -255,6 +321,7 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 
 	view := handle.Call("createView")
 
+	d.nextTexID++
 	tex := &Texture{
 		dev:    d,
 		handle: handle,
@@ -262,6 +329,7 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 		w:      desc.Width,
 		h:      desc.Height,
 		format: desc.Format,
+		id:     d.nextTexID,
 	}
 
 	if len(desc.Data) > 0 {
@@ -385,9 +453,10 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 // Encoder returns the command encoder.
 func (d *Device) Encoder() backend.CommandEncoder {
 	return &Encoder{
-		dev:    d,
-		width:  d.width,
-		height: d.height,
+		dev:        d,
+		width:      d.width,
+		height:     d.height,
+		dynOffsets: js.Global().Get("Uint32Array").New(1),
 	}
 }
 

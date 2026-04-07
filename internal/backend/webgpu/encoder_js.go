@@ -25,9 +25,18 @@ type Encoder struct {
 	// Current sampler filter per slot.
 	slotFilters map[int]string
 
-	// Keep temporary uniform buffers and bind groups alive until
-	// EndRenderPass submits the command buffer. Without this, the Go GC
-	// may release JS references before the GPU executes the draws.
+	// Cached uniform bind group for the current pipeline, referencing the
+	// ring buffer with hasDynamicOffset. Recreated only on pipeline change.
+	uniformBG         js.Value
+	uniformBGPipeline *Pipeline // pipeline the cached BG was created for
+
+	// Pre-allocated Uint32Array(1) reused for dynamic-offset setBindGroup
+	// calls, avoiding a JS typed-array allocation per draw.
+	dynOffsets js.Value
+
+	// Keep temporary bind groups alive until EndRenderPass submits the
+	// command buffer. Without this, the Go GC may release JS references
+	// before the GPU executes the draws.
 	tempRefs []js.Value
 }
 
@@ -112,6 +121,7 @@ func (e *Encoder) EndRenderPass() {
 
 		// Release temporary references now that the GPU has the commands.
 		e.tempRefs = e.tempRefs[:0]
+		e.uniformBGPipeline = nil
 	}
 }
 
@@ -139,7 +149,9 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	e.bindDefaultTexture()
 }
 
-// bindUniforms uploads shader uniforms and binds them to group 0.
+// bindUniforms uploads shader uniforms into the ring buffer and binds
+// group 0 with a dynamic offset. The bind group itself is created once
+// per pipeline change and reused across all draws.
 func (e *Encoder) bindUniforms() {
 	if e.currentPipeline == nil || !e.inRenderPass {
 		return
@@ -159,77 +171,54 @@ func (e *Encoder) bindUniforms() {
 		return
 	}
 
-	if e.currentPipeline.uniformBGL.IsUndefined() || e.currentPipeline.uniformBGL.IsNull() {
+	bgl := e.currentPipeline.uniformBGL
+	if bgl.IsUndefined() || bgl.IsNull() {
 		return
 	}
 
-	// Create a uniform buffer and upload data via queue.writeBuffer.
-	// Avoids mappedAtCreation which can fail when the browser tab is
-	// backgrounded and the GPU device has constrained resources.
-	alignedSize := (len(data) + 3) &^ 3
-	bufDesc := js.Global().Get("Object").New()
-	bufDesc.Set("size", alignedSize)
-	bufDesc.Set("usage", jsGPUBufferUsage(e.dev.device, "UNIFORM")|jsGPUBufferUsage(e.dev.device, "COPY_DST"))
-	uboBuf := e.dev.device.Call("createBuffer", bufDesc)
+	// Write uniform data into the ring buffer at a 256-byte-aligned offset.
+	offset, alignedSize := e.dev.writeUniformRing(data)
+	if alignedSize == 0 {
+		return
+	}
 
-	// Upload data via queue.writeBuffer — works reliably regardless of
-	// GPU device state (tab visibility, resource pressure).
-	srcArr := js.Global().Get("Uint8Array").New(alignedSize)
-	js.CopyBytesToJS(srcArr, data)
-	e.dev.queue.Call("writeBuffer", uboBuf, 0, srcArr)
+	// Create (or reuse) one bind group per pipeline that references the
+	// entire ring buffer. Dynamic offsets select the per-draw sub-region.
+	if e.uniformBGPipeline != e.currentPipeline {
+		entry := js.Global().Get("Object").New()
+		entry.Set("binding", 0)
+		bufBinding := js.Global().Get("Object").New()
+		bufBinding.Set("buffer", e.dev.uniformBuf)
+		bufBinding.Set("offset", 0)
+		bufBinding.Set("size", uniformAlignOffset) // min binding size
+		entry.Set("resource", bufBinding)
 
-	// Create bind group.
-	entry := js.Global().Get("Object").New()
-	entry.Set("binding", 0)
-	bufBinding := js.Global().Get("Object").New()
-	bufBinding.Set("buffer", uboBuf)
-	bufBinding.Set("offset", 0)
-	bufBinding.Set("size", alignedSize)
-	entry.Set("resource", bufBinding)
+		bgDesc := js.Global().Get("Object").New()
+		bgDesc.Set("layout", bgl)
+		bgDesc.Set("entries", js.Global().Get("Array").New(entry))
+		e.uniformBG = e.dev.device.Call("createBindGroup", bgDesc)
+		e.uniformBGPipeline = e.currentPipeline
+		e.tempRefs = append(e.tempRefs, e.uniformBG)
+	}
 
-	bgDesc := js.Global().Get("Object").New()
-	bgDesc.Set("layout", e.currentPipeline.uniformBGL)
-	bgDesc.Set("entries", js.Global().Get("Array").New(entry))
-	bg := e.dev.device.Call("createBindGroup", bgDesc)
-
-	e.passEncoder.Call("setBindGroup", 0, bg)
-
-	// Keep the buffer and bind group alive until the command buffer is submitted.
-	e.tempRefs = append(e.tempRefs, uboBuf, bg)
+	// Bind with dynamic offset pointing to this draw's data.
+	e.dynOffsets.SetIndex(0, offset)
+	e.passEncoder.Call("setBindGroup", 0, e.uniformBG, e.dynOffsets)
 }
 
 // bindDefaultTexture binds a 1x1 white placeholder texture to group 1,
 // ensuring that draw calls without an explicit SetTexture don't trigger
 // "No bind group set at group index 1" validation errors.
+// Uses the texture bind group cache so the bind group is created only once.
 func (e *Encoder) bindDefaultTexture() {
 	if e.currentPipeline == nil || !e.inRenderPass {
 		return
 	}
 	t := e.dev.defaultWhiteTex
-	if t == nil || t.view.IsUndefined() || t.view.IsNull() {
+	if t == nil {
 		return
 	}
-	bgl := e.currentPipeline.textureBGL
-	if bgl.IsUndefined() || bgl.IsNull() {
-		return
-	}
-	sampler := e.dev.getSampler("nearest")
-
-	texEntry := js.Global().Get("Object").New()
-	texEntry.Set("binding", 0)
-	texEntry.Set("resource", t.view)
-
-	sampEntry := js.Global().Get("Object").New()
-	sampEntry.Set("binding", 1)
-	sampEntry.Set("resource", sampler)
-
-	bgDesc := js.Global().Get("Object").New()
-	bgDesc.Set("layout", bgl)
-	bgDesc.Set("entries", js.Global().Get("Array").New(texEntry, sampEntry))
-	bg := e.dev.device.Call("createBindGroup", bgDesc)
-
-	e.passEncoder.Call("setBindGroup", 1, bg)
-	e.tempRefs = append(e.tempRefs, bg)
+	e.SetTexture(t, 0)
 }
 
 // SetVertexBuffer binds a vertex buffer.
@@ -251,6 +240,7 @@ func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat)
 }
 
 // SetTexture binds a texture to a slot via bind groups.
+// Bind groups are cached by (textureID, filter) since they are immutable.
 func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 	t, ok := tex.(*Texture)
 	if !ok || !e.inRenderPass {
@@ -266,7 +256,6 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 			filter = f
 		}
 	}
-	sampler := e.dev.getSampler(filter)
 
 	var bgl js.Value
 	if e.currentPipeline != nil {
@@ -275,6 +264,16 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 	if bgl.IsUndefined() || bgl.IsNull() {
 		return
 	}
+
+	// Check cache.
+	key := texBindGroupKey{texID: t.id, filter: filter}
+	if bg, ok := e.dev.textureBindGroups[key]; ok {
+		e.passEncoder.Call("setBindGroup", 1, bg)
+		return
+	}
+
+	// Cache miss — create and store.
+	sampler := e.dev.getSampler(filter)
 
 	texEntry := js.Global().Get("Object").New()
 	texEntry.Set("binding", 0)
@@ -289,8 +288,8 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 	bgDesc.Set("entries", js.Global().Get("Array").New(texEntry, sampEntry))
 	bg := e.dev.device.Call("createBindGroup", bgDesc)
 
+	e.dev.textureBindGroups[key] = bg
 	e.passEncoder.Call("setBindGroup", 1, bg)
-	e.tempRefs = append(e.tempRefs, bg)
 }
 
 // SetTextureFilter overrides the texture filter for a slot.
