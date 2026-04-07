@@ -28,6 +28,13 @@ type atlasPage struct {
 	textureID uint32
 	size      int
 	rows      []atlasPageRow
+	// pixels is a CPU-side shadow of the atlas texture data (RGBA).
+	// Maintained on every UploadRegion so that grow() can copy old
+	// content to a new texture without calling ReadPixels. This avoids
+	// a GPU→CPU→GPU roundtrip and prevents a deadlock on WASM where
+	// ReadPixels requires an async JS promise that cannot resolve
+	// inside a synchronous Draw callback.
+	pixels []byte
 }
 
 type atlasPageRow struct {
@@ -90,6 +97,7 @@ func (sa *spriteAtlas) newPage() *atlasPage {
 		image:     img,
 		textureID: img.textureID,
 		size:      size,
+		pixels:    make([]byte, size*size*4),
 	}
 	sa.atlases = append(sa.atlases, page)
 	return page
@@ -113,6 +121,9 @@ func (ap *atlasPage) tryPlace(padded []byte, padW, padH, contentW, contentH int,
 	if ap.image.texture != nil {
 		ap.image.texture.UploadRegion(padded, x, y, padW, padH, 0)
 	}
+
+	// Update the CPU-side shadow buffer.
+	ap.copyToShadow(padded, x, y, padW, padH)
 
 	// Compute UVs mapping to the content region within the padded area.
 	atlasW := float32(ap.size)
@@ -178,17 +189,19 @@ func (ap *atlasPage) grow(rend *renderer) bool {
 		return false
 	}
 
-	// Create a new larger texture, copy old content via ReadPixels/WritePixels.
+	// Create a new larger texture and copy old content via shadow buffer.
 	newImg := NewImage(newSize, newSize)
 	if newImg.texture == nil {
 		return false
 	}
 
-	// Read old atlas pixels and upload to the new texture.
-	oldPixels := make([]byte, ap.size*ap.size*4)
-	if ap.image.texture != nil {
-		ap.image.texture.ReadPixels(oldPixels)
-		newImg.texture.UploadRegion(oldPixels, 0, 0, ap.size, ap.size, 0)
+	// Copy old atlas content to the new texture using the CPU shadow buffer.
+	// This avoids ReadPixels which deadlocks on WASM (async promise inside
+	// a synchronous Draw callback) and is faster on all platforms (no GPU
+	// readback stall).
+	oldSize := ap.size
+	if ap.pixels != nil && newImg.texture != nil {
+		newImg.texture.UploadRegion(ap.pixels, 0, 0, oldSize, oldSize, 0)
 	}
 
 	// Dispose old atlas texture.
@@ -201,6 +214,17 @@ func (ap *atlasPage) grow(rend *renderer) bool {
 	ap.image = newImg
 	ap.size = newSize
 
+	// Grow the shadow buffer: allocate new size, copy old content.
+	newPixels := make([]byte, newSize*newSize*4)
+	if ap.pixels != nil {
+		for row := 0; row < oldSize; row++ {
+			srcOff := row * oldSize * 4
+			dstOff := row * newSize * 4
+			copy(newPixels[dstOff:dstOff+oldSize*4], ap.pixels[srcOff:srcOff+oldSize*4])
+		}
+	}
+	ap.pixels = newPixels
+
 	// Re-register the new texture under the original atlas textureID so
 	// existing Images (which still hold ap.textureID) resolve correctly.
 	if rend.registerTexture != nil {
@@ -208,6 +232,22 @@ func (ap *atlasPage) grow(rend *renderer) bool {
 	}
 
 	return true
+}
+
+// copyToShadow copies a rectangular region of pixel data into the CPU shadow buffer.
+func (ap *atlasPage) copyToShadow(data []byte, x, y, w, h int) {
+	if ap.pixels == nil || len(data) < w*h*4 {
+		return
+	}
+	stride := ap.size * 4
+	for row := 0; row < h; row++ {
+		srcOff := row * w * 4
+		dstOff := (y+row)*stride + x*4
+		if dstOff+w*4 > len(ap.pixels) {
+			break
+		}
+		copy(ap.pixels[dstOff:dstOff+w*4], data[srcOff:srcOff+w*4])
+	}
 }
 
 // atlasEntryFits returns true if a source image is small enough to atlas.
