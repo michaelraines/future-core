@@ -463,13 +463,11 @@ fields. CI expanded with `cross-platform` job testing on macOS and Windows.
 
 ## Milestone 10 — Native Platform Backends (In Progress)
 
-Goal: eliminate the system GLFW install requirement. `go run ./cmd/driver`
-must "just work" on a fresh machine with only Go installed — matching
-Ebitengine's zero-install developer experience.
+Goal: provide platform windowing on all desktop platforms.
 
-**Strategy** (mirrors Ebitengine's approach):
-- **Linux/BSD**: Vendor GLFW C source, compile via CGo. Static linking means
-  no `libglfw.so` needed at runtime.
+**Strategy**:
+- **Linux/BSD**: Load system GLFW shared library via purego. Users install
+  `libglfw3-dev` (or equivalent). No CGo — fully pure Go.
 - **macOS**: Call Cocoa/AppKit directly via purego. System frameworks are
   always present — no GLFW dependency at all.
 - **Windows**: Call Win32 APIs directly via `golang.org/x/sys/windows`
@@ -478,23 +476,19 @@ Ebitengine's zero-install developer experience.
 OpenGL loading (`internal/gl/`) is unaffected — `OpenGL.framework` (macOS),
 `opengl32.dll` (Windows), and `libGL.so` (Linux) are always system-provided.
 
-### 10a — Linux/BSD: Vendored GLFW via CGo (Done)
+### 10a — Linux/BSD: System GLFW via purego (Done)
 
-Vendor GLFW 3.4 C source into the repo and compile it directly via CGo,
-eliminating the runtime `libglfw.so` dependency. Follows Ebitengine's
-`internal/glfw/` pattern: GLFW `.c`/`.h` files with Go build constraints,
-thin Go wrappers via `import "C"`.
+Load the system-installed GLFW shared library (`libglfw.so.3`) at runtime
+via purego. Users must install GLFW as a system dependency. No CGo required.
 
 | Task | Status | Notes |
 |---|---|---|
-| Vendor GLFW 3.4 source (`internal/platform/glfw/cglfw/`) | Done | 38 C source + headers, zlib/libpng license compatible |
-| CGo bridge (`glfwapi_cgo.go`, `callbacks_cgo.go`) | Done | Wraps C functions into Go function pointer vars |
-| Build constraints `//go:build linux \|\| freebsd` | Done | CGo path only on Linux/BSD |
-| Shared constants + function pointers (`glfwconst.go`) | Done | Platform-neutral, used by both CGo and purego paths |
-| purego path preserved for macOS/Windows (`glfwapi_purego.go`) | Done | `//go:build darwin \|\| windows` |
-| X11 support via vendored GLFW | Done | Needs X11 dev headers at build time |
-| Gamepad input via vendored GLFW | Done | Same joystick API, now compiled in |
-| CI needs `libxcursor-dev` etc. for X11 headers | Planned | Add to CI apt-get step |
+| purego GLFW loading on Linux/BSD (`procaddr_linux.go`) | Done | Loads `libglfw.so.3` or `libglfw.so` via purego.Dlopen |
+| Shared constants + function pointers (`glfwconst.go`) | Done | Platform-neutral, used by purego path on all platforms |
+| purego API init (`glfwapi_purego.go`) | Done | `//go:build darwin \|\| linux \|\| freebsd \|\| windows` |
+| purego callbacks (`callbacks_purego.go`) | Done | `//go:build darwin \|\| linux \|\| freebsd \|\| windows` |
+| Gamepad input | Done | Same joystick API via purego |
+| CI installs `libglfw3-dev` | Done | Replaces X11 header installs |
 
 ### 10b — macOS: Cocoa/AppKit via purego (Done)
 
@@ -548,13 +542,12 @@ Win32 API calls. Zero CGo — pure Go with syscalls.
 | Engine selects native platform per OS | Done | `platform_darwin.go` / `platform_windows.go` / `platform_unix.go` via build tags |
 | `engine_desktop.go` decoupled from GLFW | Done | Uses `newPlatformWindow()` — no direct GLFW import |
 | Cross-compilation verified | Done | darwin/arm64, darwin/amd64, windows/amd64 all clean |
-| Update CI: add X11 dev headers for Linux | Done | `libxcursor-dev`, `libxrandr-dev`, `libxi-dev`, `libxinerama-dev`, `libxxf86vm-dev` |
-| Remove system GLFW requirement from docs | Planned | Update README, DESIGN.md |
-| Cross-platform CI validation | Planned | GitHub Actions matrix: Linux (CGo GLFW), macOS (Cocoa), Windows (Win32) |
+| Update CI: install `libglfw3-dev` for Linux | Done | Replaces X11 header installs |
+| Cross-platform CI validation | Planned | GitHub Actions matrix: Linux (purego GLFW), macOS (Cocoa), Windows (Win32) |
 
 **Exit criteria**: `go run ./cmd/driver` opens a window and runs on Linux,
-macOS, and Windows with no system library installs beyond Go and a C compiler
-(Linux only).
+macOS, and Windows. Linux requires `libglfw3-dev` installed; macOS and
+Windows use native platform APIs with no external dependencies.
 
 ---
 
@@ -634,8 +627,8 @@ These guide every milestone:
    Users can disable atlasing via `SetSpriteAtlasEnabled(false)` for explicit
    GPU memory control.
 7. **Zero-install on macOS and Windows** — platform backends use only
-   system-provided frameworks (Cocoa, Win32, OpenGL). No shared library
-   installs required. Linux requires only a C compiler for CGo GLFW.
+   system-provided frameworks (Cocoa, Win32, OpenGL). Linux requires
+   `libglfw3-dev` for GLFW. No CGo or C compiler required.
 
 ---
 

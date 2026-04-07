@@ -7,7 +7,7 @@ import (
 	glfwplatform "github.com/michaelraines/future-core/internal/platform/glfw"
 )
 
-// newPlatformWindow creates a GLFW window (vendored C source, compiled via CGo).
+// newPlatformWindow creates a GLFW window (system library loaded via purego).
 func newPlatformWindow() platform.Window {
 	return glfwplatform.New()
 }

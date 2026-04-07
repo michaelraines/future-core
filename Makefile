@@ -45,8 +45,7 @@ LINT_PATHS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio |
 
 # All buildable packages. Excludes:
 # - audio/: requires ALSA headers (CGo) on Linux
-# - internal/platform/glfw: contains vendored C source requiring CGo
-BUILD_PKGS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep -v /internal/platform/glfw)
+BUILD_PKGS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio)
 
 # Default target runs the full CI pipeline
 all: ci
@@ -98,10 +97,9 @@ build:
 
 # Cross-compile for Android (arm64). Verifies engine-internal packages compile
 # for Android without requiring the NDK or CGo. The root package, platform
-# packages, and GPU binding packages are excluded because they need CGo (the
-# root package imports x/mobile/app which requires JNI bindings via CGo; this
-# is analogous to the root package requiring X11 headers on Linux for GLFW).
-# Full Android builds require CGO_ENABLED=1 with the Android NDK toolchain.
+# packages (glfw, cocoa, win32), and GPU binding packages are excluded because
+# they are desktop-only. The root package imports x/mobile/app which requires
+# JNI bindings via CGo. Full Android builds need CGO_ENABLED=1 with the NDK.
 build-android:
 	@echo "==> Building for Android (arm64)..."
 	GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -tags soft \

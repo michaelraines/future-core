@@ -1,9 +1,9 @@
 //go:build darwin || linux || freebsd || windows
 
 // Package glfw implements the platform.Window interface using GLFW.
-// On Linux/BSD, GLFW is compiled from vendored source via CGo.
-// On macOS/Windows, GLFW is loaded at runtime via purego (temporary —
-// will be replaced by native Cocoa/Win32 backends).
+// On all platforms, GLFW is loaded at runtime via purego — no CGo required.
+// Users must install GLFW as a system dependency (e.g. libglfw3-dev on
+// Debian/Ubuntu, libglfw.3.dylib on macOS, glfw3.dll on Windows).
 package glfw
 
 import (

@@ -1,7 +1,7 @@
-//go:build darwin || windows
+//go:build darwin || linux || freebsd || windows
 
 // This file provides the purego-based GLFW API initialization for platforms
-// that load GLFW as a shared library at runtime (macOS, Windows).
+// that load GLFW as a shared library at runtime.
 package glfw
 
 import (
