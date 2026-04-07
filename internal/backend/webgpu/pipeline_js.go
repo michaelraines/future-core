@@ -150,6 +150,7 @@ func (p *Pipeline) createBindGroupLayouts() {
 	uniformEntry.Set("visibility", 3) // VERTEX | FRAGMENT
 	bufferLayout := js.Global().Get("Object").New()
 	bufferLayout.Set("type", "uniform")
+	bufferLayout.Set("hasDynamicOffset", true)
 	uniformEntry.Set("buffer", bufferLayout)
 
 	uniformBGLDesc := js.Global().Get("Object").New()
