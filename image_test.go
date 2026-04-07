@@ -166,9 +166,17 @@ func TestNewImageFromImageWithDevice(t *testing.T) {
 	require.NotEqual(t, uint32(0), img.textureID, "textureID should be non-zero")
 	require.NotNil(t, registered[img.textureID], "texture should be registered")
 
+	// GPU texture is padded: 32+2=34 in each dimension.
 	mt := dev.textures[len(dev.textures)-1]
-	require.Equal(t, 32, mt.w)
-	require.Equal(t, 32, mt.h)
+	require.Equal(t, 34, mt.w)
+	require.Equal(t, 34, mt.h)
+
+	// UVs should map to the content region within the padded texture.
+	require.True(t, img.padded, "image should be marked as padded")
+	require.InDelta(t, float32(1)/float32(34), img.u0, 1e-6)
+	require.InDelta(t, float32(1)/float32(34), img.v0, 1e-6)
+	require.InDelta(t, float32(33)/float32(34), img.u1, 1e-6)
+	require.InDelta(t, float32(33)/float32(34), img.v1, 1e-6)
 }
 
 func TestNewImageFromImageNonRGBA(t *testing.T) {
@@ -1195,4 +1203,204 @@ func TestDrawImageSubImage(t *testing.T) {
 	v2 := batches[0].Vertices[2]
 	require.InDelta(t, float32(0.5), v2.TexU, 1e-6)
 	require.InDelta(t, float32(0.5), v2.TexV, 1e-6)
+}
+
+// --- Pixel snap tests ---
+
+func TestPixelSnapOption(t *testing.T) {
+	b := withBatchRenderer(t, 1)
+
+	dst := &Image{width: 320, height: 240, u0: 0, v0: 0, u1: 1, v1: 1}
+	src := &Image{width: 32, height: 32, textureID: 5, u0: 0, v0: 0, u1: 1, v1: 1}
+
+	opts := &DrawImageOptions{PixelSnap: true}
+	opts.GeoM.Translate(10.7, 20.3)
+	dst.DrawImage(src, opts)
+
+	batches := b.Flush()
+	require.Len(t, batches, 1)
+
+	v0 := batches[0].Vertices[0]
+	require.InDelta(t, float32(11), v0.PosX, 1e-6, "should snap to nearest integer")
+	require.InDelta(t, float32(20), v0.PosY, 1e-6, "should snap to nearest integer")
+
+	v2 := batches[0].Vertices[2]
+	require.InDelta(t, float32(43), v2.PosX, 1e-6, "should snap to nearest integer")
+	require.InDelta(t, float32(52), v2.PosY, 1e-6, "should snap to nearest integer")
+}
+
+func TestPixelSnapGlobal(t *testing.T) {
+	b := withBatchRenderer(t, 1)
+
+	SetPixelSnapEnabled(true)
+	t.Cleanup(func() { SetPixelSnapEnabled(false) })
+
+	require.True(t, IsPixelSnapEnabled())
+
+	dst := &Image{width: 320, height: 240, u0: 0, v0: 0, u1: 1, v1: 1}
+	src := &Image{width: 16, height: 16, textureID: 5, u0: 0, v0: 0, u1: 1, v1: 1}
+
+	opts := &DrawImageOptions{}
+	opts.GeoM.Translate(5.4, 3.6)
+	dst.DrawImage(src, opts)
+
+	batches := b.Flush()
+	require.Len(t, batches, 1)
+
+	v0 := batches[0].Vertices[0]
+	require.InDelta(t, float32(5), v0.PosX, 1e-6, "global pixel snap should round down")
+	require.InDelta(t, float32(4), v0.PosY, 1e-6, "global pixel snap should round up")
+}
+
+func TestPixelSnapDisabledByDefault(t *testing.T) {
+	b := withBatchRenderer(t, 1)
+
+	// Ensure global is off.
+	SetPixelSnapEnabled(false)
+
+	dst := &Image{width: 320, height: 240, u0: 0, v0: 0, u1: 1, v1: 1}
+	src := &Image{width: 16, height: 16, textureID: 5, u0: 0, v0: 0, u1: 1, v1: 1}
+
+	opts := &DrawImageOptions{}
+	opts.GeoM.Translate(5.7, 3.3)
+	dst.DrawImage(src, opts)
+
+	batches := b.Flush()
+	require.Len(t, batches, 1)
+
+	v0 := batches[0].Vertices[0]
+	require.InDelta(t, float32(5.7), v0.PosX, 1e-3, "should not snap when disabled")
+	require.InDelta(t, float32(3.3), v0.PosY, 1e-3, "should not snap when disabled")
+}
+
+func TestPixelSnapFunc(t *testing.T) {
+	tests := []struct {
+		in, want float64
+	}{
+		{0.0, 0.0},
+		{0.4, 0.0},
+		{0.5, 1.0}, // math.Round rounds half away from zero: 0.5 → 1
+		{0.6, 1.0},
+		{1.5, 2.0}, // banker's rounding: 1.5 → 2
+		{-0.3, 0.0},
+		{-0.7, -1.0},
+		{100.0, 100.0},
+	}
+	for _, tt := range tests {
+		got := pixelSnap(tt.in)
+		require.InDelta(t, tt.want, got, 1e-9)
+	}
+}
+
+// --- Texture padding tests ---
+
+func TestNewImageFromImagePadding(t *testing.T) {
+	withMockRenderer(t)
+
+	// Create a 4x4 red image.
+	src := goimage.NewRGBA(goimage.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			src.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+
+	img := NewImageFromImage(src)
+	require.True(t, img.padded, "image should be padded")
+
+	// UVs should map to content region (1/6 to 5/6 for 4+2=6 padded size).
+	require.InDelta(t, float32(1)/float32(6), img.u0, 1e-6)
+	require.InDelta(t, float32(1)/float32(6), img.v0, 1e-6)
+	require.InDelta(t, float32(5)/float32(6), img.u1, 1e-6)
+	require.InDelta(t, float32(5)/float32(6), img.v1, 1e-6)
+}
+
+func TestNewImageFromImageNonRGBAPadded(t *testing.T) {
+	withMockRenderer(t)
+
+	src := goimage.NewNRGBA(goimage.Rect(0, 0, 8, 8))
+	img := NewImageFromImage(src)
+	require.True(t, img.padded, "non-RGBA images should also be padded")
+	require.InDelta(t, float32(1)/float32(10), img.u0, 1e-6)
+}
+
+func TestNewImageNotPadded(t *testing.T) {
+	withMockRenderer(t)
+
+	// NewImage (blank) should NOT be padded — it's a render target.
+	img := NewImage(64, 64)
+	require.False(t, img.padded, "blank images created as render targets should not be padded")
+}
+
+func TestSetPixelPaddedOffset(t *testing.T) {
+	// Create a mock texture that records UploadRegion calls.
+	var uploadX, uploadY int
+	mt := &mockTexture{w: 12, h: 12}
+	img := &Image{
+		width: 10, height: 10,
+		texture: mt,
+		padded:  true,
+		u0:      float32(1) / 12, v0: float32(1) / 12,
+		u1: float32(11) / 12, v1: float32(11) / 12,
+	}
+
+	// Override UploadRegion via a tracking texture.
+	tt := &trackingTexture{inner: mt}
+	img.texture = tt
+	img.Set(3, 4, color.White)
+	uploadX, uploadY = tt.lastX, tt.lastY
+	require.Equal(t, 4, uploadX, "Set should offset x by 1 for padded images")
+	require.Equal(t, 5, uploadY, "Set should offset y by 1 for padded images")
+}
+
+// trackingTexture wraps a mock texture and records the last UploadRegion call.
+type trackingTexture struct {
+	inner         *mockTexture
+	lastX, lastY  int
+	lastW, lastH  int
+	uploadRegionN int
+	uploadFullN   int
+}
+
+func (t *trackingTexture) Upload(data []byte, mip int) { t.uploadFullN++; t.inner.Upload(data, mip) }
+func (t *trackingTexture) UploadRegion(data []byte, x, y, w, h, mip int) {
+	t.lastX, t.lastY = x, y
+	t.lastW, t.lastH = w, h
+	t.uploadRegionN++
+}
+func (t *trackingTexture) ReadPixels(dst []byte)         { t.inner.ReadPixels(dst) }
+func (t *trackingTexture) Width() int                    { return t.inner.Width() }
+func (t *trackingTexture) Height() int                   { return t.inner.Height() }
+func (t *trackingTexture) Format() backend.TextureFormat { return t.inner.Format() }
+func (t *trackingTexture) Dispose()                      { t.inner.Dispose() }
+
+func TestWritePixelsPaddedUsesUploadRegion(t *testing.T) {
+	tt := &trackingTexture{inner: &mockTexture{w: 12, h: 12}}
+	img := &Image{
+		width: 10, height: 10,
+		texture: tt,
+		padded:  true,
+	}
+
+	pix := make([]byte, 10*10*4)
+	img.WritePixels(pix)
+	require.Equal(t, 1, tt.uploadRegionN, "padded WritePixels should use UploadRegion")
+	require.Equal(t, 1, tt.lastX, "should offset x by 1")
+	require.Equal(t, 1, tt.lastY, "should offset y by 1")
+	require.Equal(t, 10, tt.lastW)
+	require.Equal(t, 10, tt.lastH)
+}
+
+func TestWritePixelsRegionPaddedOffset(t *testing.T) {
+	tt := &trackingTexture{inner: &mockTexture{w: 12, h: 12}}
+	img := &Image{
+		width: 10, height: 10,
+		texture: tt,
+		padded:  true,
+	}
+
+	pix := make([]byte, 4*4*4)
+	img.WritePixelsRegion(pix, 2, 3, 4, 4)
+	require.Equal(t, 3, tt.lastX, "should offset x by 1")
+	require.Equal(t, 4, tt.lastY, "should offset y by 1")
 }

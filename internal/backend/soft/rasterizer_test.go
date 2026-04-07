@@ -180,6 +180,21 @@ func TestEdgeFuncFMA(t *testing.T) {
 	require.InDelta(t, 0.0, area, 1e-12)
 }
 
+func TestEdgeFuncFMASharedEdgeSymmetry(t *testing.T) {
+	// Two triangles sharing edge (0.1, 0.1)→(100.3, 50.7).
+	// For a point on the shared edge, the edge function values from
+	// both triangles should sum to the full triangle area (no gap/overlap).
+	// Triangle 1: A=(0.1, 0.1), B=(100.3, 50.7), C=(50, 100)
+	// Triangle 2: A=(100.3, 50.7), B=(0.1, 0.1), C=(80, -20)
+	//
+	// For a point exactly on edge AB, edgeFunc(A,B,P) should equal
+	// -edgeFunc(B,A,P) to ensure watertight rasterization.
+	px, py := 50.2, 25.4
+	e1 := edgeFuncFMA(0.1, 0.1, 100.3, 50.7, px, py)
+	e2 := edgeFuncFMA(100.3, 50.7, 0.1, 0.1, px, py)
+	require.InDelta(t, -e1, e2, 1e-12, "shared edge should produce negated values")
+}
+
 func TestMin3(t *testing.T) {
 	require.InDelta(t, 1.0, min3(1, 2, 3), 1e-12)
 	require.InDelta(t, 1.0, min3(3, 1, 2), 1e-12)
