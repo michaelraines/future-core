@@ -130,6 +130,16 @@ func (b *Batcher) allocIndices(n int) []uint16 {
 	return s
 }
 
+// AllocVertices returns a slice of n vertices from the arena, growing it if
+// needed. The returned slice is valid until the next Flush or Reset. This
+// allows callers to write vertex data directly into the arena, avoiding an
+// intermediate allocation.
+func (b *Batcher) AllocVertices(n int) []Vertex2D { return b.allocVertices(n) }
+
+// AllocIndices returns a slice of n indices from the arena, growing it if
+// needed. The returned slice is valid until the next Flush or Reset.
+func (b *Batcher) AllocIndices(n int) []uint16 { return b.allocIndices(n) }
+
 // Add adds a draw command to be batched. The vertex and index data
 // is copied into the batcher's arena to avoid retaining caller memory.
 func (b *Batcher) Add(cmd DrawCommand) {
@@ -139,6 +149,13 @@ func (b *Batcher) Add(cmd DrawCommand) {
 	copy(idx, cmd.Indices)
 	cmd.Vertices = verts
 	cmd.Indices = idx
+	b.commands = append(b.commands, cmd)
+}
+
+// AddDirect adds a draw command with pre-allocated arena vertex and index
+// data. The cmd.Vertices and cmd.Indices must have been obtained from
+// AllocVertices/AllocIndices. No copy is performed.
+func (b *Batcher) AddDirect(cmd DrawCommand) {
 	b.commands = append(b.commands, cmd)
 }
 

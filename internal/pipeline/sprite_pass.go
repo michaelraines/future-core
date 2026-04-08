@@ -46,6 +46,12 @@ type SpritePass struct {
 
 	// Projection is the orthographic projection matrix, set each frame.
 	Projection [16]float32
+
+	// Reusable per-frame slices to avoid heap allocations each frame.
+	// In WASM, per-frame allocations accumulate faster than GC can
+	// collect them, eventually causing OOM.
+	tmpVertices []batch.Vertex2D
+	tmpIndices  []uint16
 }
 
 // SpritePassConfig holds configuration for creating a SpritePass.
@@ -125,25 +131,27 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 	// Accumulate all vertex data contiguously. Adjust index values to
 	// account for the vertex offset so each batch's indices reference
 	// the correct vertices in the combined buffer.
-	var allVertices []batch.Vertex2D
-	var allIndices []uint16
+	// Reuse slices between frames to avoid per-frame heap allocations
+	// that can cause OOM in memory-constrained environments (WASM).
+	sp.tmpVertices = sp.tmpVertices[:0]
+	sp.tmpIndices = sp.tmpIndices[:0]
 	for i := range batches {
 		b := &batches[i]
-		baseVertex := uint16(len(allVertices))
-		regions[i].firstIndex = len(allIndices)
+		baseVertex := uint16(len(sp.tmpVertices))
+		regions[i].firstIndex = len(sp.tmpIndices)
 		regions[i].indexCount = len(b.Indices)
-		allVertices = append(allVertices, b.Vertices...)
+		sp.tmpVertices = append(sp.tmpVertices, b.Vertices...)
 		for _, idx := range b.Indices {
-			allIndices = append(allIndices, idx+baseVertex)
+			sp.tmpIndices = append(sp.tmpIndices, idx+baseVertex)
 		}
 	}
 
 	// Upload all vertex/index data at once.
-	if len(allVertices) > 0 {
-		sp.vertexBuf.Upload(vertexSliceToBytes(allVertices))
+	if len(sp.tmpVertices) > 0 {
+		sp.vertexBuf.Upload(vertexSliceToBytes(sp.tmpVertices))
 	}
-	if len(allIndices) > 0 {
-		sp.indexBuf.Upload(indexSliceToBytes(allIndices))
+	if len(sp.tmpIndices) > 0 {
+		sp.indexBuf.Upload(indexSliceToBytes(sp.tmpIndices))
 	}
 
 	// Track current render target and shader to minimize state changes.
