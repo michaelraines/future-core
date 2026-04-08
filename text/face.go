@@ -15,6 +15,7 @@ package text
 import (
 	"fmt"
 	"io"
+	"math"
 	"sync"
 
 	futurerender "github.com/michaelraines/future-core"
@@ -165,7 +166,13 @@ func (f *GoTextFace) drawGlyphs(target *futurerender.Image, s string, ox, oy flo
 
 		drawOpts := &futurerender.DrawImageOptions{}
 		drawOpts.ColorScale = cs
-		drawOpts.GeoM.Translate(curX+g.bearingX, oy+g.bearingY+f.met.Ascent)
+		// Snap glyph positions to integer pixels so each glyph bitmap
+		// aligns with the screen pixel grid. Without this, FilterNearest
+		// sampling at fractional positions causes texel columns/rows to
+		// be skipped or doubled, producing less crisp text.
+		glyphX := math.Round(curX + g.bearingX)
+		glyphY := math.Round(oy + g.bearingY + f.met.Ascent)
+		drawOpts.GeoM.Translate(glyphX, glyphY)
 		drawOpts.GeoM.Concat(geoM)
 		target.DrawImage(glyphImg, drawOpts)
 
