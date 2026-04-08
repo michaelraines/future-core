@@ -295,8 +295,10 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 		return
 	}
 
-	// Convert public Vertex to batch Vertex2D.
-	batchVerts := make([]batch.Vertex2D, len(vertices))
+	// Write vertex data directly to the batcher's arena to avoid a
+	// temporary make([]Vertex2D) allocation per call. In WASM, these
+	// per-call allocations accumulate faster than GC can collect.
+	batchVerts := rend.batcher.AllocVertices(len(vertices))
 	for i, v := range vertices {
 		batchVerts[i] = batch.Vertex2D{
 			PosX: v.DstX,
@@ -309,6 +311,8 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 			A:    v.ColorA,
 		}
 	}
+	batchIdx := rend.batcher.AllocIndices(len(indices))
+	copy(batchIdx, indices)
 
 	texID := uint32(0)
 	blend := backend.BlendSourceOver
@@ -323,9 +327,9 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 		fillRule = fillRuleToBackend(opts.FillRule)
 	}
 
-	rend.batcher.Add(batch.DrawCommand{
+	rend.batcher.AddDirect(batch.DrawCommand{
 		Vertices:  batchVerts,
-		Indices:   indices,
+		Indices:   batchIdx,
 		TextureID: texID,
 		BlendMode: blend,
 		Filter:    filter,
