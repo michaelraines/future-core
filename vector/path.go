@@ -128,6 +128,9 @@ func (p *Path) AppendVerticesAndIndicesForFilling(
 
 // AppendVerticesAndIndicesForStroke tessellates the path for stroking,
 // appending to the given vertex and index slices. Returns the updated slices.
+//
+// Adjacent segments share vertices at corners via miter joins, eliminating
+// gaps that would otherwise appear at outer corners of closed paths.
 func (p *Path) AppendVerticesAndIndicesForStroke(
 	vertices []futurerender.Vertex,
 	indices []uint16,
@@ -145,52 +148,92 @@ func (p *Path) AppendVerticesAndIndicesForStroke(
 			continue
 		}
 
-		// Generate strip of quads along the polyline.
-		for i := 0; i < len(pts)-1; i++ {
-			a := pts[i]
-			b := pts[i+1]
-			dx := b.x - a.x
-			dy := b.y - a.y
-			l := float32(gomath.Sqrt(float64(dx*dx + dy*dy)))
-			if l == 0 {
-				continue
-			}
-			// Normal perpendicular to segment.
-			nx := -dy / l * half
-			ny := dx / l * half
+		n := len(pts)
+		base := uint16(len(vertices))
 
-			base := uint16(len(vertices))
+		// Generate 2 vertices per point with miter-adjusted offsets at corners.
+		for i := 0; i < n; i++ {
+			var nx, ny float32
+
+			switch {
+			case sp.closed:
+				prev := (i - 1 + n) % n
+				next := (i + 1) % n
+				nx, ny = miterOffset(pts[prev], pts[i], pts[next], half)
+			case i == 0:
+				nx, ny = segmentNormal(pts[0], pts[1], half)
+			case i == n-1:
+				nx, ny = segmentNormal(pts[n-2], pts[n-1], half)
+			default:
+				nx, ny = miterOffset(pts[i-1], pts[i], pts[i+1], half)
+			}
+
 			vertices = append(vertices,
-				futurerender.Vertex{DstX: a.x + nx, DstY: a.y + ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-				futurerender.Vertex{DstX: a.x - nx, DstY: a.y - ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-				futurerender.Vertex{DstX: b.x + nx, DstY: b.y + ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-				futurerender.Vertex{DstX: b.x - nx, DstY: b.y - ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+				futurerender.Vertex{DstX: pts[i].x + nx, DstY: pts[i].y + ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+				futurerender.Vertex{DstX: pts[i].x - nx, DstY: pts[i].y - ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 			)
-			indices = append(indices, base, base+1, base+2, base+1, base+3, base+2)
 		}
 
-		// Close the stroke if the sub-path is closed.
-		if sp.closed && len(pts) >= 3 {
-			a := pts[len(pts)-1]
-			b := pts[0]
-			dx := b.x - a.x
-			dy := b.y - a.y
-			l := float32(gomath.Sqrt(float64(dx*dx + dy*dy)))
-			if l > 0 {
-				nx := -dy / l * half
-				ny := dx / l * half
-				base := uint16(len(vertices))
-				vertices = append(vertices,
-					futurerender.Vertex{DstX: a.x + nx, DstY: a.y + ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-					futurerender.Vertex{DstX: a.x - nx, DstY: a.y - ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-					futurerender.Vertex{DstX: b.x + nx, DstY: b.y + ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-					futurerender.Vertex{DstX: b.x - nx, DstY: b.y - ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-				)
-				indices = append(indices, base, base+1, base+2, base+1, base+3, base+2)
+		// Generate quad indices for each segment.
+		segCount := n - 1
+		if sp.closed {
+			segCount = n
+		}
+		for i := 0; i < segCount; i++ {
+			j := i + 1
+			if sp.closed {
+				j %= n
 			}
+			v0 := base + uint16(i*2)
+			v1 := base + uint16(i*2+1)
+			v2 := base + uint16(j*2)
+			v3 := base + uint16(j*2+1)
+			indices = append(indices, v0, v1, v2, v1, v3, v2)
 		}
 	}
 	return vertices, indices
+}
+
+// segmentNormal returns the perpendicular offset vector for a line segment,
+// scaled by half (the half-width of the stroke).
+func segmentNormal(a, b point, half float32) (nx, ny float32) {
+	dx := b.x - a.x
+	dy := b.y - a.y
+	l := float32(gomath.Sqrt(float64(dx*dx + dy*dy)))
+	if l == 0 {
+		return 0, 0
+	}
+	return -dy / l * half, dx / l * half
+}
+
+// miterOffset computes the miter join offset at point curr, where prev→curr
+// and curr→next are adjacent segments. Returns the offset vector to
+// add/subtract from curr to get the two stroke vertices.
+func miterOffset(prev, curr, next point, half float32) (nx, ny float32) {
+	// Unit normals for each segment.
+	n1x, n1y := segmentNormal(prev, curr, 1)
+	n2x, n2y := segmentNormal(curr, next, 1)
+
+	// Miter direction: average of the two unit normals, normalized.
+	mx := n1x + n2x
+	my := n1y + n2y
+	ml := float32(gomath.Sqrt(float64(mx*mx + my*my)))
+	if ml < 1e-6 {
+		// Segments are anti-parallel (180° turn). Use first segment normal.
+		return n1x * half, n1y * half
+	}
+	mx /= ml
+	my /= ml
+
+	// Miter length = half / cos(θ/2), where cos(θ/2) = dot(miter, normal).
+	dot := mx*n1x + my*n1y
+	if dot < 0.25 {
+		// Very acute angle: limit miter to prevent long spikes.
+		dot = 0.25
+	}
+	miterLen := half / dot
+
+	return mx * miterLen, my * miterLen
 }
 
 // StrokeOptions specifies options for path stroking.
