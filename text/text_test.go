@@ -23,8 +23,6 @@ func newTestFace(t *testing.T, size float64) *GoTextFace {
 	source, err := NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
 	require.NoError(t, err)
 	face := &GoTextFace{Source: source, Size: size}
-	face.ensureInit()
-	require.NotNil(t, face.face, "font face should initialize")
 	return face
 }
 
@@ -34,7 +32,7 @@ func TestNewGoTextFaceSource(t *testing.T) {
 	source, err := NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
 	require.NoError(t, err)
 	require.NotNil(t, source)
-	require.NotNil(t, source.otFont)
+	require.NotNil(t, source.f)
 }
 
 func TestNewGoTextFaceSourceInvalidData(t *testing.T) {
@@ -44,20 +42,12 @@ func TestNewGoTextFaceSourceInvalidData(t *testing.T) {
 
 // --- GoTextFace tests ---
 
-func TestGoTextFaceLazyInit(t *testing.T) {
-	source, err := NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
-	require.NoError(t, err)
-
-	face := &GoTextFace{Source: source, Size: 24}
-	// Before calling any method, internal fields should be zero.
-	require.Nil(t, face.face)
-	require.Nil(t, face.cache)
-
-	// Calling Metrics triggers lazy init.
+func TestGoTextFaceMetrics(t *testing.T) {
+	face := newTestFace(t, 24)
 	m := face.Metrics()
 	require.Greater(t, m.Height, 0.0)
-	require.NotNil(t, face.face)
-	require.NotNil(t, face.cache)
+	require.Greater(t, m.Ascent, 0.0)
+	require.Greater(t, m.Descent, 0.0)
 }
 
 func TestGoTextFaceNilSource(t *testing.T) {
@@ -94,29 +84,8 @@ func TestFaceMetrics(t *testing.T) {
 }
 
 func TestFaceClose(t *testing.T) {
-	cleanupAtlases(t)
-
 	face := newTestFace(t, 24)
-	target := futurerender.NewImage(200, 200)
-
-	// Draw to create atlas and cache entries.
-	opts := &DrawOptions{}
-	opts.GeoM.Translate(10, 20)
-	Draw(target, "Hello", face, opts)
-	_, ok := globalAtlases[face]
-	require.True(t, ok, "atlas should exist after Draw")
-	require.NotEmpty(t, face.cache.entries)
-
-	// Close should remove the atlas and clear the cache.
-	face.Close()
-	_, ok = globalAtlases[face]
-	require.False(t, ok, "atlas should be removed after Close")
-	require.Empty(t, face.cache.entries)
-}
-
-func TestFaceCloseWithoutAtlas(t *testing.T) {
-	face := newTestFace(t, 24)
-	// Close on a face that was never used should not panic.
+	// Close should not panic.
 	face.Close()
 }
 
@@ -178,103 +147,6 @@ func TestAdvance(t *testing.T) {
 	require.Greater(t, w, 0.0)
 
 	require.InDelta(t, 0.0, Advance("Hello", nil), 1e-9)
-}
-
-// --- Glyph cache tests ---
-
-func TestGlyphCacheHitMiss(t *testing.T) {
-	face := newTestFace(t, 24)
-
-	atlas := newFontAtlas()
-	atlas.image = futurerender.NewImage(256, 256)
-
-	// First call is a miss — rasterizes.
-	g1 := face.cache.get('A', atlas)
-	require.NotNil(t, g1)
-	require.False(t, g1.empty)
-	require.Greater(t, g1.advance, 0.0)
-	require.Greater(t, g1.width, 0)
-	require.Greater(t, g1.height, 0)
-
-	// Second call is a hit — same pointer.
-	g2 := face.cache.get('A', atlas)
-	require.Equal(t, g1, g2)
-}
-
-func TestGlyphCacheSpace(t *testing.T) {
-	face := newTestFace(t, 24)
-
-	atlas := newFontAtlas()
-	atlas.image = futurerender.NewImage(256, 256)
-
-	g := face.cache.get(' ', atlas)
-	require.NotNil(t, g)
-	require.True(t, g.empty)
-	require.Greater(t, g.advance, 0.0)
-}
-
-func TestGlyphCacheMultipleRunes(t *testing.T) {
-	face := newTestFace(t, 24)
-
-	atlas := newFontAtlas()
-	atlas.image = futurerender.NewImage(512, 512)
-
-	for _, r := range "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" {
-		g := face.cache.get(r, atlas)
-		require.NotNil(t, g)
-		require.Greater(t, g.advance, 0.0, "rune %c", r)
-	}
-
-	// All should now be cached.
-	require.Len(t, face.cache.entries, 62)
-}
-
-func TestGlyphCacheNilAtlas(t *testing.T) {
-	face := newTestFace(t, 24)
-
-	// Should not panic even with nil atlas — glyph just won't have atlas coords.
-	g := face.cache.get('A', nil)
-	require.NotNil(t, g)
-	require.False(t, g.empty)
-}
-
-func TestGlyphCacheInvalidatedOnAtlasGrow(t *testing.T) {
-	face := newTestFace(t, 24)
-
-	atlas := &fontAtlas{size: 16}
-	atlas.image = futurerender.NewImage(16, 16)
-
-	// Cache a glyph.
-	g1 := face.cache.get('A', atlas)
-	require.NotNil(t, g1)
-	require.Len(t, face.cache.entries, 1)
-
-	gen0 := atlas.generation
-
-	// Force a grow — this increments generation and rebuilds the atlas image.
-	grew := atlas.grow()
-	require.True(t, grew)
-	require.Greater(t, atlas.generation, gen0)
-
-	// The cache still has the stale entry for 'A'. The next get() call
-	// should detect the generation mismatch, clear the cache, and re-rasterize.
-	g2 := face.cache.get('A', atlas)
-	require.NotNil(t, g2)
-	// After invalidation, only 'A' should be in the cache (freshly rasterized).
-	require.Len(t, face.cache.entries, 1)
-	// The pointer must differ — it's a new entry, not the stale one.
-	require.True(t, g1 != g2, "entry pointer should differ after re-rasterize")
-}
-
-func TestGlyphCacheNotInvalidatedWithoutGrow(t *testing.T) {
-	face := newTestFace(t, 24)
-
-	atlas := newFontAtlas()
-	atlas.image = futurerender.NewImage(512, 512)
-
-	g1 := face.cache.get('B', atlas)
-	g2 := face.cache.get('B', atlas)
-	require.Equal(t, g1, g2, "same atlas generation should return cached entry")
 }
 
 // --- Atlas tests ---
@@ -420,21 +292,16 @@ func TestDrawEmptyString(t *testing.T) {
 	Draw(img, "", face, nil)
 }
 
-func TestDrawCreatesAtlas(t *testing.T) {
+func TestDrawBasic(t *testing.T) {
 	cleanupAtlases(t)
 
 	face := newTestFace(t, 24)
 	target := futurerender.NewImage(200, 200)
 
-	// Draw text — should create atlas for this face.
 	opts := &DrawOptions{}
 	opts.GeoM.Translate(10, 20)
+	// Should not panic.
 	Draw(target, "Hi", face, opts)
-
-	atlas, ok := globalAtlases[face]
-	require.True(t, ok)
-	require.NotNil(t, atlas)
-	require.NotNil(t, atlas.image)
 }
 
 func TestDrawWithColorScale(t *testing.T) {

@@ -17,7 +17,9 @@ func DrawFilledRect(dst *futurerender.Image, x, y, width, height float32, clr co
 		{DstX: x, DstY: y + height, ColorR: r, ColorG: g, ColorB: b, ColorA: a},
 	}
 	indices := []uint16{0, 1, 2, 0, 2, 3}
-	dst.DrawTriangles(vertices, indices, nil, nil)
+	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
+		AntiAlias: antialias,
+	})
 }
 
 // StrokeRect draws a stroked rectangle on dst.
@@ -37,7 +39,9 @@ func StrokeRect(dst *futurerender.Image, x, y, width, height, strokeWidth float3
 		vertices[i].ColorB = b
 		vertices[i].ColorA = a
 	}
-	dst.DrawTriangles(vertices, indices, nil, nil)
+	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
+		AntiAlias: antialias,
+	})
 }
 
 // DrawFilledCircle draws a filled circle on dst.
@@ -65,7 +69,9 @@ func DrawFilledCircle(dst *futurerender.Image, cx, cy, radius float32, clr color
 		}
 	}
 
-	dst.DrawTriangles(vertices, indices, nil, nil)
+	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
+		AntiAlias: antialias,
+	})
 }
 
 // StrokeCircle draws a stroked circle on dst.
@@ -92,7 +98,9 @@ func StrokeCircle(dst *futurerender.Image, cx, cy, radius, strokeWidth float32, 
 		vertices[i].ColorB = b
 		vertices[i].ColorA = a
 	}
-	dst.DrawTriangles(vertices, indices, nil, nil)
+	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
+		AntiAlias: antialias,
+	})
 }
 
 // StrokeLine draws a line from (x0,y0) to (x1,y1) on dst.
@@ -109,7 +117,9 @@ func StrokeLine(dst *futurerender.Image, x0, y0, x1, y1, strokeWidth float32, cl
 		vertices[i].ColorB = b
 		vertices[i].ColorA = a
 	}
-	dst.DrawTriangles(vertices, indices, nil, nil)
+	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
+		AntiAlias: antialias,
+	})
 }
 
 // colorToFloat converts a color.Color to float32 RGBA components.

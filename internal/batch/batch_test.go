@@ -213,38 +213,122 @@ func TestBatcherFlushEmpty(t *testing.T) {
 	require.Equal(t, []Batch(nil), batches)
 }
 
-func TestBatcherSortOrder(t *testing.T) {
+// TestBatcherPreservesInsertionOrderWithinTarget verifies that the batcher
+// does NOT reorder commands within a target by state (shader/blend/texture).
+// Reordering would break Painter's-algorithm semantics for any feature that
+// draws to a target with multiple textures where draw order matters — for
+// example, bigOffscreenBuffer anti-alias composites interleaved with glyph
+// draws.
+//
+// State-based batching is recovered via the adjacent-merge pass, but only
+// merges CONSECUTIVE commands that happen to share state at enqueue time.
+func TestBatcherPreservesInsertionOrderWithinTarget(t *testing.T) {
 	b := NewBatcher(65535, 65535)
 
-	// Add commands in reverse order: high shader/blend/texture first
-	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 3, backend.BlendAdditive, 2)
+	// Interleave two textures in A,B,A,B order. All commands target 0
+	// (screen) so TargetID doesn't affect ordering.
 	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
 	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 2, backend.BlendSourceOver, 0)
-	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 1)
+	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 2, backend.BlendSourceOver, 0)
 
 	batches := b.Flush()
 
-	// Should be sorted by shader, then blend, then texture
-	// shader=0, blend=SourceOver(1), tex=1
-	// shader=0, blend=SourceOver(1), tex=2
-	// shader=1, blend=SourceOver(1), tex=1
-	// shader=2, blend=Additive(2), tex=3
-	require.Len(t, batches, 4)
-	require.Equal(t, uint32(0), batches[0].ShaderID)
-	require.Equal(t, backend.BlendSourceOver, batches[0].BlendMode)
+	// Expected: four separate batches in insertion order (tex 1, 2, 1, 2).
+	// A state-sorting batcher would produce two batches (1,1 then 2,2).
+	require.Len(t, batches, 4, "insertion order must be preserved; state-based reordering is forbidden")
 	require.Equal(t, uint32(1), batches[0].TextureID)
-
-	require.Equal(t, uint32(0), batches[1].ShaderID)
-	require.Equal(t, backend.BlendSourceOver, batches[1].BlendMode)
 	require.Equal(t, uint32(2), batches[1].TextureID)
-
-	require.Equal(t, uint32(1), batches[2].ShaderID)
-	require.Equal(t, backend.BlendSourceOver, batches[2].BlendMode)
 	require.Equal(t, uint32(1), batches[2].TextureID)
+	require.Equal(t, uint32(2), batches[3].TextureID)
+}
 
-	require.Equal(t, uint32(2), batches[3].ShaderID)
-	require.Equal(t, backend.BlendAdditive, batches[3].BlendMode)
-	require.Equal(t, uint32(3), batches[3].TextureID)
+// TestBatcherPreservesInsertionOrderAcrossTargets verifies that commands
+// targeting different targets interleave in insertion order at the batch
+// level. There is NO global TargetID sort. Callers are responsible for
+// queuing commands in dependency order — if a command reads from a target
+// that was written to earlier, the writes must have been queued first.
+//
+// This matches Ebitengine's command queue: strict insertion order with no
+// reordering. Allocation order can't express dependency order (a parent may
+// be allocated before its children or vice versa), so any numeric sort by
+// TargetID would break one pattern or the other.
+func TestBatcherPreservesInsertionOrderAcrossTargets(t *testing.T) {
+	b := NewBatcher(65535, 65535)
+
+	// Alternate screen and offscreen targets in insertion order:
+	// screen, offscreen, screen, offscreen. Expect 4 separate batches
+	// in that same order.
+	b.Add(DrawCommand{
+		Vertices:  []Vertex2D{{PosX: 0, PosY: 0}},
+		Indices:   []uint16{0},
+		TextureID: 1,
+		BlendMode: backend.BlendSourceOver,
+		TargetID:  0, // screen
+	})
+	b.Add(DrawCommand{
+		Vertices:  []Vertex2D{{PosX: 0, PosY: 0}},
+		Indices:   []uint16{0},
+		TextureID: 1,
+		BlendMode: backend.BlendSourceOver,
+		TargetID:  5, // offscreen
+	})
+	b.Add(DrawCommand{
+		Vertices:  []Vertex2D{{PosX: 0, PosY: 0}},
+		Indices:   []uint16{0},
+		TextureID: 1,
+		BlendMode: backend.BlendSourceOver,
+		TargetID:  0, // screen
+	})
+	b.Add(DrawCommand{
+		Vertices:  []Vertex2D{{PosX: 0, PosY: 0}},
+		Indices:   []uint16{0},
+		TextureID: 1,
+		BlendMode: backend.BlendSourceOver,
+		TargetID:  5, // offscreen
+	})
+
+	batches := b.Flush()
+
+	// Insertion order: 0, 5, 0, 5 — four batches (target switches break
+	// merging) in insertion order.
+	require.Len(t, batches, 4)
+	require.Equal(t, uint32(0), batches[0].TargetID)
+	require.Equal(t, uint32(5), batches[1].TargetID)
+	require.Equal(t, uint32(0), batches[2].TargetID)
+	require.Equal(t, uint32(5), batches[3].TargetID)
+}
+
+// TestBatcherAdjacentMergeWithinTarget verifies that the adjacent-merge
+// pass still collapses consecutive commands that share state, even though
+// the sort no longer groups by state. This is the "recovered" batching
+// benefit — runs of state-coherent draws (the common case) still merge.
+func TestBatcherAdjacentMergeWithinTarget(t *testing.T) {
+	b := NewBatcher(65535, 65535)
+
+	// Three consecutive draws with identical state: should merge into 1.
+	b.AddQuad(0, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+	b.AddQuad(10, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+	b.AddQuad(20, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+
+	// One draw with different texture: new batch.
+	b.AddQuad(30, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 2, backend.BlendSourceOver, 0)
+
+	// Two more consecutive draws with the original state: since they are
+	// no longer adjacent to the first run in the command list, they form
+	// their own merged batch of 2.
+	b.AddQuad(40, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+	b.AddQuad(50, 0, 10, 10, 0, 0, 1, 1, 1, 1, 1, 1, 1, backend.BlendSourceOver, 0)
+
+	batches := b.Flush()
+
+	require.Len(t, batches, 3, "consecutive matching state should merge; non-adjacent should not")
+	require.Equal(t, uint32(1), batches[0].TextureID)
+	require.Len(t, batches[0].Vertices, 12, "first three quads (12 vertices) should merge")
+	require.Equal(t, uint32(2), batches[1].TextureID)
+	require.Len(t, batches[1].Vertices, 4)
+	require.Equal(t, uint32(1), batches[2].TextureID)
+	require.Len(t, batches[2].Vertices, 8, "last two quads (8 vertices) should merge")
 }
 
 func TestAddQuadDirect(t *testing.T) {

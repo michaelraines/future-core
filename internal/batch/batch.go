@@ -2,7 +2,6 @@ package batch
 
 import (
 	"math"
-	"sort"
 
 	"github.com/michaelraines/future-core/internal/backend"
 )
@@ -215,46 +214,23 @@ func (b *Batcher) AddQuad(
 }
 
 // Flush produces batches from accumulated commands and resets the batcher.
-// Commands are sorted by (shader, blend mode, texture) to minimize state changes,
-// then merged when adjacent commands share the same state.
+//
+// Commands are emitted in strict insertion order: there is NO reordering.
+// Callers queue commands in dependency order (parents before consumers or
+// vice versa, depending on the scene), and Flush preserves that order
+// exactly. This is Painter's-algorithm semantics and matches Ebitengine's
+// command queue model.
+//
+// State-based batching is still effective for the common case — a run of
+// draws with matching shader/blend/texture/etc. collapses into a single
+// batch via the adjacent-merge pass below. What's no longer done is
+// reordering draws across different state, which would break
+// ordering-dependent features like offscreen composites interleaved with
+// other draws.
 func (b *Batcher) Flush() []Batch {
 	if len(b.commands) == 0 {
 		return nil
 	}
-
-	// Sort for optimal batching: group by state.
-	// TargetID is first so all draws to the same render target are contiguous.
-	// Off-screen targets (ID > 0) are sorted before the screen target (ID == 0)
-	// so their content is ready when the screen pass samples them as textures.
-	sort.Slice(b.commands, func(i, j int) bool {
-		ci, cj := b.commands[i], b.commands[j]
-		if ci.TargetID != cj.TargetID {
-			// Screen target (0) sorts last; off-screen targets sort first.
-			if ci.TargetID == 0 {
-				return false
-			}
-			if cj.TargetID == 0 {
-				return true
-			}
-			return ci.TargetID < cj.TargetID
-		}
-		if ci.ShaderID != cj.ShaderID {
-			return ci.ShaderID < cj.ShaderID
-		}
-		if ci.BlendMode != cj.BlendMode {
-			return ci.BlendMode < cj.BlendMode
-		}
-		if ci.Filter != cj.Filter {
-			return ci.Filter < cj.Filter
-		}
-		if ci.FillRule != cj.FillRule {
-			return ci.FillRule < cj.FillRule
-		}
-		if ci.TextureID != cj.TextureID {
-			return ci.TextureID < cj.TextureID
-		}
-		return ci.Depth < cj.Depth
-	})
 
 	batches := make([]Batch, 0, 16)
 	var current *Batch
@@ -262,7 +238,7 @@ func (b *Batcher) Flush() []Batch {
 	for i := range b.commands {
 		cmd := &b.commands[i]
 
-		// Check if we can merge with the current batch
+		// Check if we can merge with the current batch.
 		canMerge := current != nil &&
 			current.TargetID == cmd.TargetID &&
 			current.TextureID == cmd.TextureID &&

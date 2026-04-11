@@ -35,6 +35,18 @@ type SpritePass struct {
 	vertexBuf backend.Buffer
 	indexBuf  backend.Buffer
 
+	// screenCleared tracks whether the screen (target=0) has already been
+	// cleared this frame. When batches force the sprite pass to leave the
+	// screen target for an offscreen and then return, the second
+	// BeginRenderPass(screen) MUST use LoadActionLoad — otherwise it wipes
+	// the draws the first screen pass already produced. Reset to false at
+	// the top of each Execute call.
+	screenCleared bool
+
+	// traceFrame is the current frame number for pass-boundary tracing.
+	// Set when FUTURE_CORE_TRACE_PASSES is active; zero otherwise.
+	traceFrame int
+
 	// ResolveTexture maps batch texture IDs to backend textures.
 	ResolveTexture TextureResolver
 
@@ -106,7 +118,35 @@ func (sp *SpritePass) Name() string { return "sprite" }
 // is begun, all batches are drawn, and the pass is ended.
 // If no batches exist, the screen target is still cleared (when enabled).
 func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
+	// Reset per-frame state before flushing. The screen is un-cleared at
+	// the start of every frame; the first beginTargetPass(screen) call
+	// flips this to true so any subsequent screen pass in the same frame
+	// uses LoadActionLoad.
+	sp.screenCleared = false
+
 	batches := sp.batcher.Flush()
+
+	// Diagnostic: dump per-frame batch metadata when FUTURE_CORE_TRACE_BATCHES
+	// is set. See internal/pipeline/trace.go for details.
+	if traceBatchesActive() {
+		n := traceBatchesBeginFrame()
+		tracef("=== frame %d: %d batches ===\n", n, len(batches))
+		for i := range batches {
+			b := &batches[i]
+			tracef("  batch[%d] target=%d texture=%d shader=%d filter=%d blend=%d verts=%d indices=%d\n",
+				i, b.TargetID, b.TextureID, b.ShaderID, b.Filter, b.BlendMode,
+				len(b.Vertices), len(b.Indices))
+		}
+	}
+
+	// Diagnostic: count the frame for pass-boundary tracing too, so that
+	// pass events can be attributed to a specific frame number in the
+	// trace output. sp.traceFrame is read by beginTargetPass.
+	sp.traceFrame = 0
+	if tracePassesActive() {
+		sp.traceFrame = tracePassesBeginFrame()
+	}
+
 	if len(batches) == 0 {
 		// Even with no draws, clear the screen target so the previous
 		// frame's content doesn't persist.
@@ -239,10 +279,18 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 
 	loadAction := backend.LoadActionLoad
 	clearColor := [4]float32{0, 0, 0, 0}
-	if targetID == 0 && ctx.ScreenClearEnabled {
-		// Screen target clears each frame to opaque black.
+	if targetID == 0 && ctx.ScreenClearEnabled && !sp.screenCleared {
+		// Screen target clears to opaque black on the FIRST screen pass of
+		// the frame. Subsequent screen passes (re-entries after a detour to
+		// an offscreen target) must use LoadActionLoad; otherwise they
+		// wipe the content the first screen pass just produced.
 		loadAction = backend.LoadActionClear
 		clearColor = [4]float32{0, 0, 0, 1}
+	}
+	if targetID == 0 {
+		// Mark the screen as "touched" so any later re-entry this frame
+		// loads instead of clearing.
+		sp.screenCleared = true
 	}
 
 	enc.BeginRenderPass(backend.RenderPassDescriptor{
@@ -263,6 +311,16 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 		Width:  w,
 		Height: h,
 	})
+
+	if sp.traceFrame > 0 {
+		loadStr := "load"
+		if loadAction == backend.LoadActionClear {
+			loadStr = "clear"
+		}
+		tracef("[frame %d] BeginRenderPass target=%d load=%s viewport=%dx%d clear=[%.2f %.2f %.2f %.2f]\n",
+			sp.traceFrame, targetID, loadStr, w, h,
+			clearColor[0], clearColor[1], clearColor[2], clearColor[3])
+	}
 }
 
 // setProjectionForTarget sets the projection matrix appropriate for the

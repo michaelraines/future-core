@@ -236,10 +236,47 @@ func miterOffset(prev, curr, next point, half float32) (nx, ny float32) {
 	return mx * miterLen, my * miterLen
 }
 
+// LineCap defines how the ends of a stroked path are rendered.
+type LineCap int
+
+const (
+	// LineCapButt ends the stroke flush at the endpoint (default).
+	LineCapButt LineCap = iota
+	// LineCapRound adds a semicircle at each endpoint.
+	LineCapRound
+	// LineCapSquare extends the stroke by half the width beyond each endpoint.
+	LineCapSquare
+)
+
+// LineJoin defines how two stroke segments are joined at a shared vertex.
+type LineJoin int
+
+const (
+	// LineJoinMiter extends edges until they meet at a sharp point (default).
+	LineJoinMiter LineJoin = iota
+	// LineJoinBevel connects the outer corners with a straight line.
+	LineJoinBevel
+	// LineJoinRound connects the outer corners with an arc.
+	LineJoinRound
+)
+
 // StrokeOptions specifies options for path stroking.
 type StrokeOptions struct {
 	// Width is the stroke width in pixels.
 	Width float32
+
+	// LineCap controls how the ends of the stroke are rendered.
+	// Line caps are not rendered when the subpath is closed.
+	// The default (zero) value is LineCapButt.
+	LineCap LineCap
+
+	// LineJoin controls how two stroke segments are joined.
+	// The default (zero) value is LineJoinMiter.
+	LineJoin LineJoin
+
+	// MiterLimit is the miter limit for LineJoinMiter.
+	// The default (zero) value is 0.
+	MiterLimit float32
 }
 
 // --- Bezier helpers ---
