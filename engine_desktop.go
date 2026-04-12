@@ -436,6 +436,13 @@ func (e *engine) run() error {
 		// End frame: submit recorded commands to the GPU.
 		e.device.EndFrame()
 
+		// Dispose any images deferred during this frame (e.g. AA buffers
+		// that were replaced mid-frame). Safe to release now because
+		// the sprite pass has consumed all references.
+		if e.rend != nil {
+			e.rend.disposeDeferred()
+		}
+
 		// For non-GL backends: read rendered pixels and blit to the
 		// window's GL framebuffer.
 		if e.presenter != nil {

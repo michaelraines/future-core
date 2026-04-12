@@ -70,75 +70,89 @@ func Draw(target *futurerender.Image, s string, face Face, opts *DrawOptions) {
 		return
 	}
 
-	lines := splitLines(s)
-	metrics := face.Metrics()
-
-	lineH := metrics.Height
+	var lineSpacing float64
 	primaryAlign := AlignStart
 	secondaryAlign := AlignStart
 	var cs futurerender.ColorScale
 	var geoM futurerender.GeoM
 	if opts != nil {
-		if opts.LineSpacing > 0 {
-			lineH = opts.LineSpacing
-		}
+		lineSpacing = opts.LineSpacing
 		primaryAlign = opts.PrimaryAlign
 		secondaryAlign = opts.SecondaryAlign
 		cs = opts.ColorScale
 		geoM = opts.GeoM
 	}
 
-	// Compute reference width for alignment.
-	refWidth := 0.0
-	if primaryAlign != AlignStart {
-		for _, line := range lines {
-			w := face.advance(line)
-			if w > refWidth {
-				refWidth = w
-			}
+	metrics := face.Metrics()
+
+	// Calculate advances for each line (matching Ebitengine's forEachLine).
+	var advances []float64
+	var lineCount int
+	for t := s; ; {
+		lineCount++
+		line, rest, found := cutLine(t)
+		a := face.advance(line)
+		advances = append(advances, a)
+		if !found {
+			break
 		}
+		t = rest
 	}
 
-	// Compute total height for secondary alignment.
-	totalH := metrics.Height
-	if len(lines) > 1 {
-		totalH += float64(len(lines)-1) * lineH
-	}
-	secondaryOffset := 0.0
+	// Boundary height for secondary alignment.
+	// Matches Ebitengine: (lineCount-1)*lineSpacing + HAscent + HDescent
+	boundaryHeight := float64(lineCount-1)*lineSpacing + metrics.Ascent + metrics.Descent
+
+	// Secondary (vertical) offset — start with ascent so origin is at baseline.
+	offsetY := metrics.Ascent
 	switch secondaryAlign {
 	case AlignStart:
-		// No offset needed.
+		// No additional offset.
 	case AlignCenter:
-		secondaryOffset = -totalH / 2
+		offsetY -= boundaryHeight / 2
 	case AlignEnd:
-		secondaryOffset = -totalH
+		offsetY -= boundaryHeight
 	}
 
-	for i, line := range lines {
-		if line == "" {
-			continue
-		}
-		ox := 0.0
-		if primaryAlign != AlignStart {
-			lineWidth := face.advance(line)
-			switch primaryAlign {
-			case AlignStart:
-				// No offset needed.
-			case AlignCenter:
-				// Ebitengine convention: the origin point (GeoM.Translate) is
-				// the center of the text block. Shift each line so the block's
-				// center aligns with the origin, then center shorter lines
-				// within the block.
-				ox = -refWidth/2 + (refWidth-lineWidth)/2
-			case AlignEnd:
-				// Origin is the right edge of the text block.
-				ox = -lineWidth
-			}
+	var originY float64
+	var indexOffset int
+	for i, t := 0, s; ; i++ {
+		line, rest, found := cutLine(t)
+
+		// Primary (horizontal) alignment.
+		var originX float64
+		switch primaryAlign {
+		case AlignStart:
+			originX = 0
+		case AlignCenter:
+			originX = -advances[i] / 2
+		case AlignEnd:
+			originX = -advances[i]
 		}
 
-		oy := float64(i)*lineH + secondaryOffset
-		face.drawGlyphs(target, line, ox, oy, cs, geoM)
+		if line != "" {
+			face.drawGlyphs(target, line, originX+0, originY+offsetY, cs, geoM)
+		}
+
+		if !found {
+			break
+		}
+		t = rest
+		indexOffset += len(line) + 1
+		originY += lineSpacing
 	}
+}
+
+// cutLine splits s at the first newline. line is the text before the
+// newline (or all of s if none), rest is the text after (empty if none),
+// and found is true iff a newline was present.
+func cutLine(s string) (line, rest string, found bool) {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			return s[:i], s[i+1:], true
+		}
+	}
+	return s, "", false
 }
 
 // DrawWrapped renders text with word wrapping at the given maximum width.

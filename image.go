@@ -66,7 +66,22 @@ type Image struct {
 	// Atlased images do not support WritePixels, Set, or ReadPixels since
 	// their pixel data is interleaved with other images in the atlas.
 	atlased bool
+
+	// aaBuffer is a lazily-allocated 2x-scale offscreen used to implement
+	// DrawTrianglesOptions.AntiAlias. Drawn into at AA call sites, then
+	// flushed (downsample-composited) back into img at the next sync
+	// point. Mirrors Ebitengine's bigOffscreenImage. nil until the first
+	// AA draw on this image.
+	aaBuffer       *Image
+	aaBufferRegion goimage.Rectangle // 1x region this buffer covers (16-pixel granular)
+	aaBufferBlend  Blend             // blend mode currently accumulated in the buffer
+	aaBufferDirty  bool              // true when buffer has pending draws not yet flushed
 }
+
+// aaBufferScale is the supersample factor for anti-aliased DrawTriangles.
+// The AA buffer is allocated at 2x the 1x region so linear-downsampled
+// bilinear averaging of each 2x2 block produces a smooth edge.
+const aaBufferScale = 2
 
 // NewImage creates a new blank image with the given dimensions.
 // If the rendering backend is initialized, a GPU texture is allocated.
@@ -218,7 +233,22 @@ func (img *Image) Bounds() goimage.Rectangle {
 }
 
 // DrawImage draws src onto img with the given options.
+//
+// If either src or img has a pending anti-aliased triangle buffer (from a
+// prior DrawTriangles call with AntiAlias=true), it is flushed to its
+// parent before the draw — this ensures src's content is fully resolved
+// before it's sampled, and any AA draws queued against img have taken
+// effect before the new draw lands on top.
 func (img *Image) DrawImage(src *Image, opts *DrawImageOptions) {
+	src.flushAABufferIfNeeded()
+	img.flushAABufferIfNeeded()
+	img.drawImageRaw(src, opts)
+}
+
+// drawImageRaw is the hook-free variant of DrawImage. It skips the AA
+// sync hooks so that flushAABuffer can call it during a flush without
+// recursing. All other sites should prefer DrawImage.
+func (img *Image) drawImageRaw(src *Image, opts *DrawImageOptions) {
 	if img.disposed || src == nil || src.disposed {
 		return
 	}
@@ -286,10 +316,21 @@ func (img *Image) DrawImage(src *Image, opts *DrawImageOptions) {
 
 // DrawTriangles draws triangles with the given vertices, indices, and options.
 // This is the low-level drawing primitive equivalent to ebiten.DrawTriangles.
+//
+// When opts.AntiAlias is true, the call is routed through drawTrianglesAA,
+// which renders into a per-image 2x supersample buffer and defers the
+// downsample-composite until the next sync point. Sub-images fall back to
+// aliased rendering (they can't own a buffer — see drawTrianglesAA).
 func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image, opts *DrawTrianglesOptions) {
 	if img.disposed {
 		return
 	}
+	if opts != nil && opts.AntiAlias {
+		img.drawTrianglesAA(vertices, indices, src, opts)
+		return
+	}
+	src.flushAABufferIfNeeded()
+	img.flushAABufferIfNeeded()
 	rend := getRenderer()
 	if rend == nil || rend.batcher == nil {
 		return
@@ -347,6 +388,7 @@ func (img *Image) Fill(clr color.Color) {
 	if img.disposed {
 		return
 	}
+	img.flushAABufferIfNeeded()
 	rend := getRenderer()
 	if rend == nil || rend.batcher == nil {
 		return
@@ -434,6 +476,7 @@ func (img *Image) ReadPixels(dst []byte) {
 	if img.disposed || img.texture == nil || img.atlased {
 		return
 	}
+	img.flushAABufferIfNeeded()
 	if img.padded {
 		// Read the full padded texture, then extract the content region.
 		padW := img.width + 2
@@ -469,6 +512,17 @@ func (img *Image) Dispose() {
 		tracker.UntrackImage(img)
 	}
 
+	// Dispose the AA buffer BEFORE tearing down this image's own GPU
+	// resources. We deliberately skip flushing pending AA content: the
+	// parent is being thrown away, so the content is worthless. Calling
+	// flushAABuffer here would enqueue a draw against a soon-to-be-dead
+	// target.
+	if img.aaBuffer != nil {
+		img.aaBuffer.Dispose()
+		img.aaBuffer = nil
+		img.aaBufferDirty = false
+	}
+
 	if img.parent == nil {
 		if img.renderTarget != nil {
 			img.renderTarget.Dispose()
@@ -491,6 +545,7 @@ func (img *Image) Set(x, y int, clr color.Color) {
 	if x < 0 || y < 0 || x >= img.width || y >= img.height {
 		return
 	}
+	img.flushAABufferIfNeeded()
 	r, g, b, a := clr.RGBA()
 	pix := []byte{byte(r >> 8), byte(g >> 8), byte(b >> 8), byte(a >> 8)}
 	tx, ty := x, y
@@ -508,6 +563,7 @@ func (img *Image) WritePixels(pix []byte) {
 	if img.disposed || img.texture == nil || img.atlased {
 		return
 	}
+	img.flushAABufferIfNeeded()
 	if img.padded {
 		// Upload into the content region of the padded texture.
 		img.texture.UploadRegion(pix, 1, 1, img.width, img.height, 0)
@@ -522,6 +578,7 @@ func (img *Image) WritePixelsRegion(pix []byte, x, y, width, height int) {
 	if img.disposed || img.texture == nil || img.atlased {
 		return
 	}
+	img.flushAABufferIfNeeded()
 	tx, ty := x, y
 	if img.padded {
 		tx++
@@ -621,6 +678,12 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 	if img.disposed || shader == nil || shader.disposed {
 		return
 	}
+	img.flushAABufferIfNeeded()
+	if opts != nil {
+		for _, src := range opts.Images {
+			src.flushAABufferIfNeeded()
+		}
+	}
 	rend := getRenderer()
 	if rend == nil || rend.batcher == nil {
 		return
@@ -679,6 +742,12 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 func (img *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shader *Shader, opts *DrawTrianglesShaderOptions) {
 	if img.disposed || shader == nil || shader.disposed {
 		return
+	}
+	img.flushAABufferIfNeeded()
+	if opts != nil {
+		for _, src := range opts.Images {
+			src.flushAABufferIfNeeded()
+		}
 	}
 	rend := getRenderer()
 	if rend == nil || rend.batcher == nil {
@@ -1077,5 +1146,236 @@ func fillRuleToBackend(f FillRule) backend.FillRule {
 		return backend.FillRuleEvenOdd
 	default:
 		return backend.FillRuleNonZero
+	}
+}
+
+// --- Anti-aliased DrawTriangles via 2x supersample buffer ---
+//
+// Ebitengine implements DrawTrianglesOptions.AntiAlias by drawing AA'd
+// geometry into a per-Image 2x-scaled offscreen "big offscreen buffer",
+// then downsample-compositing that buffer back into the parent image at
+// the next sync point (any operation that reads or writes the parent's
+// texture). The 2x2 box-average produced by the linear-filtered
+// downsample creates a 1-pixel anti-aliased fringe on every triangle
+// edge, with zero changes to the shader or vertex format.
+//
+// This file mirrors Ebitengine's `bigOffscreenImage` design. Key pieces:
+//
+//   - requiredAARegion: computes the 16px-granular bounding box of a
+//     triangle set, so the AA buffer only covers the affected region.
+//   - drawTrianglesAA: entry point called from DrawTriangles when opts.AntiAlias
+//     is true. Lazily allocates img.aaBuffer sized to the region, rewrites
+//     vertex positions into the 2x buffer's coordinate space, and forwards
+//     to the non-AA DrawTriangles path on the buffer.
+//   - flushAABuffer: downsample-composites the buffer back into img via
+//     drawImageRaw at 0.5x with a linear filter. Does NOT dispose the buffer
+//     — it's reused for later AA draws on the same image with matching
+//     region and blend.
+//   - flushAABufferIfNeeded: nil-safe, parent-aware trigger called from
+//     every public Image method that touches texture content.
+
+// roundDown16 returns the largest multiple of 16 that is <= v.
+func roundDown16(v int) int {
+	return v &^ 15
+}
+
+// roundUp16 returns the smallest multiple of 16 that is >= v.
+func roundUp16(v int) int {
+	return (v + 15) &^ 15
+}
+
+// requiredAARegion returns the 1x region of img covered by the given
+// triangle vertices, expanded by 1 pixel on each side and rounded to 16px
+// granularity, clamped to img's bounds. The 16px rounding reduces churn
+// when successive AA draws have slightly different extents so the buffer
+// doesn't get reallocated on every draw.
+//
+// Returns the zero rectangle when vertices is empty or the computed
+// region has no area after clamping.
+func requiredAARegion(vertices []Vertex, imgW, imgH int) goimage.Rectangle {
+	if len(vertices) == 0 {
+		return goimage.Rectangle{}
+	}
+	minX := vertices[0].DstX
+	minY := vertices[0].DstY
+	maxX := vertices[0].DstX
+	maxY := vertices[0].DstY
+	for _, v := range vertices[1:] {
+		if v.DstX < minX {
+			minX = v.DstX
+		}
+		if v.DstY < minY {
+			minY = v.DstY
+		}
+		if v.DstX > maxX {
+			maxX = v.DstX
+		}
+		if v.DstY > maxY {
+			maxY = v.DstY
+		}
+	}
+	r := goimage.Rect(
+		roundDown16(int(gomath.Floor(float64(minX)))-1),
+		roundDown16(int(gomath.Floor(float64(minY)))-1),
+		roundUp16(int(gomath.Ceil(float64(maxX)))+1),
+		roundUp16(int(gomath.Ceil(float64(maxY)))+1),
+	)
+	if r.Min.X < 0 {
+		r.Min.X = 0
+	}
+	if r.Min.Y < 0 {
+		r.Min.Y = 0
+	}
+	if r.Max.X > imgW {
+		r.Max.X = imgW
+	}
+	if r.Max.Y > imgH {
+		r.Max.Y = imgH
+	}
+	if r.Min.X >= r.Max.X || r.Min.Y >= r.Max.Y {
+		return goimage.Rectangle{}
+	}
+	return r
+}
+
+// drawTrianglesAA is the entry point for anti-aliased DrawTriangles.
+// Called by DrawTriangles when opts.AntiAlias is true.
+//
+// Sub-images share their parent's texture and cannot own their own AA
+// buffer (matching Ebitengine). The fallback path calls DrawTriangles
+// again with AntiAlias=false, producing aliased output but no panic.
+func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Image, opts *DrawTrianglesOptions) {
+	if len(vertices) == 0 || len(indices) == 0 {
+		return
+	}
+	if img.parent != nil {
+		// Sub-image: fall back to aliased rendering.
+		fallback := DrawTrianglesOptions{}
+		if opts != nil {
+			fallback = *opts
+		}
+		fallback.AntiAlias = false
+		img.DrawTriangles(vertices, indices, src, &fallback)
+		return
+	}
+
+	reqBlend := Blend{}
+	if opts != nil {
+		reqBlend = opts.Blend
+	}
+
+	// A different blend mode from what the buffer currently holds forces
+	// a flush; the single downsample composite uses one blend mode.
+	if img.aaBuffer != nil && img.aaBufferDirty && img.aaBufferBlend != reqBlend {
+		img.flushAABuffer()
+	}
+
+	region := requiredAARegion(vertices, img.width, img.height)
+	if region.Empty() {
+		return
+	}
+
+	// A different region from what the buffer currently covers forces a
+	// flush and reallocation. We cannot Dispose the old buffer
+	// synchronously: the batcher still holds draw commands that target
+	// it, and the sprite pass will resolve its render target at flush
+	// time. Queue the old buffer for post-flush disposal instead.
+	if img.aaBuffer != nil && img.aaBufferRegion != region {
+		img.flushAABuffer()
+		if rend := getRenderer(); rend != nil {
+			rend.deferDispose(img.aaBuffer)
+		}
+		img.aaBuffer = nil
+	}
+
+	// Lazy-allocate the 2x buffer sized to the region. If allocation
+	// fails (e.g. no renderer, or backend refused), fall back to aliased.
+	if img.aaBuffer == nil {
+		w := region.Dx() * aaBufferScale
+		h := region.Dy() * aaBufferScale
+		buf := NewImage(w, h)
+		if buf == nil || buf.renderTarget == nil {
+			if buf != nil {
+				buf.Dispose()
+			}
+			fallback := DrawTrianglesOptions{}
+			if opts != nil {
+				fallback = *opts
+			}
+			fallback.AntiAlias = false
+			img.DrawTriangles(vertices, indices, src, &fallback)
+			return
+		}
+		img.aaBuffer = buf
+		img.aaBufferRegion = region
+	}
+	img.aaBufferBlend = reqBlend
+
+	// Rewrite vertex positions into the 2x buffer's coordinate space.
+	// Translate the 1x region origin to (0,0) and scale by 2.
+	// Texture coordinates and vertex colors pass through unchanged.
+	scaled := make([]Vertex, len(vertices))
+	for i, v := range vertices {
+		scaled[i] = v
+		scaled[i].DstX = (v.DstX - float32(region.Min.X)) * aaBufferScale
+		scaled[i].DstY = (v.DstY - float32(region.Min.Y)) * aaBufferScale
+	}
+
+	// Forward to the non-AA path on the offscreen buffer. inner.AntiAlias
+	// must be false or we'd recurse into drawTrianglesAA on the buffer.
+	inner := DrawTrianglesOptions{}
+	if opts != nil {
+		inner = *opts
+	}
+	inner.AntiAlias = false
+	img.aaBuffer.DrawTriangles(scaled, indices, src, &inner)
+	img.aaBufferDirty = true
+}
+
+// flushAABuffer downsample-composites img.aaBuffer back into img at 0.5x
+// with a linear filter, producing the anti-aliased result. The buffer is
+// NOT disposed — it's reused for subsequent AA draws on the same image
+// with a matching region, matching Ebitengine's behavior. The buffer
+// goes away only when the region changes (in drawTrianglesAA) or when
+// img.Dispose() is called.
+//
+// drawImageRaw is used so the flush doesn't recurse back into
+// flushAABufferIfNeeded on the parent.
+func (img *Image) flushAABuffer() {
+	if img == nil || img.aaBuffer == nil || !img.aaBufferDirty {
+		return
+	}
+
+	down := &DrawImageOptions{
+		Filter: FilterLinear,
+		Blend:  img.aaBufferBlend,
+	}
+	down.GeoM.Scale(1.0/float64(aaBufferScale), 1.0/float64(aaBufferScale))
+	down.GeoM.Translate(float64(img.aaBufferRegion.Min.X), float64(img.aaBufferRegion.Min.Y))
+
+	img.drawImageRaw(img.aaBuffer, down)
+
+	img.aaBufferDirty = false
+}
+
+// flushAABufferIfNeeded triggers a flush on img's AA buffer when the
+// buffer has pending draws. Called at the top of every public Image
+// method that reads or writes the image's texture, enforcing the
+// Painter's-algorithm guarantee that img.texture is up to date before
+// any operation that depends on its contents.
+//
+// Sub-images forward to their parent, because the parent owns the
+// texture. nil receiver is safe so call sites can say
+// `src.flushAABufferIfNeeded()` without guarding.
+func (img *Image) flushAABufferIfNeeded() {
+	if img == nil {
+		return
+	}
+	if img.parent != nil {
+		img.parent.flushAABufferIfNeeded()
+		return
+	}
+	if img.aaBufferDirty {
+		img.flushAABuffer()
 	}
 }

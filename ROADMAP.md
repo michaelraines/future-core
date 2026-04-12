@@ -212,6 +212,49 @@ Text alignment (AlignLeft/Center/Right) via `DrawOptions.Align`. Complex
 script support via `ShaperFace` using go-text/typesetting for HarfBuzz
 shaping, heuristic BiDi run splitting, ligatures. Coverage: 96.0%.
 
+### Outstanding Follow-up: Reunite with Upstream Glyph Atlas Rewrite
+
+While rebasing the `parity-and-aa` branch on 2026-04-11, origin/main had an
+unmerged glyph-atlas rewrite of `GoTextFace.drawGlyphs` (in commits that
+landed as part of PRs #46, #47, #48) that was structurally incompatible
+with the branch's existing shaper-based drawGlyphs implementation. To
+preserve the branch's shaper path for the AA work, the rebase kept the
+branch-side of `text/face.go` in the conflict region, which means the
+following upstream improvements are NOT currently on this branch:
+
+- **Persistent glyph atlas** (`f.cache.get(r, atlas)`, `atlas.subImage(...)`)
+  that packs rasterized glyphs into a shared texture to reduce draw call
+  count. Reference: PR #47 "Fix sprite atlas icons showing tiled content
+  after atlas grow", PR #46 "Fix goroutine deadlock in WASM atlas grow
+  via CPU shadow buffer", PR #48 "Reduce per-frame allocations to prevent
+  WASM OOM".
+- **Integer pixel snapping for glyph positions** (`math.Round(curX +
+  g.bearingX)` / `math.Round(oy + g.bearingY + f.met.Ascent)`), which
+  eliminates subpixel jitter under `FilterNearest` sampling. This is what
+  made the parity test diff jump from ~3.1% to ~3.0%; we currently get
+  that improvement via the non-conflicting miter-join + allocation
+  changes that auto-merged in, but not via the pixel-snap path.
+
+**To reapply**: the two drawGlyphs implementations aren't orthogonal — the
+branch's version iterates `[]shapedGlyph` from the HarfBuzz shaper with
+`origin = origin.Add(sg.XAdvance/YAdvance)`, while upstream's iterates
+runes with `curX += g.advance` and `prev = r` for kerning. Picking one
+means porting the other's features on top:
+
+- **Option A: port the atlas onto the shaper path.** Keep `f.Source.shape(s,
+  f.Size)` and the `gs []shapedGlyph` iteration, but inside the loop
+  replace the per-glyph `f.glyphImage(g, o)` call with an atlas lookup,
+  and replace `target.DrawImage(img, drawOpts)` with
+  `target.DrawImage(atlas.subImage(...), drawOpts)`. Pixel-snap can be
+  added separately with `math.Round` on the computed glyph position.
+- **Option B: port HarfBuzz shaping onto upstream's per-rune loop.** Run
+  the shaper once to get the glyph sequence, then drive the per-rune loop
+  from the shaper's output indices. More invasive and probably not worth it.
+
+Not blocking AA work; deferred until AA lands and we can profile whether
+the non-atlas glyph path is still a batch-count problem for the scene
+selector.
+
 ---
 
 ## Milestone 6 — Audio (Done)

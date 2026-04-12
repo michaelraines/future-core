@@ -380,6 +380,12 @@ func (e *engine) frame() {
 
 	e.device.EndFrame()
 
+	// Release any deferred AA buffers now that the sprite pass has
+	// consumed all references to them.
+	if e.rend != nil {
+		e.rend.disposeDeferred()
+	}
+
 	// When the device renders directly to a GPUCanvasContext the browser
 	// composites automatically on queue.submit — no CPU readback needed.
 	// Fall back to the ReadScreen+putImageData path for backends that

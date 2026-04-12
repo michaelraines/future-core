@@ -13,6 +13,17 @@ Key documents:
 - `ROADMAP.md` — phased implementation plan (update as work progresses)
 - `BACKENDS.md` — per-backend GPU implementation status, features, and roadmap
 
+## Text Rendering
+
+The `text/` package uses `go-text/typesetting` (HarfBuzz shaping) and `golang.org/x/image/vector.Rasterizer`
+for glyph rendering — the same libraries as Ebitengine's text/v2 — to produce pixel-identical text output.
+The `util/` package's `DebugPrint` uses an embedded `text.png` bitmap font copied from Ebitengine for matching
+debug text output. Do not replace these with alternative text rendering approaches without understanding
+the parity implications.
+
+**TODO:** Eventually replace `util/text.png` with our own bitmap font to avoid carrying Ebitengine's asset.
+For now it's fine — it gives us pixel-identical DebugPrint output which is valuable for parity testing.
+
 ## Build & Test
 
 All build, test, and lint operations are run via `make`. The default target
@@ -64,6 +75,75 @@ Screenshots are saved to `testdata/visual/<mode>_<example>.png` (gitignored).
 
 GPU mode needs ~60 frames for macOS OpenGL context initialization;
 soft mode works with fewer frames. The script defaults to 60.
+
+### Debugging the Sprite Pass
+
+When a rendering regression is hard to reproduce with visual testing alone
+(e.g. "some draws are missing on WebGPU but the same code works on soft"),
+two env-gated tracers in `internal/pipeline/trace.go` can dump per-frame
+metadata to stderr. Both tracers cap themselves at the first N frames so
+logs stay small.
+
+| Env var | Dumps |
+|---|---|
+| `FUTURE_CORE_TRACE_BATCHES=N` | The batcher's per-frame batch list after `Flush()`: target ID, texture ID, shader, filter, blend, vertex and index counts for each batch. Useful for confirming what the batcher actually handed to the sprite pass. |
+| `FUTURE_CORE_TRACE_PASSES=N` | Every `BeginRenderPass` call the sprite pass makes, with target ID, load action, viewport, and clear color. Useful for catching "the same target is entered twice per frame" and "the load action is wrong" bugs. |
+
+Typical debugging session — capture both traces for one frame of the
+`rttest` repro program:
+
+```bash
+cd future-core
+go build -o rttest ./cmd/rttest
+FUTURE_CORE_TRACE_BATCHES=1 FUTURE_CORE_TRACE_PASSES=1 \
+  WGPU_NATIVE_LIB_PATH=/opt/homebrew/lib \
+  FUTURE_CORE_BACKEND=webgpu \
+  FUTURE_CORE_HEADLESS=1 \
+  FUTURE_CORE_HEADLESS_OUTPUT=/tmp/rttest.png \
+  ./rttest 2>&1 | head -40
+```
+
+Expected output (fragment):
+```
+=== frame 1: 6 batches ===
+  batch[0] target=2 texture=1 shader=0 filter=0 blend=1 verts=4 indices=6
+  batch[1] target=2 texture=0 shader=0 filter=0 blend=1 verts=20 indices=30
+  batch[2] target=0 texture=2 shader=0 filter=0 blend=1 verts=4 indices=6
+  ...
+[frame 1] BeginRenderPass target=2 load=load viewport=48x48 clear=[0.00 0.00 0.00 0.00]
+[frame 1] BeginRenderPass target=0 load=clear viewport=256x256 clear=[0.00 0.00 0.00 1.00]
+[frame 1] BeginRenderPass target=3 load=load viewport=48x48 clear=[0.00 0.00 0.00 0.00]
+[frame 1] BeginRenderPass target=0 load=load viewport=256x256 clear=[0.00 0.00 0.00 0.00]
+```
+
+Reading the pass-boundary trace: target=0 is the screen/surface; non-zero
+targets are offscreen render targets. A `load=clear` on target=0 is only
+correct on the FIRST pass that touches the screen each frame — subsequent
+screen passes must use `load=load` or they wipe prior screen content. The
+sprite pass enforces this via a per-frame `screenCleared` flag.
+
+In the browser, `os.Stderr` output is routed to the JavaScript console, so
+the same env vars work in WASM as long as you set them on `go.env` in
+`wasm_exec.js` before `go.run()`:
+
+```js
+const go = new Go();
+go.env = go.env || {};
+go.env.FUTURE_CORE_TRACE_BATCHES = "3";
+go.env.FUTURE_CORE_TRACE_PASSES = "3";
+```
+
+Both tracers have zero cost when the env vars are unset: they resolve an
+integer limit once at package init and the hot path checks a simple
+integer comparison.
+
+**Diagnostic workflow for "why is some draw missing" bugs:** capture
+`FUTURE_CORE_TRACE_BATCHES` output from (a) a minimal program that
+reproduces the bug and (b) a full program that's known to work on the
+same backend. Diff the batcher command streams. Structural differences
+(e.g., how often `target=0` is re-entered, which targets are allocated
+mid-frame, batch ordering) usually point straight at the bug. This was
+how the sprite-pass screen-re-entry bug was found.
 
 ### Prerequisites
 
@@ -422,6 +502,29 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   not support `WritePixels`/`Set`/`ReadPixels` (no-ops). Disable with
   `SetSpriteAtlasEnabled(false)`. Tests that inspect per-image textures
   should disable atlasing in their setup (see `withMockRenderer` pattern).
+- **`Fill(transparent)` with SourceOver is a no-op** — `src*0 + dst*1 = dst`,
+  so `Image.Clear()` does NOT reset a render target's backing texture.
+  Fresh RTs read undefined memory on first `LoadActionLoad`. To actually
+  zero a target, upload zeros via `texture.Upload(zeros, 0)` (bypasses
+  blending) or overwrite every pixel with an opaque draw.
+- **Offscreen render targets start with undefined contents** — the sprite
+  pass uses `LoadActionLoad` for non-screen targets (the per-frame
+  `screenCleared` guard only covers `target=0`). Code that allocates an
+  RT mid-frame and reads it without first covering every needed pixel
+  will read uninitialized memory.
+- **Don't `Dispose()` a mid-frame-allocated render target synchronously** —
+  the batcher still holds draw commands referencing it. When the sprite
+  pass runs `Flush()` it will resolve a nil render target and pass it to
+  `BeginRenderPass`, which on native WebGPU panics with "no color
+  attachments". Use `renderer.deferDispose(img)` instead; the engine
+  drains the queue via `disposeDeferred()` after `EndFrame()`.
+- **Anti-aliasing via `drawTrianglesAA`** — `DrawTrianglesOptions.AntiAlias`
+  routes into a per-`Image` 2x-supersample buffer (`aaBuffer`), flushed
+  back via a linear-filtered downsample quad at sync points (any public
+  method that reads/writes the target's texture). The buffer's region is
+  16-pixel-granular via `requiredAARegion`; a region or blend change
+  triggers a flush and deferred dispose of the old buffer. Sub-images
+  can't own a buffer and fall back to aliased rendering.
 
 ## Test Coverage Requirements
 

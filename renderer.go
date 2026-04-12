@@ -31,6 +31,44 @@ type renderer struct {
 	// registerRenderTarget is called when a new render target is created
 	// so the engine can resolve target IDs during rendering.
 	registerRenderTarget func(id uint32, rt backend.RenderTarget)
+
+	// deferredDispose holds images whose GPU resources should be released
+	// AFTER the current frame's sprite-pass Flush+Execute has consumed
+	// any command-buffer references to them. Used by drawTrianglesAA when
+	// an aaBuffer needs to be replaced mid-frame: the batcher still holds
+	// draw commands targeting the old buffer, so we can't synchronously
+	// Dispose it — doing so leaves the sprite pass with a nil render
+	// target when it begins the pass. The engine drains this list by
+	// calling disposeDeferred() immediately after renderPipeline.Execute.
+	deferredDispose []*Image
+}
+
+// deferDispose queues an image for disposal after the current frame's
+// sprite pass has finished executing. Callers that must stop referencing
+// an image mid-frame (e.g. drawTrianglesAA when the aaBuffer region
+// changes) use this instead of calling Dispose directly, so any
+// already-queued draw commands targeting the image can still resolve
+// their backend.RenderTarget when the sprite pass runs.
+func (r *renderer) deferDispose(img *Image) {
+	if r == nil || img == nil {
+		return
+	}
+	r.deferredDispose = append(r.deferredDispose, img)
+}
+
+// disposeDeferred drains the pending-disposal list. The engine calls this
+// once per frame, AFTER the sprite pass's Execute has flushed and
+// submitted its command buffer.
+func (r *renderer) disposeDeferred() {
+	if r == nil {
+		return
+	}
+	for _, img := range r.deferredDispose {
+		if img != nil {
+			img.Dispose()
+		}
+	}
+	r.deferredDispose = r.deferredDispose[:0]
 }
 
 // globalRendererPtr is the active renderer, set atomically by the engine during init.

@@ -413,6 +413,11 @@ func (e *engine) runAndroid(a app.App) {
 			// End frame (submits to GPU + presents via Vulkan swapchain).
 			e.device.EndFrame()
 
+			// Release any deferred AA buffers.
+			if e.rend != nil {
+				e.rend.disposeDeferred()
+			}
+
 			// Update FPS/TPS counters every second.
 			frameCount++
 			if time.Since(fpsTimer) >= time.Second {
