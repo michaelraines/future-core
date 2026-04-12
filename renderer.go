@@ -28,6 +28,11 @@ type renderer struct {
 	// pipeline can look it up by ID during rendering.
 	registerShader func(id uint32, shader *Shader)
 
+	// pendingClears tracks render targets that need GPU-native clearing on
+	// their next BeginRenderPass. Set by Image.Clear(), consumed by the
+	// sprite pass's ConsumePendingClear callback.
+	pendingClears map[uint32]bool
+
 	// registerRenderTarget is called when a new render target is created
 	// so the engine can resolve target IDs during rendering.
 	registerRenderTarget func(id uint32, rt backend.RenderTarget)

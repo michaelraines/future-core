@@ -4,6 +4,8 @@ package futurerender
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"syscall/js"
 	"time"
 
@@ -168,6 +170,7 @@ func (e *engine) run() error {
 		registerRenderTarget: func(id uint32, rt backend.RenderTarget) {
 			e.renderTargets[id] = rt
 		},
+		pendingClears: make(map[uint32]bool),
 	}
 	e.rend = rend
 	setRenderer(rend)
@@ -269,6 +272,13 @@ func (e *engine) initRenderResources() error {
 	sp.ResolveRenderTarget = func(targetID uint32) backend.RenderTarget {
 		return e.renderTargets[targetID]
 	}
+	sp.ConsumePendingClear = func(targetID uint32) bool {
+		if e.rend.pendingClears[targetID] {
+			delete(e.rend.pendingClears, targetID)
+			return true
+		}
+		return false
+	}
 
 	e.renderPipeline = pipeline.New()
 	e.renderPipeline.AddPass(sp)
@@ -304,9 +314,19 @@ func (e *engine) startRAFLoop() {
 }
 
 // frame executes one frame of the game loop.
+// frameTiming controls per-phase timing output to the JS console via
+// console.time/console.timeEnd. Enabled by FUTURE_CORE_FRAME_TIMING=1.
+// Zero-cost when disabled.
+var frameTiming = os.Getenv("FUTURE_CORE_FRAME_TIMING") != ""
+
 func (e *engine) frame() {
 	if e.loopErr != nil {
 		return
+	}
+
+	var frameStart time.Time
+	if frameTiming {
+		frameStart = time.Now()
 	}
 
 	now := time.Now()
@@ -367,16 +387,33 @@ func (e *engine) frame() {
 		width: screenW, height: screenH,
 		u0: 0, v0: 0, u1: 1, v1: 1,
 	}
+
+	var drawStart time.Time
+	if frameTiming {
+		drawStart = time.Now()
+	}
 	e.game.Draw(screen)
+	var drawDur time.Duration
+	if frameTiming {
+		drawDur = time.Since(drawStart)
+	}
 
 	proj := fmath.Mat4Ortho(0, float64(screenW), float64(screenH), 0, -1, 1)
 	e.spritePass.Projection = proj.Float32()
 
 	e.device.BeginFrame()
 
+	var execStart time.Time
+	if frameTiming {
+		execStart = time.Now()
+	}
 	ctx := pipeline.NewPassContext(e.fbW, e.fbH)
 	ctx.ScreenClearEnabled = IsScreenClearedEveryFrame()
 	e.renderPipeline.Execute(e.encoder, ctx)
+	var execDur time.Duration
+	if frameTiming {
+		execDur = time.Since(execStart)
+	}
 
 	e.device.EndFrame()
 
@@ -393,6 +430,17 @@ func (e *engine) frame() {
 	type canvasPresenter interface{ PresentsToCanvas() bool }
 	if cp, ok := e.device.(canvasPresenter); !ok || !cp.PresentsToCanvas() {
 		e.presentToCanvas()
+	}
+
+	// Per-frame timing summary (env: FUTURE_CORE_FRAME_TIMING=1).
+	// Logged once per second to avoid flooding the console.
+	if frameTiming && e.frameCount == 0 {
+		frameDur := time.Since(frameStart)
+		fmt.Fprintf(os.Stderr,
+			"[frame-timing] draw=%s execute=%s total=%s\n",
+			drawDur.Round(time.Microsecond),
+			execDur.Round(time.Microsecond),
+			frameDur.Round(time.Microsecond))
 	}
 
 	// FPS tracking.

@@ -67,6 +67,7 @@ type Image struct {
 	// their pixel data is interleaved with other images in the atlas.
 	atlased bool
 
+
 	// aaBuffer is a lazily-allocated 2x-scale offscreen used to implement
 	// DrawTrianglesOptions.AntiAlias. Drawn into at AA call sites, then
 	// flushed (downsample-composited) back into img at the next sync
@@ -464,31 +465,28 @@ func (img *Image) SubImage(r goimage.Rectangle) *Image {
 	}
 }
 
-// clearZeroBuf is a reusable zero-filled buffer for Image.Clear. Grown
-// on demand and never shrunk; the zero-value bytes survive across frames.
-var clearZeroBuf []byte
-
 // Clear resets all pixels to transparent black (0, 0, 0, 0).
 // This is equivalent to ebiten.Image.Clear.
 //
-// This bypasses the draw pipeline entirely and uploads a zero-filled
-// buffer directly to the GPU texture. Using Fill(transparent) with
-// BlendSourceOver would be a no-op (src*0 + dst*1 = dst), leaving the
-// previous frame's content intact — which causes visual trails for any
-// scene that relies on per-frame clearing.
+// Implemented by marking the image's render target for clearing on its
+// next BeginRenderPass (via LoadActionClear). This is a GPU-native clear
+// with zero CPU-side data transfer — unlike texture.Upload(zeros) which
+// would copy width×height×4 bytes through the Go→JS boundary per call.
+//
+// Note: using Fill(transparent) with BlendSourceOver would be a no-op
+// (src*0 + dst*1 = dst), leaving the previous frame's content intact.
 func (img *Image) Clear() {
 	if img.disposed {
 		return
 	}
 	img.flushAABufferIfNeeded()
-	if img.texture == nil {
-		return
+	// Mark this target for GPU-native clearing on its next
+	// BeginRenderPass. The sprite pass checks this via
+	// ConsumePendingClear and emits LoadActionClear with transparent
+	// black — no CPU data transfer required.
+	if rend := getRenderer(); rend != nil && rend.pendingClears != nil {
+		rend.pendingClears[img.textureID] = true
 	}
-	size := img.width * img.height * 4
-	if len(clearZeroBuf) < size {
-		clearZeroBuf = make([]byte, size)
-	}
-	img.texture.Upload(clearZeroBuf[:size], 0)
 }
 
 // ReadPixels reads RGBA pixel data from the image into dst.

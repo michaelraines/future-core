@@ -66,6 +66,13 @@ type SpritePass struct {
 	// ResolveRenderTarget maps batch target IDs to render targets.
 	ResolveRenderTarget RenderTargetResolver
 
+	// ConsumePendingClear checks whether a target has a pending Clear()
+	// and returns true if so, atomically clearing the flag. The sprite
+	// pass uses this in beginTargetPass to emit LoadActionClear on the
+	// target's first render pass instead of LoadActionLoad. Returns false
+	// when nil (no clear tracking) or when the target has no pending clear.
+	ConsumePendingClear func(targetID uint32) bool
+
 	// Projection is the orthographic projection matrix, set each frame.
 	Projection [16]float32
 
@@ -324,9 +331,13 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 		clearColor = [4]float32{0, 0, 0, 1}
 	}
 	if targetID == 0 {
-		// Mark the screen as "touched" so any later re-entry this frame
-		// loads instead of clearing.
 		sp.screenCleared = true
+	}
+	// Offscreen targets with a pending Clear() use LoadActionClear with
+	// transparent black. This is a GPU-native clear — no CPU data transfer.
+	if targetID != 0 && sp.ConsumePendingClear != nil && sp.ConsumePendingClear(targetID) {
+		loadAction = backend.LoadActionClear
+		// clearColor is already {0,0,0,0} (transparent black).
 	}
 
 	enc.BeginRenderPass(backend.RenderPassDescriptor{
