@@ -49,7 +49,12 @@ type Device struct {
 }
 
 const (
-	uniformRingBufSize = 64 * 1024 // 64 KB — supports ~256 draws at 256-byte alignment.
+	// uniformRingBufSize must be large enough to hold ALL per-frame uniform
+	// writes without wrapping. With the single-command-encoder model, all
+	// render passes are recorded before the GPU executes any of them, so
+	// earlier writes must not be overwritten by later ones. 256 KB supports
+	// ~1024 draws per frame at 256-byte alignment.
+	uniformRingBufSize = 256 * 1024
 	uniformAlignOffset = 256
 )
 

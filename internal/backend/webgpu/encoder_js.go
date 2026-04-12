@@ -41,8 +41,14 @@ type Encoder struct {
 }
 
 // BeginRenderPass begins a WebGPU render pass.
+// The command encoder is created lazily on the first call per frame and
+// reused across all render passes until Flush submits the accumulated
+// command buffer. This batches all passes into a single queue.submit,
+// dramatically reducing Go→JS boundary crossings.
 func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
-	e.cmdEncoder = e.dev.device.Call("createCommandEncoder")
+	if e.cmdEncoder.IsUndefined() || e.cmdEncoder.IsNull() {
+		e.cmdEncoder = e.dev.device.Call("createCommandEncoder")
+	}
 
 	view := e.dev.currentColorView()
 	w, h := e.width, e.height
@@ -108,19 +114,15 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	e.passEncoder.Call("setViewport", 0, 0, float64(w), float64(h), 0, 1)
 }
 
-// EndRenderPass ends the current render pass.
+// EndRenderPass ends the current render pass but does NOT submit the
+// command buffer. Call Flush() after all render passes to submit the
+// accumulated work as a single queue.submit(). This batching reduces
+// Go→JS boundary crossings from O(passes) to O(1) per frame.
 func (e *Encoder) EndRenderPass() {
 	if e.inRenderPass {
 		e.passEncoder.Call("end")
 		e.passEncoder = js.Undefined()
 		e.inRenderPass = false
-
-		cmdBuf := e.cmdEncoder.Call("finish")
-		e.dev.queue.Call("submit", js.Global().Get("Array").New(cmdBuf))
-		e.cmdEncoder = js.Undefined()
-
-		// Release temporary references now that the GPU has the commands.
-		e.tempRefs = e.tempRefs[:0]
 		e.uniformBGPipeline = nil
 	}
 }
@@ -360,4 +362,19 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 }
 
 // Flush is a no-op — submission happens in EndRenderPass.
-func (e *Encoder) Flush() {}
+// Flush submits all render passes accumulated since the command encoder
+// was created (on the first BeginRenderPass of this frame). After Flush,
+// the command encoder is released and a new one will be created on the
+// next BeginRenderPass. This is the single queue.submit() call for the
+// entire frame's GPU work.
+func (e *Encoder) Flush() {
+	if e.cmdEncoder.IsUndefined() || e.cmdEncoder.IsNull() {
+		return
+	}
+	cmdBuf := e.cmdEncoder.Call("finish")
+	e.dev.queue.Call("submit", js.Global().Get("Array").New(cmdBuf))
+	e.cmdEncoder = js.Undefined()
+
+	// Release temporary references now that the GPU has the commands.
+	e.tempRefs = e.tempRefs[:0]
+}

@@ -162,6 +162,7 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		// frame's content doesn't persist.
 		sp.beginTargetPass(enc, ctx, 0)
 		enc.EndRenderPass()
+		enc.Flush()
 		return
 	}
 
@@ -297,6 +298,12 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 	}
 
 	enc.EndRenderPass()
+
+	// Submit all accumulated render passes as a single GPU command buffer.
+	// For deferred-execution backends (WebGPU, Vulkan) this batches all
+	// render passes into one queue.submit(), dramatically reducing the
+	// number of Go→JS/Go→C boundary crossings per frame.
+	enc.Flush()
 }
 
 // beginTargetPass starts a render pass for the given target ID.

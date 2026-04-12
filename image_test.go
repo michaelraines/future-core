@@ -984,17 +984,20 @@ func TestDisposeReleasesRenderTarget(t *testing.T) {
 }
 
 func TestImageClear(t *testing.T) {
-	b := withBatchRenderer(t, 99)
+	withMockRenderer(t)
 
-	img := &Image{width: 100, height: 100, u0: 0, v0: 0, u1: 1, v1: 1}
+	img := NewImage(4, 4)
+	require.NotNil(t, img.texture)
+
+	// Clear bypasses the batcher — it uploads zeros directly to the
+	// texture via texture.Upload. Verify it doesn't panic.
 	img.Clear()
 
-	batches := b.Flush()
-	require.Len(t, batches, 1)
-	// Clear uses Fill with zero color.
-	v := batches[0].Vertices[0]
-	require.InDelta(t, float32(0), v.R, 1e-6)
-	require.InDelta(t, float32(0), v.A, 1e-6)
+	// Verify no batcher commands were produced (Clear is direct upload).
+	rend := getRenderer()
+	require.NotNil(t, rend)
+	batches := rend.batcher.Flush()
+	require.Len(t, batches, 0, "Clear should bypass the batcher (direct texture upload)")
 }
 
 func TestImageReadPixels(t *testing.T) {

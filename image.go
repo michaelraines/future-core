@@ -464,10 +464,31 @@ func (img *Image) SubImage(r goimage.Rectangle) *Image {
 	}
 }
 
+// clearZeroBuf is a reusable zero-filled buffer for Image.Clear. Grown
+// on demand and never shrunk; the zero-value bytes survive across frames.
+var clearZeroBuf []byte
+
 // Clear resets all pixels to transparent black (0, 0, 0, 0).
 // This is equivalent to ebiten.Image.Clear.
+//
+// This bypasses the draw pipeline entirely and uploads a zero-filled
+// buffer directly to the GPU texture. Using Fill(transparent) with
+// BlendSourceOver would be a no-op (src*0 + dst*1 = dst), leaving the
+// previous frame's content intact — which causes visual trails for any
+// scene that relies on per-frame clearing.
 func (img *Image) Clear() {
-	img.Fill(color.NRGBA{})
+	if img.disposed {
+		return
+	}
+	img.flushAABufferIfNeeded()
+	if img.texture == nil {
+		return
+	}
+	size := img.width * img.height * 4
+	if len(clearZeroBuf) < size {
+		clearZeroBuf = make([]byte, size)
+	}
+	img.texture.Upload(clearZeroBuf[:size], 0)
 }
 
 // ReadPixels reads RGBA pixel data from the image into dst.

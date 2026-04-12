@@ -30,8 +30,13 @@ type Encoder struct {
 }
 
 // BeginRenderPass begins a WebGPU render pass.
+// The command encoder is created lazily on the first call per frame and
+// reused across all render passes until Flush submits the accumulated
+// command buffer.
 func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
-	e.cmdEncoder = wgpu.DeviceCreateCommandEncoder(e.dev.device)
+	if e.cmdEncoder == 0 {
+		e.cmdEncoder = wgpu.DeviceCreateCommandEncoder(e.dev.device)
+	}
 
 	// Use surface texture if presenting, otherwise offscreen default.
 	view := e.dev.defaultColorView
@@ -102,20 +107,15 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	wgpu.RenderPassSetViewport(e.passEncoder, 0, 0, float32(w), float32(h), 0, 1)
 }
 
-// EndRenderPass ends the current render pass.
+// EndRenderPass ends the current render pass but does NOT submit the
+// command buffer. Call Flush() after all render passes to submit the
+// accumulated work in a single queue submission.
 func (e *Encoder) EndRenderPass() {
 	if e.inRenderPass {
 		wgpu.RenderPassEnd(e.passEncoder)
 		wgpu.RenderPassRelease(e.passEncoder)
 		e.passEncoder = 0
 		e.inRenderPass = false
-
-		// Finish and submit the command buffer.
-		cmdBuf := wgpu.CommandEncoderFinish(e.cmdEncoder)
-		wgpu.QueueSubmit(e.dev.queue, []wgpu.CommandBuffer{cmdBuf})
-		wgpu.CommandBufferRelease(cmdBuf)
-		wgpu.CommandEncoderRelease(e.cmdEncoder)
-		e.cmdEncoder = 0
 	}
 }
 
@@ -381,7 +381,19 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 }
 
 // Flush is a no-op — submission happens in EndRenderPass.
-func (e *Encoder) Flush() {}
+// Flush submits all render passes accumulated in the current command
+// encoder as a single queue submission. Called once per frame after
+// the sprite pass has recorded all its render passes.
+func (e *Encoder) Flush() {
+	if e.cmdEncoder == 0 {
+		return
+	}
+	cmdBuf := wgpu.CommandEncoderFinish(e.cmdEncoder)
+	wgpu.QueueSubmit(e.dev.queue, []wgpu.CommandBuffer{cmdBuf})
+	wgpu.CommandBufferRelease(cmdBuf)
+	wgpu.CommandEncoderRelease(e.cmdEncoder)
+	e.cmdEncoder = 0
+}
 
 // ptrOf returns the uintptr of a pointer.
 func ptrOf[T any](p *T) uintptr {
