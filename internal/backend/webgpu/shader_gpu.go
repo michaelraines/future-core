@@ -29,6 +29,15 @@ type Shader struct {
 	vertexModule   wgpu.ShaderModule
 	fragmentModule wgpu.ShaderModule
 	compiled       bool
+
+	// uniformBuf is a reusable scratch buffer for packUniforms to avoid
+	// per-draw heap allocations.
+	uniformBuf []byte
+
+	// uniformsDirty is set by any SetUniform* call and cleared after
+	// bindUniforms uploads the data. When false, bindUniforms can skip
+	// the pack+upload+bind cycle entirely.
+	uniformsDirty bool
 }
 
 // compile translates GLSL to WGSL and compiles the source into shader modules.
@@ -80,7 +89,9 @@ func (s *Shader) compile() {
 	}
 }
 
-// packUniforms packs recorded uniforms into a byte buffer using the given layout.
+// packUniforms packs recorded uniforms into a byte buffer using the given
+// layout. The buffer is reused across calls to avoid per-draw heap
+// allocations.
 func (s *Shader) packUniforms(layout []shadertranslate.UniformField) []byte {
 	if len(layout) == 0 {
 		return nil
@@ -91,7 +102,11 @@ func (s *Shader) packUniforms(layout []shadertranslate.UniformField) []byte {
 	if totalSize%16 != 0 {
 		totalSize += 16 - (totalSize % 16)
 	}
-	buf := make([]byte, totalSize)
+	if cap(s.uniformBuf) < totalSize {
+		s.uniformBuf = make([]byte, totalSize)
+	}
+	buf := s.uniformBuf[:totalSize]
+	clear(buf) // zero to avoid stale data from prior draws
 	for _, f := range layout {
 		v, ok := s.uniforms[f.Name]
 		if !ok {
@@ -126,19 +141,34 @@ func writeUniformValue(dst []byte, v interface{}) {
 }
 
 // SetUniformFloat records a float uniform.
-func (s *Shader) SetUniformFloat(name string, v float32) { s.uniforms[name] = v }
+func (s *Shader) SetUniformFloat(name string, v float32) {
+	s.uniforms[name] = v
+	s.uniformsDirty = true
+}
 
 // SetUniformVec2 records a vec2 uniform.
-func (s *Shader) SetUniformVec2(name string, v [2]float32) { s.uniforms[name] = v }
+func (s *Shader) SetUniformVec2(name string, v [2]float32) {
+	s.uniforms[name] = v
+	s.uniformsDirty = true
+}
 
 // SetUniformVec4 records a vec4 uniform.
-func (s *Shader) SetUniformVec4(name string, v [4]float32) { s.uniforms[name] = v }
+func (s *Shader) SetUniformVec4(name string, v [4]float32) {
+	s.uniforms[name] = v
+	s.uniformsDirty = true
+}
 
 // SetUniformMat4 records a mat4 uniform.
-func (s *Shader) SetUniformMat4(name string, v [16]float32) { s.uniforms[name] = v }
+func (s *Shader) SetUniformMat4(name string, v [16]float32) {
+	s.uniforms[name] = v
+	s.uniformsDirty = true
+}
 
 // SetUniformInt records an int uniform.
-func (s *Shader) SetUniformInt(name string, v int32) { s.uniforms[name] = v }
+func (s *Shader) SetUniformInt(name string, v int32) {
+	s.uniforms[name] = v
+	s.uniformsDirty = true
+}
 
 // SetUniformBlock records a uniform block.
 func (s *Shader) SetUniformBlock(name string, data []byte) { s.uniforms[name] = data }

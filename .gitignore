@@ -7,6 +7,7 @@
 /text
 !/text/
 /backends
+/rttest
 
 # Coverage artifacts
 cover.out
@@ -18,6 +19,9 @@ coverage.html
 
 # Visual test screenshot outputs
 /testdata/visual/
+
+# Profile captures (machine-specific, produced by scripts/profile.sh)
+/testdata/profiles/
 
 # OS artifacts
 .DS_Store

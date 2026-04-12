@@ -144,13 +144,19 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 }
 
 // bindUniforms writes the shader's recorded uniforms into the ring buffer
-// and binds the region to group 0.
+// and binds the region to group 0. Skips the pack+upload+bind cycle when
+// no uniform values have changed since the last bind.
 func (e *Encoder) bindUniforms() {
 	if e.currentPipeline == nil || e.passEncoder == 0 || e.dev.device == 0 {
 		return
 	}
 	shader, ok := e.currentPipeline.desc.Shader.(*Shader)
 	if !ok || shader == nil {
+		return
+	}
+
+	// Fast path: skip if no SetUniform* calls since last bind.
+	if !shader.uniformsDirty {
 		return
 	}
 
@@ -161,6 +167,7 @@ func (e *Encoder) bindUniforms() {
 		data = shader.packUniforms(shader.combinedUniformLayout)
 	}
 	if len(data) == 0 {
+		shader.uniformsDirty = false
 		return
 	}
 
@@ -195,6 +202,8 @@ func (e *Encoder) bindUniforms() {
 		wgpu.RenderPassSetBindGroup(e.passEncoder, 0, bg)
 		wgpu.BindGroupRelease(bg)
 	}
+
+	shader.uniformsDirty = false
 }
 
 // bindDefaultTexture binds a 1x1 white placeholder texture to group 1,

@@ -104,6 +104,7 @@ const (
 // This function blocks until the game exits. It must be called from
 // the main goroutine on platforms that require it (macOS, iOS).
 func RunGame(game Game) error {
+	initPprof()
 	e := newEngine(game)
 	return e.run()
 }

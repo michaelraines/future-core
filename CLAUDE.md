@@ -145,6 +145,56 @@ same backend. Diff the batcher command streams. Structural differences
 mid-frame, batch ordering) usually point straight at the bug. This was
 how the sprite-pass screen-re-entry bug was found.
 
+### Profiling
+
+Set `FUTURE_CORE_PPROF=:6060` to start a pprof HTTP server alongside the
+engine. Only available on desktop builds (no-op in WASM; use Chrome
+DevTools → Performance tab for browser profiling).
+
+**Helper scripts** (`scripts/profile.sh` and `scripts/profile-compare.sh`)
+automate the full capture-and-compare workflow:
+
+```bash
+# Capture a named profile (5s CPU + allocs + heap):
+./scripts/profile.sh -n baseline -d 5
+
+# ... make changes ...
+
+# Capture the optimized variant on a different port:
+./scripts/profile.sh -n optimized -d 5 -P 6061
+
+# Compare side-by-side with a structured delta table:
+./scripts/profile-compare.sh testdata/profiles/baseline testdata/profiles/optimized
+```
+
+`profile.sh` builds the target program, starts it headless with pprof,
+captures CPU + allocation + heap profiles, generates text summaries, and
+saves everything to `testdata/profiles/<name>/`. The profile directory is
+gitignored. Run `./scripts/profile.sh -h` for all options.
+
+**Manual workflows** (when you need finer control):
+
+```bash
+# Start any program with pprof:
+FUTURE_CORE_PPROF=:6060 FUTURE_CORE_BACKEND=webgpu ./myprogram
+
+# CPU profile (30 seconds):
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+
+# Heap allocations:
+go tool pprof http://localhost:6060/debug/pprof/allocs
+
+# Goroutine dump:
+curl http://localhost:6060/debug/pprof/goroutine?debug=2
+
+# Diff two captures interactively:
+go tool pprof -diff_base=baseline/cpu.pb.gz optimized/cpu.pb.gz
+```
+
+For WASM browser profiling, use Chrome DevTools → Performance tab. The
+Go runtime in WASM exposes GC pauses and goroutine activity through the
+standard Chrome profiler.
+
 ### Prerequisites
 
 - Go 1.24+

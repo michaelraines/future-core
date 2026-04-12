@@ -47,6 +47,16 @@ type SpritePass struct {
 	// Set when FUTURE_CORE_TRACE_PASSES is active; zero otherwise.
 	traceFrame int
 
+	// Per-frame state tracking to avoid redundant uniform/texture/filter
+	// updates when consecutive batches share the same values. Reset at the
+	// top of Execute. Each of these eliminates a SetUniform* map write +
+	// dirty-flag set + downstream pack/upload/bind when unchanged.
+	lastColorBody  [16]float32
+	lastColorTrans [4]float32
+	lastTextureID  uint32
+	lastFilter     backend.TextureFilter
+	colorBodySet   bool // false until the first batch sets it this frame
+
 	// ResolveTexture maps batch texture IDs to backend textures.
 	ResolveTexture TextureResolver
 
@@ -118,11 +128,11 @@ func (sp *SpritePass) Name() string { return "sprite" }
 // is begun, all batches are drawn, and the pass is ended.
 // If no batches exist, the screen target is still cleared (when enabled).
 func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
-	// Reset per-frame state before flushing. The screen is un-cleared at
-	// the start of every frame; the first beginTargetPass(screen) call
-	// flips this to true so any subsequent screen pass in the same frame
-	// uses LoadActionLoad.
+	// Reset per-frame state before flushing.
 	sp.screenCleared = false
+	sp.colorBodySet = false
+	sp.lastTextureID = 0
+	sp.lastFilter = 0
 
 	batches := sp.batcher.Flush()
 
@@ -242,22 +252,35 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			currentShaderID = b.ShaderID
 		}
 
-		// Set color matrix uniforms on the active shader for this batch.
+		// Set color matrix uniforms only when they differ from the
+		// previous batch. Most batches use the identity matrix, so this
+		// skips the SetUniform* → dirty-flag → pack → upload → bind
+		// chain for the majority of draws.
 		activeShader := sp.shader
 		if resolvedInfo != nil {
 			activeShader = resolvedInfo.Shader
 		}
-		activeShader.SetUniformMat4("uColorBody", b.ColorBody)
-		activeShader.SetUniformVec4("uColorTranslation", b.ColorTranslation)
+		if !sp.colorBodySet || b.ColorBody != sp.lastColorBody || b.ColorTranslation != sp.lastColorTrans {
+			activeShader.SetUniformMat4("uColorBody", b.ColorBody)
+			activeShader.SetUniformVec4("uColorTranslation", b.ColorTranslation)
+			sp.lastColorBody = b.ColorBody
+			sp.lastColorTrans = b.ColorTranslation
+			sp.colorBodySet = true
+		}
 
-		// Bind texture and set per-draw filter via sampler object.
-		if sp.ResolveTexture != nil {
+		// Bind texture and filter only when they differ from the previous
+		// batch, avoiding redundant Go→JS (or Go→wgpu) round-trips.
+		if sp.ResolveTexture != nil && b.TextureID != sp.lastTextureID {
 			tex := sp.ResolveTexture(b.TextureID)
 			if tex != nil {
 				enc.SetTexture(tex, 0)
 			}
+			sp.lastTextureID = b.TextureID
 		}
-		enc.SetTextureFilter(0, b.Filter)
+		if b.Filter != sp.lastFilter {
+			enc.SetTextureFilter(0, b.Filter)
+			sp.lastFilter = b.Filter
+		}
 
 		// Draw using the pre-computed index region.
 		if b.FillRule == backend.FillRuleEvenOdd {
