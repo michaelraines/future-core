@@ -100,6 +100,7 @@ func withMockRenderer(t *testing.T) (dev *mockDevice, registered map[uint32]back
 			registered[id] = tex
 		},
 		registerRenderTarget: func(_ uint32, _ backend.RenderTarget) {},
+		pendingClears:        make(map[uint32]bool),
 	}
 	old := getRenderer()
 	setRenderer(rend)
@@ -648,7 +649,9 @@ func TestDrawTrianglesNilSrc(t *testing.T) {
 
 	batches := b.Flush()
 	require.Equal(t, 1, len(batches))
-	require.Equal(t, uint32(0), batches[0].TextureID)
+	// nil src uses the white texture so vertex colors pass through
+	// unmodified (white * vertex_color = vertex_color).
+	require.Equal(t, uint32(1), batches[0].TextureID)
 }
 
 func TestDrawTrianglesDisposedIsNoop(t *testing.T) {
@@ -1548,12 +1551,14 @@ func TestDrawTrianglesAAEmptyVerticesNoop(t *testing.T) {
 	require.Nil(t, img.aaBuffer, "empty indices must not allocate a buffer")
 }
 
-func TestDrawTrianglesAAEmptyRegionNoop(t *testing.T) {
+func TestDrawTrianglesAAAllocatesForOffScreenVertices(t *testing.T) {
 	withMockRenderer(t)
 	img := NewImage(128, 128)
 
-	// All vertices off-screen → requiredAARegion returns empty → return
-	// without allocating.
+	// With full-image AA region, even off-screen vertices allocate the
+	// buffer (the region is always the full image). The vertices produce
+	// invisible draws into the 2x buffer — not ideal for performance,
+	// but correct, and the persistent buffer is reused across frames.
 	verts := []Vertex{
 		{DstX: -100, DstY: -100},
 		{DstX: -50, DstY: -100},
@@ -1561,7 +1566,7 @@ func TestDrawTrianglesAAEmptyRegionNoop(t *testing.T) {
 	}
 	idx := []uint16{0, 1, 2}
 	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
-	require.Nil(t, img.aaBuffer, "empty region must not allocate a buffer")
+	require.NotNil(t, img.aaBuffer, "buffer should be allocated even for off-screen vertices")
 }
 
 func TestDrawTrianglesAASubImageNilOpts(t *testing.T) {
@@ -1641,17 +1646,17 @@ func TestDrawTrianglesAAAllocatesBuffer(t *testing.T) {
 	require.True(t, img.aaBufferDirty, "aaBuffer must be marked dirty")
 	require.False(t, img.aaBufferRegion.Empty(), "aaBufferRegion must be non-empty")
 
-	// The region is 16-px granular: minX=10 padded=-1 → 9, down16 → 0;
-	// maxX=50 padded=+1 → 51, up16 → 64. Same for Y.
+	// The region covers the full parent image (not per-vertex bbox) so
+	// that all AA draws to the same image share a single persistent buffer.
 	require.Equal(t, 0, img.aaBufferRegion.Min.X)
 	require.Equal(t, 0, img.aaBufferRegion.Min.Y)
-	require.Equal(t, 64, img.aaBufferRegion.Max.X)
-	require.Equal(t, 64, img.aaBufferRegion.Max.Y)
+	require.Equal(t, 128, img.aaBufferRegion.Max.X)
+	require.Equal(t, 128, img.aaBufferRegion.Max.Y)
 
-	// The aaBuffer is 2x the region dimensions.
+	// The aaBuffer is 2x the full image dimensions.
 	bw, bh := img.aaBuffer.Size()
-	require.Equal(t, 128, bw, "aaBuffer should be 2x region width")
-	require.Equal(t, 128, bh, "aaBuffer should be 2x region height")
+	require.Equal(t, 256, bw, "aaBuffer should be 2x image width")
+	require.Equal(t, 256, bh, "aaBuffer should be 2x image height")
 }
 
 func TestDrawTrianglesAASubImageFallsBack(t *testing.T) {
@@ -1749,38 +1754,97 @@ func TestAABufferFlushesOnBlendChange(t *testing.T) {
 	require.Equal(t, BlendLighter, img.aaBufferBlend, "buffer now holds the new blend")
 }
 
-func TestAABufferReusedForMatchingRegion(t *testing.T) {
+func TestAABufferReusedAcrossDraws(t *testing.T) {
 	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	verts1, idx1 := aaTriangle(10, 10, 50, 50)
+	verts2, idx2 := aaTriangle(60, 60, 80, 80)
+
+	// First AA draw allocates the buffer.
+	img.DrawTriangles(verts1, idx1, nil, &DrawTrianglesOptions{AntiAlias: true})
+	firstBuf := img.aaBuffer
+	require.NotNil(t, firstBuf)
+	// Buffer region is the full image, not per-vertex bbox.
+	require.Equal(t, goimage.Rect(0, 0, 128, 128), img.aaBufferRegion)
+
+	// Second AA draw with DIFFERENT vertices → same buffer (full-image region).
+	img.DrawTriangles(verts2, idx2, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.Same(t, firstBuf, img.aaBuffer, "buffer must be reused across all AA draws")
+}
+
+func TestAABufferClearedOnCreation(t *testing.T) {
+	withMockRenderer(t)
+	rend := getRenderer()
 
 	img := NewImage(128, 128)
 	verts, idx := aaTriangle(10, 10, 50, 50)
 
 	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
-	firstBuf := img.aaBuffer
-	firstRegion := img.aaBufferRegion
-	require.NotNil(t, firstBuf)
+	require.NotNil(t, img.aaBuffer, "AA buffer must be allocated")
 
-	// Second AA draw with identical vertices → same region → same buffer.
-	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
-	require.Same(t, firstBuf, img.aaBuffer, "buffer must be reused for matching region")
-	require.Equal(t, firstRegion, img.aaBufferRegion)
+	// The newly created AA buffer must have a pending clear registered
+	// so its first render pass uses LoadActionClear instead of loading
+	// undefined content.
+	require.True(t, rend.pendingClears[img.aaBuffer.textureID],
+		"newly allocated AA buffer must have a pending clear")
 }
 
-func TestAABufferReallocatedOnRegionChange(t *testing.T) {
+func TestAABufferClearedAfterFlush(t *testing.T) {
 	withMockRenderer(t)
+	rend := getRenderer()
 
 	img := NewImage(128, 128)
-	verts1, idx1 := aaTriangle(10, 10, 20, 20) // region covers 0..32
-	verts2, idx2 := aaTriangle(60, 60, 80, 80) // region covers 48..96 (disjoint)
+	verts, idx := aaTriangle(10, 10, 50, 50)
 
-	img.DrawTriangles(verts1, idx1, nil, &DrawTrianglesOptions{AntiAlias: true})
-	firstBuf := img.aaBuffer
-	firstRegion := img.aaBufferRegion
-	require.NotNil(t, firstBuf)
+	// First AA draw → allocates buffer, marks dirty.
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.True(t, img.aaBufferDirty)
+	bufID := img.aaBuffer.textureID
 
-	img.DrawTriangles(verts2, idx2, nil, &DrawTrianglesOptions{AntiAlias: true})
-	require.NotSame(t, firstBuf, img.aaBuffer, "disjoint region must reallocate the buffer")
-	require.NotEqual(t, firstRegion, img.aaBufferRegion, "region must update")
+	// Consume the creation clear so we can observe the post-flush clear.
+	delete(rend.pendingClears, bufID)
+
+	// Trigger a flush via a public sync point (DrawImage reads src's
+	// AA buffer, which is our img).
+	dst := NewImage(128, 128)
+	dst.DrawImage(img, nil)
+
+	require.False(t, img.aaBufferDirty, "flush must clear dirty flag")
+	require.True(t, rend.pendingClears[bufID],
+		"flushed AA buffer must have a pending clear so the next AA draw starts clean")
+}
+
+func TestAABufferNeedsClearOnParentClear(t *testing.T) {
+	withMockRenderer(t)
+	rend := getRenderer()
+
+	img := NewImage(128, 128)
+	verts, idx := aaTriangle(10, 10, 50, 50)
+
+	// Draw AA content and flush it.
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.NotNil(t, img.aaBuffer)
+	bufID := img.aaBuffer.textureID
+
+	// Simulate end-of-frame: flush the buffer.
+	dst := NewImage(128, 128)
+	dst.DrawImage(img, nil)
+
+	// Consume any pending clears.
+	delete(rend.pendingClears, bufID)
+	delete(rend.pendingClears, img.textureID)
+
+	// Clear the parent. The AA buffer should be flagged for clearing.
+	img.Clear()
+	require.False(t, img.aaBufferDirty, "Clear must reset dirty flag")
+	require.True(t, img.aaBufferNeedsClear, "Clear must set aaBufferNeedsClear")
+
+	// Next AA draw should register pendingClear for the AA buffer.
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.True(t, rend.pendingClears[bufID],
+		"aaBufferNeedsClear must register a pending clear on next AA draw")
+	require.False(t, img.aaBufferNeedsClear, "flag must be consumed")
 }
 
 func TestAABufferDisposedOnImageDispose(t *testing.T) {
@@ -1794,4 +1858,60 @@ func TestAABufferDisposedOnImageDispose(t *testing.T) {
 	img.Dispose()
 	require.True(t, img.disposed)
 	require.Nil(t, img.aaBuffer, "img.Dispose() must release the AA buffer")
+}
+
+func TestClearDisposedIsNoop(t *testing.T) {
+	withMockRenderer(t)
+	rend := getRenderer()
+
+	img := NewImage(128, 128)
+	img.Dispose()
+
+	// Clear on a disposed image must be a no-op — no pending clear
+	// should be registered and no panic should occur.
+	img.Clear()
+	require.False(t, rend.pendingClears[img.textureID])
+}
+
+func TestClearWithDirtyAABufferFlushesFirst(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	verts, idx := aaTriangle(10, 10, 50, 50)
+
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.True(t, img.aaBufferDirty)
+
+	// Clear should flush the dirty AA buffer, then mark the parent for
+	// clearing, then flag the AA buffer for clearing on next use.
+	img.Clear()
+	require.False(t, img.aaBufferDirty, "flush must clear dirty flag")
+	require.True(t, img.aaBufferNeedsClear, "Clear must set aaBufferNeedsClear")
+}
+
+func TestReadPixelsPaddedImage(t *testing.T) {
+	dev, _ := withMockRenderer(t)
+
+	// Create a padded image (4x4 content → 6x6 padded texture).
+	tex, err := dev.NewTexture(backend.TextureDescriptor{
+		Width: 6, Height: 6,
+		Format: backend.TextureFormatRGBA8,
+	})
+	require.NoError(t, err)
+
+	img := &Image{
+		width: 4, height: 4,
+		padded:  true,
+		texture: tex,
+	}
+
+	// ReadPixels on a padded image must read the 6x6 padded texture
+	// and extract the 4x4 content region. The mock texture fills all
+	// bytes with 0xFF, so all extracted pixels should be 0xFF.
+	dst := make([]byte, 4*4*4)
+	img.ReadPixels(dst)
+
+	for i, b := range dst {
+		require.Equal(t, byte(0xFF), b, "byte %d should be 0xFF after extraction", i)
+	}
 }

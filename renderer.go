@@ -48,19 +48,6 @@ type renderer struct {
 	deferredDispose []*Image
 }
 
-// deferDispose queues an image for disposal after the current frame's
-// sprite pass has finished executing. Callers that must stop referencing
-// an image mid-frame (e.g. drawTrianglesAA when the aaBuffer region
-// changes) use this instead of calling Dispose directly, so any
-// already-queued draw commands targeting the image can still resolve
-// their backend.RenderTarget when the sprite pass runs.
-func (r *renderer) deferDispose(img *Image) {
-	if r == nil || img == nil {
-		return
-	}
-	r.deferredDispose = append(r.deferredDispose, img)
-}
-
 // disposeDeferred drains the pending-disposal list. The engine calls this
 // once per frame, AFTER the sprite pass's Execute has flushed and
 // submitted its command buffer.
