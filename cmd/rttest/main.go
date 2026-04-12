@@ -75,37 +75,47 @@ func (g *rttestGame) Update() error {
 }
 
 func (g *rttestGame) Draw(screen *futurerender.Image) {
-	// Draws two tiles directly onto the screen. This is the "failing"
-	// pattern that was historically broken on WebGPU: each tile allocates
-	// a render target, draws into it, then composites onto the screen.
-	// Between the two tiles, the sprite pass must leave target=0, write
-	// into the second RT, then return to target=0. Previously the
-	// second re-entry used LoadActionClear and wiped the first tile.
+	// Canonical scene:
 	//
-	// With the sprite_pass.go fix (only clear screen on first entry per
-	// frame) this should now render both tiles.
+	//   Tile 1 — red fill, white border, composited at (40, 104).
+	//   Tile 2 — green fill, white border, composited at (168, 104).
+	//
+	// Each tile allocates its own render target mid-frame, draws into
+	// it, and composites onto the screen. Between the two tiles the
+	// sprite pass must leave target=0 (screen), write into the second
+	// offscreen RT, then return to target=0. Without the sprite_pass
+	// screenCleared guard (only clear on first entry per frame), the
+	// second screen re-entry clears the screen and wipes tile 1's
+	// composite — so this test regresses if that guard is ever
+	// removed or broken. It also regresses if drawTrianglesAA's
+	// deferred disposal path is broken (the vector DrawFilledRect/
+	// StrokeRect calls route through drawTrianglesAA when antialias
+	// is true, and vector's stroke tessellation produces a different
+	// bbox region than the filled rect, forcing a region-change
+	// flush + buffer deferral).
+	//
+	// Expected output: red square on the left half, green square on
+	// the right half, both with white 1px borders, on a black screen.
 
-	// Tile 1 — red fill, white border, composited at (40, 104).
 	rt1 := futurerender.NewImage(48, 48)
 	if rt1 != nil {
 		rt1.Clear()
 		vector.DrawFilledRect(rt1, 0, 0, 48, 48,
-			color.RGBA{R: 255, G: 0, B: 0, A: 255}, false)
+			color.RGBA{R: 255, G: 0, B: 0, A: 255}, true)
 		vector.StrokeRect(rt1, 0, 0, 48, 48, 1,
-			color.RGBA{R: 255, G: 255, B: 255, A: 255}, false)
+			color.RGBA{R: 255, G: 255, B: 255, A: 255}, true)
 		op := &futurerender.DrawImageOptions{}
 		op.GeoM.Translate(40, 104)
 		screen.DrawImage(rt1, op)
 	}
 
-	// Tile 2 — green fill, white border, composited at (168, 104).
 	rt2 := futurerender.NewImage(48, 48)
 	if rt2 != nil {
 		rt2.Clear()
 		vector.DrawFilledRect(rt2, 0, 0, 48, 48,
-			color.RGBA{R: 0, G: 255, B: 0, A: 255}, false)
+			color.RGBA{R: 0, G: 255, B: 0, A: 255}, true)
 		vector.StrokeRect(rt2, 0, 0, 48, 48, 1,
-			color.RGBA{R: 255, G: 255, B: 255, A: 255}, false)
+			color.RGBA{R: 255, G: 255, B: 255, A: 255}, true)
 		op := &futurerender.DrawImageOptions{}
 		op.GeoM.Translate(168, 104)
 		screen.DrawImage(rt2, op)

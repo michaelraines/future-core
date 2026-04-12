@@ -1413,3 +1413,262 @@ func TestWritePixelsRegionPaddedOffset(t *testing.T) {
 	require.Equal(t, 3, tt.lastX, "should offset x by 1")
 	require.Equal(t, 4, tt.lastY, "should offset y by 1")
 }
+
+// --- Anti-aliased DrawTriangles (bigOffscreenBuffer port) ---
+
+// aaTriangle returns a simple 3-vertex triangle covering a bbox of
+// (minX, minY) to (maxX, maxY) in white, for use in AA tests.
+func aaTriangle(minX, minY, maxX, maxY float32) ([]Vertex, []uint16) {
+	verts := []Vertex{
+		{DstX: minX, DstY: minY, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+		{DstX: maxX, DstY: minY, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+		{DstX: maxX, DstY: maxY, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+	}
+	indices := []uint16{0, 1, 2}
+	return verts, indices
+}
+
+func TestRequiredAARegion16PxGranularity(t *testing.T) {
+	tests := []struct {
+		name              string
+		verts             []Vertex
+		imgW, imgH        int
+		wantMinX, wantMinY int
+		wantMaxX, wantMaxY int
+	}{
+		{
+			name: "small triangle rounds up to 16px",
+			verts: []Vertex{
+				{DstX: 10, DstY: 10},
+				{DstX: 20, DstY: 10},
+				{DstX: 15, DstY: 20},
+			},
+			imgW: 128, imgH: 128,
+			// minX=10, padded=-1 → 9, rounded down to 0
+			// minY=10, padded=-1 → 9, rounded down to 0
+			// maxX=20, padded=+1 → 21, rounded up to 32
+			// maxY=20, padded=+1 → 21, rounded up to 32
+			wantMinX: 0, wantMinY: 0, wantMaxX: 32, wantMaxY: 32,
+		},
+		{
+			name: "clamped to image bounds",
+			verts: []Vertex{
+				{DstX: 100, DstY: 100},
+				{DstX: 200, DstY: 100},
+				{DstX: 150, DstY: 200},
+			},
+			imgW: 128, imgH: 128,
+			wantMinX: 96, wantMinY: 96, wantMaxX: 128, wantMaxY: 128,
+		},
+		{
+			name: "tiny triangle still gets padded region",
+			verts: []Vertex{
+				{DstX: 50, DstY: 50},
+				{DstX: 51, DstY: 50},
+				{DstX: 50, DstY: 51},
+			},
+			imgW: 128, imgH: 128,
+			// minX=50, padded=-1 → 49, rounded down to 48
+			// maxX=51, padded=+1 → 52, rounded up to 64
+			wantMinX: 48, wantMinY: 48, wantMaxX: 64, wantMaxY: 64,
+		},
+		{
+			name:     "empty vertices returns zero rect",
+			verts:    nil,
+			imgW:     64, imgH: 64,
+			wantMinX: 0, wantMinY: 0, wantMaxX: 0, wantMaxY: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := requiredAARegion(tt.verts, tt.imgW, tt.imgH)
+			require.Equal(t, tt.wantMinX, r.Min.X, "Min.X")
+			require.Equal(t, tt.wantMinY, r.Min.Y, "Min.Y")
+			require.Equal(t, tt.wantMaxX, r.Max.X, "Max.X")
+			require.Equal(t, tt.wantMaxY, r.Max.Y, "Max.Y")
+		})
+	}
+}
+
+func TestRequiredAARegionRoundingHelpers(t *testing.T) {
+	require.Equal(t, 0, roundDown16(0))
+	require.Equal(t, 0, roundDown16(15))
+	require.Equal(t, 16, roundDown16(16))
+	require.Equal(t, 16, roundDown16(17))
+	require.Equal(t, 48, roundDown16(63))
+
+	require.Equal(t, 0, roundUp16(0))
+	require.Equal(t, 16, roundUp16(1))
+	require.Equal(t, 16, roundUp16(16))
+	require.Equal(t, 32, roundUp16(17))
+	require.Equal(t, 64, roundUp16(63))
+}
+
+func TestDrawTrianglesAAAllocatesBuffer(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	require.NotNil(t, img.texture, "img should have a texture")
+	require.Nil(t, img.aaBuffer, "aaBuffer should start nil")
+
+	verts, idx := aaTriangle(10, 10, 50, 50)
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+
+	require.NotNil(t, img.aaBuffer, "AA draw must lazily allocate aaBuffer")
+	require.True(t, img.aaBufferDirty, "aaBuffer must be marked dirty")
+	require.False(t, img.aaBufferRegion.Empty(), "aaBufferRegion must be non-empty")
+
+	// The region is 16-px granular: minX=10 padded=-1 → 9, down16 → 0;
+	// maxX=50 padded=+1 → 51, up16 → 64. Same for Y.
+	require.Equal(t, 0, img.aaBufferRegion.Min.X)
+	require.Equal(t, 0, img.aaBufferRegion.Min.Y)
+	require.Equal(t, 64, img.aaBufferRegion.Max.X)
+	require.Equal(t, 64, img.aaBufferRegion.Max.Y)
+
+	// The aaBuffer is 2x the region dimensions.
+	bw, bh := img.aaBuffer.Size()
+	require.Equal(t, 128, bw, "aaBuffer should be 2x region width")
+	require.Equal(t, 128, bh, "aaBuffer should be 2x region height")
+}
+
+func TestDrawTrianglesAASubImageFallsBack(t *testing.T) {
+	withMockRenderer(t)
+
+	parent := NewImage(128, 128)
+	sub := parent.SubImage(goimage.Rect(16, 16, 80, 80))
+	require.NotNil(t, sub, "sub-image allocated")
+	require.Nil(t, sub.aaBuffer, "sub-image should have no AA buffer initially")
+
+	verts, idx := aaTriangle(20, 20, 40, 40)
+	// Should not panic. Should not allocate a buffer on the sub-image.
+	sub.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+
+	require.Nil(t, sub.aaBuffer, "sub-image must NOT own an aaBuffer (fallback to aliased)")
+	require.Nil(t, parent.aaBuffer, "parent should also not have one (fallback forwarded to sub)")
+}
+
+func TestAABufferFlushesOnNonAADraw(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	verts, idx := aaTriangle(10, 10, 50, 50)
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.True(t, img.aaBufferDirty, "precondition: dirty after AA draw")
+
+	// A non-AA draw on the same image must flush the dirty buffer first.
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: false})
+	require.False(t, img.aaBufferDirty, "non-AA draw should flush the AA buffer")
+	// Buffer itself is reused, not disposed.
+	require.NotNil(t, img.aaBuffer, "aaBuffer must be reused after flush, not disposed")
+}
+
+func TestAABufferFlushesOnDrawImageOfSelf(t *testing.T) {
+	withMockRenderer(t)
+
+	src := NewImage(128, 128)
+	dst := NewImage(256, 256)
+	verts, idx := aaTriangle(10, 10, 50, 50)
+	src.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.True(t, src.aaBufferDirty)
+
+	// Sampling src as a source of DrawImage must flush src's AA buffer
+	// before the sample so the content is up to date.
+	dst.DrawImage(src, nil)
+	require.False(t, src.aaBufferDirty, "src's AA buffer should flush when sampled")
+}
+
+func TestAABufferFlushesOnFill(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	verts, idx := aaTriangle(10, 10, 50, 50)
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.True(t, img.aaBufferDirty)
+
+	img.Fill(color.RGBA{R: 255, A: 255})
+	require.False(t, img.aaBufferDirty, "Fill should flush the AA buffer first")
+}
+
+func TestAABufferFlushesOnClear(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	verts, idx := aaTriangle(10, 10, 50, 50)
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.True(t, img.aaBufferDirty)
+
+	img.Clear()
+	require.False(t, img.aaBufferDirty, "Clear should flush the AA buffer first")
+}
+
+func TestAABufferFlushesOnBlendChange(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	verts, idx := aaTriangle(10, 10, 50, 50)
+
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{
+		AntiAlias: true,
+		Blend:     BlendSourceOver,
+	})
+	firstBuffer := img.aaBuffer
+	require.NotNil(t, firstBuffer)
+	require.True(t, img.aaBufferDirty)
+
+	// Second AA draw with a DIFFERENT blend forces a flush between them.
+	// The buffer should still exist (same region) but no longer be dirty
+	// from the first draw, and then be re-dirtied by the second.
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{
+		AntiAlias: true,
+		Blend:     BlendLighter,
+	})
+	require.True(t, img.aaBufferDirty, "second draw re-dirties the buffer")
+	require.Equal(t, BlendLighter, img.aaBufferBlend, "buffer now holds the new blend")
+}
+
+func TestAABufferReusedForMatchingRegion(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	verts, idx := aaTriangle(10, 10, 50, 50)
+
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	firstBuf := img.aaBuffer
+	firstRegion := img.aaBufferRegion
+	require.NotNil(t, firstBuf)
+
+	// Second AA draw with identical vertices → same region → same buffer.
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.Same(t, firstBuf, img.aaBuffer, "buffer must be reused for matching region")
+	require.Equal(t, firstRegion, img.aaBufferRegion)
+}
+
+func TestAABufferReallocatedOnRegionChange(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	verts1, idx1 := aaTriangle(10, 10, 20, 20) // region covers 0..32
+	verts2, idx2 := aaTriangle(60, 60, 80, 80) // region covers 48..96 (disjoint)
+
+	img.DrawTriangles(verts1, idx1, nil, &DrawTrianglesOptions{AntiAlias: true})
+	firstBuf := img.aaBuffer
+	firstRegion := img.aaBufferRegion
+	require.NotNil(t, firstBuf)
+
+	img.DrawTriangles(verts2, idx2, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.NotSame(t, firstBuf, img.aaBuffer, "disjoint region must reallocate the buffer")
+	require.NotEqual(t, firstRegion, img.aaBufferRegion, "region must update")
+}
+
+func TestAABufferDisposedOnImageDispose(t *testing.T) {
+	withMockRenderer(t)
+
+	img := NewImage(128, 128)
+	verts, idx := aaTriangle(10, 10, 50, 50)
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.NotNil(t, img.aaBuffer)
+
+	img.Dispose()
+	require.True(t, img.disposed)
+	require.Nil(t, img.aaBuffer, "img.Dispose() must release the AA buffer")
+}
