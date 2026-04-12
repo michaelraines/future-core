@@ -2,9 +2,9 @@ package futureutil
 
 import (
 	"bytes"
-	_ "embed"
+	_ "embed" // for //go:embed text.png
 	"image"
-	_ "image/png"
+	_ "image/png" // registers the PNG decoder used by image.Decode at runtime
 	"strings"
 	"sync"
 

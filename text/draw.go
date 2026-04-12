@@ -143,8 +143,10 @@ func Draw(target *futurerender.Image, s string, face Face, opts *DrawOptions) {
 	}
 }
 
-// cutLine splits at the first newline, returning (line, rest, found).
-func cutLine(s string) (string, string, bool) {
+// cutLine splits s at the first newline. line is the text before the
+// newline (or all of s if none), rest is the text after (empty if none),
+// and found is true iff a newline was present.
+func cutLine(s string) (line, rest string, found bool) {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\n' {
 			return s[:i], s[i+1:], true

@@ -1418,21 +1418,21 @@ func TestWritePixelsRegionPaddedOffset(t *testing.T) {
 
 // aaTriangle returns a simple 3-vertex triangle covering a bbox of
 // (minX, minY) to (maxX, maxY) in white, for use in AA tests.
-func aaTriangle(minX, minY, maxX, maxY float32) ([]Vertex, []uint16) {
-	verts := []Vertex{
+func aaTriangle(minX, minY, maxX, maxY float32) (vertices []Vertex, indices []uint16) {
+	vertices = []Vertex{
 		{DstX: minX, DstY: minY, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 		{DstX: maxX, DstY: minY, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 		{DstX: maxX, DstY: maxY, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 	}
-	indices := []uint16{0, 1, 2}
-	return verts, indices
+	indices = []uint16{0, 1, 2}
+	return vertices, indices
 }
 
 func TestRequiredAARegion16PxGranularity(t *testing.T) {
 	tests := []struct {
-		name              string
-		verts             []Vertex
-		imgW, imgH        int
+		name               string
+		verts              []Vertex
+		imgW, imgH         int
 		wantMinX, wantMinY int
 		wantMaxX, wantMaxY int
 	}{
@@ -1473,9 +1473,46 @@ func TestRequiredAARegion16PxGranularity(t *testing.T) {
 			wantMinX: 48, wantMinY: 48, wantMaxX: 64, wantMaxY: 64,
 		},
 		{
-			name:     "empty vertices returns zero rect",
-			verts:    nil,
-			imgW:     64, imgH: 64,
+			name: "min and max update as loop iterates",
+			// First vertex seeds min/max. Subsequent vertices push the
+			// bounds out in both directions, exercising each of the
+			// four update branches in requiredAARegion's loop.
+			verts: []Vertex{
+				{DstX: 50, DstY: 50},
+				{DstX: 70, DstY: 70},
+				{DstX: 30, DstY: 30},
+				{DstX: 20, DstY: 80},
+			},
+			imgW: 128, imgH: 128,
+			// minX = 20, minY = 30, maxX = 70, maxY = 80
+			// padded → down16 → (16,16); up16 → (80,96)
+			wantMinX: 16, wantMinY: 16, wantMaxX: 80, wantMaxY: 96,
+		},
+		{
+			name: "negative coordinates clamp to zero on Min",
+			verts: []Vertex{
+				{DstX: -20, DstY: -10},
+				{DstX: 40, DstY: 40},
+				{DstX: 40, DstY: -10},
+			},
+			imgW: 128, imgH: 128,
+			wantMinX: 0, wantMinY: 0, wantMaxX: 48, wantMaxY: 48,
+		},
+		{
+			name: "all-off-screen verts collapse to empty rect",
+			// All vertices below the image → post-clamp Min >= Max → zero.
+			verts: []Vertex{
+				{DstX: -100, DstY: -100},
+				{DstX: -50, DstY: -100},
+				{DstX: -100, DstY: -50},
+			},
+			imgW: 128, imgH: 128,
+			wantMinX: 0, wantMinY: 0, wantMaxX: 0, wantMaxY: 0,
+		},
+		{
+			name:  "empty vertices returns zero rect",
+			verts: nil,
+			imgW:  64, imgH: 64,
 			wantMinX: 0, wantMinY: 0, wantMaxX: 0, wantMaxY: 0,
 		},
 	}
@@ -1488,6 +1525,89 @@ func TestRequiredAARegion16PxGranularity(t *testing.T) {
 			require.Equal(t, tt.wantMaxY, r.Max.Y, "Max.Y")
 		})
 	}
+}
+
+func TestDrawTrianglesAAEmptyVerticesNoop(t *testing.T) {
+	withMockRenderer(t)
+	img := NewImage(128, 128)
+
+	// Empty vertices → return before allocating a buffer.
+	img.DrawTriangles(nil, nil, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.Nil(t, img.aaBuffer, "empty vertices must not allocate a buffer")
+
+	// Empty indices with non-empty vertices → also no-op.
+	verts := []Vertex{
+		{DstX: 0, DstY: 0},
+		{DstX: 10, DstY: 0},
+		{DstX: 10, DstY: 10},
+	}
+	img.DrawTriangles(verts, nil, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.Nil(t, img.aaBuffer, "empty indices must not allocate a buffer")
+}
+
+func TestDrawTrianglesAAEmptyRegionNoop(t *testing.T) {
+	withMockRenderer(t)
+	img := NewImage(128, 128)
+
+	// All vertices off-screen → requiredAARegion returns empty → return
+	// without allocating.
+	verts := []Vertex{
+		{DstX: -100, DstY: -100},
+		{DstX: -50, DstY: -100},
+		{DstX: -100, DstY: -50},
+	}
+	idx := []uint16{0, 1, 2}
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	require.Nil(t, img.aaBuffer, "empty region must not allocate a buffer")
+}
+
+func TestDrawTrianglesAASubImageNilOpts(t *testing.T) {
+	withMockRenderer(t)
+
+	parent := NewImage(128, 128)
+	sub := parent.SubImage(goimage.Rect(16, 16, 80, 80))
+
+	// Exercise drawTrianglesAA directly with nil opts so the `if opts != nil`
+	// clone guard in the sub-image fallback path is covered. (Public
+	// DrawTriangles with nil opts takes the non-AA branch.)
+	verts, idx := aaTriangle(20, 20, 40, 40)
+	sub.drawTrianglesAA(verts, idx, nil, nil)
+	require.Nil(t, sub.aaBuffer, "nil-opts sub-image AA must fall back aliased")
+}
+
+func TestDrawTrianglesAANilOptsAllocation(t *testing.T) {
+	withMockRenderer(t)
+	img := NewImage(128, 128)
+
+	// Same nil-opts guard on the allocation path (non-sub-image). Public
+	// DrawTriangles with nil opts takes the non-AA branch, so call the
+	// internal method directly.
+	verts, idx := aaTriangle(10, 10, 40, 40)
+	img.drawTrianglesAA(verts, idx, nil, nil)
+	require.NotNil(t, img.aaBuffer, "nil-opts AA call must still allocate buffer")
+	require.True(t, img.aaBufferDirty)
+}
+
+func TestFlushAABufferCleanNoop(t *testing.T) {
+	withMockRenderer(t)
+	img := NewImage(128, 128)
+
+	// flushAABuffer is a no-op when aaBuffer is nil.
+	img.flushAABuffer()
+
+	// And a no-op when the buffer exists but is not dirty.
+	verts, idx := aaTriangle(10, 10, 40, 40)
+	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
+	img.flushAABuffer() // first call flushes
+	require.False(t, img.aaBufferDirty)
+	img.flushAABuffer() // second call is a no-op
+	require.False(t, img.aaBufferDirty)
+}
+
+func TestFlushAABufferIfNeededNil(t *testing.T) {
+	// nil-safe: should not panic.
+	var img *Image
+	img.flushAABufferIfNeeded()
 }
 
 func TestRequiredAARegionRoundingHelpers(t *testing.T) {

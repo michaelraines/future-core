@@ -265,16 +265,23 @@ func (f *GoTextFace) drawGlyphs(target *futurerender.Image, s string, ox, oy flo
 			target.DrawImage(img, drawOpts)
 		}
 
+		// Advance the pen by the glyph's advance. The text package only
+		// supports horizontal layout (Y advance is always zero); see
+		// `Metrics.Height` and `face.advance` which both assume LTR
+		// horizontal text. go-text/typesetting@v0.3+ unified XAdvance
+		// and YAdvance into a single Advance field per glyph.
 		origin = origin.Add(fixed.Point26_6{
-			X: g.sg.XAdvance,
-			Y: -g.sg.YAdvance,
+			X: g.sg.Advance,
+			Y: 0,
 		})
 	}
 }
 
-// glyphImage returns the rasterized glyph image and its screen position.
-// Matches Ebitengine's subpixel positioning.
-func (f *GoTextFace) glyphImage(g shapedGlyph, origin fixed.Point26_6) (*futurerender.Image, int, int) {
+// glyphImage returns the rasterized glyph image and the integer pixel
+// position at which it should be drawn on the target. img is the cached
+// glyph bitmap; imgX and imgY are the top-left screen-space coordinates
+// after subpixel adjustment. Matches Ebitengine's subpixel positioning.
+func (f *GoTextFace) glyphImage(g shapedGlyph, origin fixed.Point26_6) (img *futurerender.Image, imgX, imgY int) {
 	// For horizontal text: vary X subpixel, floor Y.
 	origin.X = adjustGranularity(origin.X, f.Metrics())
 	origin.Y &^= ((1 << 6) - 1)
@@ -293,10 +300,10 @@ func (f *GoTextFace) glyphImage(g shapedGlyph, origin fixed.Point26_6) (*futurer
 		size:    f.Size,
 	}
 
-	img := f.Source.getOrCreateGlyphImage(key, g.scaledSegments, subpixelOffset, b)
+	img = f.Source.getOrCreateGlyphImage(key, g.scaledSegments, subpixelOffset, b)
 
-	imgX := (origin.X + b.Min.X).Floor()
-	imgY := (origin.Y + b.Min.Y).Floor()
+	imgX = (origin.X + b.Min.X).Floor()
+	imgY = (origin.Y + b.Min.Y).Floor()
 	return img, imgX, imgY
 }
 
@@ -379,6 +386,8 @@ func segmentsToBounds(segs []opentype.Segment) fixed.Rectangle26_6 {
 	for _, seg := range segs {
 		n := 1
 		switch seg.Op {
+		case opentype.SegmentOpMoveTo, opentype.SegmentOpLineTo:
+			n = 1
 		case opentype.SegmentOpQuadTo:
 			n = 2
 		case opentype.SegmentOpCubeTo:
@@ -481,9 +490,21 @@ func fixed26_6ToFloat32(v fixed.Int26_6) float32 {
 }
 
 // fixedToFloat converts a fixed.Int26_6 to float64.
-// Kept for backward compatibility with cache.go and shaping.go.
+// Kept for backward compatibility with shaping.go.
 func fixedToFloat(v fixed.Int26_6) float64 {
 	return float64(v) / 64.0
+}
+
+// fixedFloor returns the integer floor of a fixed.Int26_6 value.
+// 64 fixed-point units = 1 pixel; values < 64 floor to 0, etc.
+func fixedFloor(v fixed.Int26_6) int {
+	return int(v) >> 6
+}
+
+// fixedCeil returns the integer ceiling of a fixed.Int26_6 value.
+// Mirrors `fixed.Int26_6.Ceil()` semantics for the unit tests.
+func fixedCeil(v fixed.Int26_6) int {
+	return int(v+0x3f) >> 6
 }
 
 // glyphVariationCount determines subpixel rendering granularity based on font

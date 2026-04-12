@@ -137,6 +137,14 @@ Both tracers have zero cost when the env vars are unset: they resolve an
 integer limit once at package init and the hot path checks a simple
 integer comparison.
 
+**Diagnostic workflow for "why is some draw missing" bugs:** capture
+`FUTURE_CORE_TRACE_BATCHES` output from (a) a minimal program that
+reproduces the bug and (b) a full program that's known to work on the
+same backend. Diff the batcher command streams. Structural differences
+(e.g., how often `target=0` is re-entered, which targets are allocated
+mid-frame, batch ordering) usually point straight at the bug. This was
+how the sprite-pass screen-re-entry bug was found.
+
 ### Prerequisites
 
 - Go 1.24+
@@ -494,6 +502,29 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   not support `WritePixels`/`Set`/`ReadPixels` (no-ops). Disable with
   `SetSpriteAtlasEnabled(false)`. Tests that inspect per-image textures
   should disable atlasing in their setup (see `withMockRenderer` pattern).
+- **`Fill(transparent)` with SourceOver is a no-op** — `src*0 + dst*1 = dst`,
+  so `Image.Clear()` does NOT reset a render target's backing texture.
+  Fresh RTs read undefined memory on first `LoadActionLoad`. To actually
+  zero a target, upload zeros via `texture.Upload(zeros, 0)` (bypasses
+  blending) or overwrite every pixel with an opaque draw.
+- **Offscreen render targets start with undefined contents** — the sprite
+  pass uses `LoadActionLoad` for non-screen targets (the per-frame
+  `screenCleared` guard only covers `target=0`). Code that allocates an
+  RT mid-frame and reads it without first covering every needed pixel
+  will read uninitialized memory.
+- **Don't `Dispose()` a mid-frame-allocated render target synchronously** —
+  the batcher still holds draw commands referencing it. When the sprite
+  pass runs `Flush()` it will resolve a nil render target and pass it to
+  `BeginRenderPass`, which on native WebGPU panics with "no color
+  attachments". Use `renderer.deferDispose(img)` instead; the engine
+  drains the queue via `disposeDeferred()` after `EndFrame()`.
+- **Anti-aliasing via `drawTrianglesAA`** — `DrawTrianglesOptions.AntiAlias`
+  routes into a per-`Image` 2x-supersample buffer (`aaBuffer`), flushed
+  back via a linear-filtered downsample quad at sync points (any public
+  method that reads/writes the target's texture). The buffer's region is
+  16-pixel-granular via `requiredAARegion`; a region or blend change
+  triggers a flush and deferred dispose of the old buffer. Sub-images
+  can't own a buffer and fall back to aliased rendering.
 
 ## Test Coverage Requirements
 
