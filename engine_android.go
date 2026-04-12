@@ -218,6 +218,13 @@ func (e *engine) initRenderResources() error {
 	sp.ResolveRenderTarget = func(targetID uint32) backend.RenderTarget {
 		return e.renderTargets[targetID]
 	}
+	sp.ConsumePendingClear = func(targetID uint32) bool {
+		if e.rend.pendingClears[targetID] {
+			delete(e.rend.pendingClears, targetID)
+			return true
+		}
+		return false
+	}
 
 	// Build render pipeline.
 	e.renderPipeline = pipeline.New()
@@ -477,6 +484,7 @@ func (e *engine) initDevice(win platform.Window) error {
 		registerRenderTarget: func(id uint32, rt backend.RenderTarget) {
 			e.renderTargets[id] = rt
 		},
+		pendingClears: make(map[uint32]bool),
 	}
 	e.rend = rend
 	setRenderer(rend)

@@ -66,6 +66,13 @@ type SpritePass struct {
 	// ResolveRenderTarget maps batch target IDs to render targets.
 	ResolveRenderTarget RenderTargetResolver
 
+	// ConsumePendingClear checks whether a target has a pending Clear()
+	// and returns true if so, atomically clearing the flag. The sprite
+	// pass uses this in beginTargetPass to emit LoadActionClear on the
+	// target's first render pass instead of LoadActionLoad. Returns false
+	// when nil (no clear tracking) or when the target has no pending clear.
+	ConsumePendingClear func(targetID uint32) bool
+
 	// Projection is the orthographic projection matrix, set each frame.
 	Projection [16]float32
 
@@ -162,6 +169,7 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		// frame's content doesn't persist.
 		sp.beginTargetPass(enc, ctx, 0)
 		enc.EndRenderPass()
+		enc.Flush()
 		return
 	}
 
@@ -196,11 +204,17 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		}
 	}
 
-	// Upload all vertex/index data at once.
+	// Upload all vertex/index data at once. Pad the index buffer to a
+	// 4-byte boundary: WebGPU's writeBuffer requires the byte count to be
+	// a multiple of 4, and an odd number of uint16 indices produces a
+	// 2-byte-aligned but not 4-byte-aligned size.
 	if len(sp.tmpVertices) > 0 {
 		sp.vertexBuf.Upload(vertexSliceToBytes(sp.tmpVertices))
 	}
 	if len(sp.tmpIndices) > 0 {
+		if len(sp.tmpIndices)%2 != 0 {
+			sp.tmpIndices = append(sp.tmpIndices, 0) // pad to even count → 4-byte aligned
+		}
 		sp.indexBuf.Upload(indexSliceToBytes(sp.tmpIndices))
 	}
 
@@ -291,6 +305,12 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 	}
 
 	enc.EndRenderPass()
+
+	// Submit all accumulated render passes as a single GPU command buffer.
+	// For deferred-execution backends (WebGPU, Vulkan) this batches all
+	// render passes into one queue.submit(), dramatically reducing the
+	// number of Go→JS/Go→C boundary crossings per frame.
+	enc.Flush()
 }
 
 // beginTargetPass starts a render pass for the given target ID.
@@ -311,9 +331,13 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 		clearColor = [4]float32{0, 0, 0, 1}
 	}
 	if targetID == 0 {
-		// Mark the screen as "touched" so any later re-entry this frame
-		// loads instead of clearing.
 		sp.screenCleared = true
+	}
+	// Offscreen targets with a pending Clear() use LoadActionClear with
+	// transparent black. This is a GPU-native clear — no CPU data transfer.
+	if targetID != 0 && sp.ConsumePendingClear != nil && sp.ConsumePendingClear(targetID) {
+		loadAction = backend.LoadActionClear
+		// clearColor is already {0,0,0,0} (transparent black).
 	}
 
 	enc.BeginRenderPass(backend.RenderPassDescriptor{

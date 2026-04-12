@@ -221,6 +221,14 @@ library). Desktop platform code (GLFW, OpenGL) is gated by OS-based build
 constraints (`//go:build darwin || linux || freebsd || windows`) and compiles
 automatically on desktop platforms — no `-tags` flags needed.
 
+### Known CI Limitation: `make lint` Exits With Code 7
+
+`golangci-lint` reports typechecking errors about directory resolution (e.g.,
+"stat .../github.com/.../internal/platform: directory not found") but finds 0
+actual lint issues. This is a pre-existing configuration issue with how the
+Makefile passes package paths. Lint violations are real; the exit code alone
+is not.
+
 ### Known CI Limitation: Audio Packages Excluded
 
 The `audio/` package depends on `github.com/ebitengine/oto/v3`, which uses
@@ -569,12 +577,20 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   attachments". Use `renderer.deferDispose(img)` instead; the engine
   drains the queue via `disposeDeferred()` after `EndFrame()`.
 - **Anti-aliasing via `drawTrianglesAA`** — `DrawTrianglesOptions.AntiAlias`
-  routes into a per-`Image` 2x-supersample buffer (`aaBuffer`), flushed
-  back via a linear-filtered downsample quad at sync points (any public
-  method that reads/writes the target's texture). The buffer's region is
-  16-pixel-granular via `requiredAARegion`; a region or blend change
-  triggers a flush and deferred dispose of the old buffer. Sub-images
-  can't own a buffer and fall back to aliased rendering.
+  routes into a per-`Image` 2x-supersample buffer (`aaBuffer`), sized to
+  the full image and persistent across frames (matching Ebitengine's
+  `bigOffscreenBuffer`). Flushed back via a linear-filtered downsample
+  quad at sync points (any public method that reads/writes the target's
+  texture). After each flush, a `pendingClear` is registered so the next
+  AA draw starts clean. A blend change triggers a flush. `Clear()` on the
+  parent sets `aaBufferNeedsClear` so the buffer is cleared before the
+  next AA draw. Sub-images can't own a buffer and fall back to aliased
+  rendering.
+- **`DrawTriangles` with `src=nil` uses `whiteTextureID`** — untextured
+  draws (e.g., vector fills/strokes with vertex colors) must bind the
+  white texture so vertex colors pass through unmodified. Using `texID=0`
+  causes the sprite pass to skip texture binding (since `lastTextureID`
+  starts at 0), leaving whatever texture was previously bound.
 
 ## Test Coverage Requirements
 

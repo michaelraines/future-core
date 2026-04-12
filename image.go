@@ -72,10 +72,11 @@ type Image struct {
 	// flushed (downsample-composited) back into img at the next sync
 	// point. Mirrors Ebitengine's bigOffscreenImage. nil until the first
 	// AA draw on this image.
-	aaBuffer       *Image
-	aaBufferRegion goimage.Rectangle // 1x region this buffer covers (16-pixel granular)
-	aaBufferBlend  Blend             // blend mode currently accumulated in the buffer
-	aaBufferDirty  bool              // true when buffer has pending draws not yet flushed
+	aaBuffer           *Image
+	aaBufferRegion     goimage.Rectangle // 1x region this buffer covers
+	aaBufferBlend      Blend             // blend mode currently accumulated in the buffer
+	aaBufferDirty      bool              // true when buffer has pending draws not yet flushed
+	aaBufferNeedsClear bool              // set by Clear(); consumed by drawTrianglesAA before first AA draw
 }
 
 // aaBufferScale is the supersample factor for anti-aliased DrawTriangles.
@@ -355,7 +356,7 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 	batchIdx := rend.batcher.AllocIndices(len(indices))
 	copy(batchIdx, indices)
 
-	texID := uint32(0)
+	texID := rend.whiteTextureID
 	blend := backend.BlendSourceOver
 	filter := backend.FilterNearest
 	fillRule := backend.FillRuleNonZero
@@ -466,8 +467,35 @@ func (img *Image) SubImage(r goimage.Rectangle) *Image {
 
 // Clear resets all pixels to transparent black (0, 0, 0, 0).
 // This is equivalent to ebiten.Image.Clear.
+//
+// Implemented by marking the image's render target for clearing on its
+// next BeginRenderPass (via LoadActionClear). This is a GPU-native clear
+// with zero CPU-side data transfer — unlike texture.Upload(zeros) which
+// would copy width×height×4 bytes through the Go→JS boundary per call.
+//
+// Note: using Fill(transparent) with BlendSourceOver would be a no-op
+// (src*0 + dst*1 = dst), leaving the previous frame's content intact.
 func (img *Image) Clear() {
-	img.Fill(color.NRGBA{})
+	if img.disposed {
+		return
+	}
+	img.flushAABufferIfNeeded()
+	// Mark this target for GPU-native clearing on its next
+	// BeginRenderPass. The sprite pass checks this via
+	// ConsumePendingClear and emits LoadActionClear with transparent
+	// black — no CPU data transfer required.
+	if rend := getRenderer(); rend != nil && rend.pendingClears != nil {
+		rend.pendingClears[img.textureID] = true
+	}
+	// Discard any pending AA buffer flush and mark the buffer for clearing
+	// at the next AA draw. We can't use pendingClear here because its
+	// timing relative to the sprite pass's batch processing is tricky —
+	// instead, we set a flag that drawTrianglesAA checks before its first
+	// draw each frame to enqueue a Clear on the buffer.
+	if img.aaBuffer != nil {
+		img.aaBufferDirty = false
+		img.aaBufferNeedsClear = true
+	}
 }
 
 // ReadPixels reads RGBA pixel data from the image into dst.
@@ -1270,26 +1298,20 @@ func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Imag
 		img.flushAABuffer()
 	}
 
-	region := requiredAARegion(vertices, img.width, img.height)
-	if region.Empty() {
-		return
-	}
+	// Use the full image bounds as the AA region. This ensures ALL
+	// AA draws to the same image share a single persistent buffer,
+	// regardless of their individual vertex bounding boxes. Per-draw
+	// region computation caused a new buffer allocation per AA call
+	// (different shapes have different bboxes), creating ~200 unique
+	// render targets per frame and destroying batch mergeability.
+	//
+	// Ebitengine's bigOffscreenBuffer uses the same approach: one
+	// buffer per image, sized to the full image.
+	region := goimage.Rect(0, 0, img.width, img.height)
 
-	// A different region from what the buffer currently covers forces a
-	// flush and reallocation. We cannot Dispose the old buffer
-	// synchronously: the batcher still holds draw commands that target
-	// it, and the sprite pass will resolve its render target at flush
-	// time. Queue the old buffer for post-flush disposal instead.
-	if img.aaBuffer != nil && img.aaBufferRegion != region {
-		img.flushAABuffer()
-		if rend := getRenderer(); rend != nil {
-			rend.deferDispose(img.aaBuffer)
-		}
-		img.aaBuffer = nil
-	}
-
-	// Lazy-allocate the 2x buffer sized to the region. If allocation
-	// fails (e.g. no renderer, or backend refused), fall back to aliased.
+	// Lazy-allocate the 2x buffer sized to the full image. Reused
+	// across all AA draws and across frames — only disposed when the
+	// parent image is disposed or when the blend mode changes.
 	if img.aaBuffer == nil {
 		w := region.Dx() * aaBufferScale
 		h := region.Dy() * aaBufferScale
@@ -1308,8 +1330,27 @@ func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Imag
 		}
 		img.aaBuffer = buf
 		img.aaBufferRegion = region
+		// Clear the newly allocated buffer so it starts from transparent
+		// black rather than undefined content. The pendingClear is consumed
+		// by the sprite pass's beginTargetPass on the buffer's first
+		// render pass, emitting LoadActionClear.
+		if rend := getRenderer(); rend != nil && rend.pendingClears != nil {
+			rend.pendingClears[buf.textureID] = true
+		}
 	}
 	img.aaBufferBlend = reqBlend
+
+	// If the parent was Clear()'d since the last AA draw, clear the
+	// persistent buffer so stale content from the previous frame doesn't
+	// accumulate. We use pendingClear (GPU-native LoadActionClear) which
+	// is consumed by the sprite pass's beginTargetPass on the buffer's
+	// first render pass this frame.
+	if img.aaBufferNeedsClear {
+		img.aaBufferNeedsClear = false
+		if rend := getRenderer(); rend != nil && rend.pendingClears != nil {
+			rend.pendingClears[img.aaBuffer.textureID] = true
+		}
+	}
 
 	// Rewrite vertex positions into the 2x buffer's coordinate space.
 	// Translate the 1x region origin to (0,0) and scale by 2.
@@ -1334,10 +1375,10 @@ func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Imag
 
 // flushAABuffer downsample-composites img.aaBuffer back into img at 0.5x
 // with a linear filter, producing the anti-aliased result. The buffer is
-// NOT disposed — it's reused for subsequent AA draws on the same image
-// with a matching region, matching Ebitengine's behavior. The buffer
-// goes away only when the region changes (in drawTrianglesAA) or when
-// img.Dispose() is called.
+// NOT disposed — it persists across all AA draws on this image, matching
+// Ebitengine's bigOffscreenBuffer approach. After the composite, a
+// pendingClear is registered so the next AA draw starts from a clean
+// buffer. The buffer is only disposed when img.Dispose() is called.
 //
 // drawImageRaw is used so the flush doesn't recurse back into
 // flushAABufferIfNeeded on the parent.
@@ -1356,6 +1397,13 @@ func (img *Image) flushAABuffer() {
 	img.drawImageRaw(img.aaBuffer, down)
 
 	img.aaBufferDirty = false
+
+	// Clear the persistent buffer after compositing so subsequent AA
+	// draws start from transparent black. Without this, the next flush
+	// would re-composite stale content that was already applied above.
+	if rend := getRenderer(); rend != nil && rend.pendingClears != nil {
+		rend.pendingClears[img.aaBuffer.textureID] = true
+	}
 }
 
 // flushAABufferIfNeeded triggers a flush on img's AA buffer when the

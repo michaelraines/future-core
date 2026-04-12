@@ -28,6 +28,11 @@ type renderer struct {
 	// pipeline can look it up by ID during rendering.
 	registerShader func(id uint32, shader *Shader)
 
+	// pendingClears tracks render targets that need GPU-native clearing on
+	// their next BeginRenderPass. Set by Image.Clear(), consumed by the
+	// sprite pass's ConsumePendingClear callback.
+	pendingClears map[uint32]bool
+
 	// registerRenderTarget is called when a new render target is created
 	// so the engine can resolve target IDs during rendering.
 	registerRenderTarget func(id uint32, rt backend.RenderTarget)
@@ -41,19 +46,6 @@ type renderer struct {
 	// target when it begins the pass. The engine drains this list by
 	// calling disposeDeferred() immediately after renderPipeline.Execute.
 	deferredDispose []*Image
-}
-
-// deferDispose queues an image for disposal after the current frame's
-// sprite pass has finished executing. Callers that must stop referencing
-// an image mid-frame (e.g. drawTrianglesAA when the aaBuffer region
-// changes) use this instead of calling Dispose directly, so any
-// already-queued draw commands targeting the image can still resolve
-// their backend.RenderTarget when the sprite pass runs.
-func (r *renderer) deferDispose(img *Image) {
-	if r == nil || img == nil {
-		return
-	}
-	r.deferredDispose = append(r.deferredDispose, img)
 }
 
 // disposeDeferred drains the pending-disposal list. The engine calls this

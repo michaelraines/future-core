@@ -11,8 +11,11 @@ import (
 	"github.com/michaelraines/future-core/internal/wgpu"
 )
 
-// uniformRingBufSize is the size of the persistent uniform ring buffer (16 KB).
-const uniformRingBufSize = 16 * 1024
+// uniformRingBufSize must hold ALL per-frame uniform writes without wrapping.
+// With single-command-encoder batching, all passes are recorded before the
+// GPU executes any of them, so writes must not be overwritten. 256 KB
+// supports ~1024 draws per frame at 256-byte alignment.
+const uniformRingBufSize = 256 * 1024
 
 // uniformAlignOffset is the minimum offset alignment for uniform buffers.
 // WebGPU requires 256-byte alignment for dynamic buffer offsets.
