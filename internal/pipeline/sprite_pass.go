@@ -196,11 +196,17 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		}
 	}
 
-	// Upload all vertex/index data at once.
+	// Upload all vertex/index data at once. Pad the index buffer to a
+	// 4-byte boundary: WebGPU's writeBuffer requires the byte count to be
+	// a multiple of 4, and an odd number of uint16 indices produces a
+	// 2-byte-aligned but not 4-byte-aligned size.
 	if len(sp.tmpVertices) > 0 {
 		sp.vertexBuf.Upload(vertexSliceToBytes(sp.tmpVertices))
 	}
 	if len(sp.tmpIndices) > 0 {
+		if len(sp.tmpIndices)%2 != 0 {
+			sp.tmpIndices = append(sp.tmpIndices, 0) // pad to even count → 4-byte aligned
+		}
 		sp.indexBuf.Upload(indexSliceToBytes(sp.tmpIndices))
 	}
 
