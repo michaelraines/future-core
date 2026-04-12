@@ -150,14 +150,22 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 }
 
 // bindUniforms uploads shader uniforms into the ring buffer and binds
-// group 0 with a dynamic offset. The bind group itself is created once
-// per pipeline change and reused across all draws.
+// group 0 with a dynamic offset. Skips the entire pack+upload+bind cycle
+// when no uniform values have changed since the last bind, avoiding
+// per-draw heap allocations and Go→JS round-trips.
 func (e *Encoder) bindUniforms() {
 	if e.currentPipeline == nil || !e.inRenderPass {
 		return
 	}
 	shader, ok := e.currentPipeline.desc.Shader.(*Shader)
 	if !ok || shader == nil {
+		return
+	}
+
+	// Fast path: if no SetUniform* calls have happened since the last
+	// bindUniforms, the ring buffer already has the right data and the
+	// bind group is still bound. Skip everything.
+	if !shader.uniformsDirty {
 		return
 	}
 
@@ -168,6 +176,7 @@ func (e *Encoder) bindUniforms() {
 		data = shader.packUniforms(shader.combinedUniformLayout)
 	}
 	if len(data) == 0 {
+		shader.uniformsDirty = false
 		return
 	}
 
@@ -204,6 +213,8 @@ func (e *Encoder) bindUniforms() {
 	// Bind with dynamic offset pointing to this draw's data.
 	e.dynOffsets.SetIndex(0, offset)
 	e.passEncoder.Call("setBindGroup", 0, e.uniformBG, e.dynOffsets)
+
+	shader.uniformsDirty = false
 }
 
 // bindDefaultTexture binds a 1x1 white placeholder texture to group 1,
