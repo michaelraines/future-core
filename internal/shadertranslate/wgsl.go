@@ -332,6 +332,13 @@ func translateWGSLFragmentLine(line string, uniforms []uniform, varyings []varyi
 		s = strings.Replace(s, fragOutName+"=", "return", 1)
 	}
 
+	// Bare "return;" is valid in GLSL void functions but invalid in WGSL
+	// non-void functions. The fragment function returns vec4<f32>, so
+	// convert bare returns to return a zero vector.
+	if strings.TrimSpace(s) == "return;" {
+		s = strings.Replace(s, "return;", "return vec4<f32>(0.0);", 1)
+	}
+
 	return s
 }
 

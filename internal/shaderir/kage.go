@@ -504,7 +504,16 @@ func (c *compiler) inferType(expr ast.Expr) string {
 		if IsImageBuiltin(funcName) {
 			return "vec2"
 		}
-		// For built-in functions, default to float.
+		// Built-in functions that always return scalar.
+		switch funcName {
+		case "dot", "length", "distance":
+			return "float"
+		}
+		// Most GLSL built-in functions (normalize, clamp, mix, abs, min,
+		// max, reflect, etc.) preserve their first argument's type.
+		if len(e.Args) > 0 {
+			return c.inferType(e.Args[0])
+		}
 		return "float"
 	case *ast.BinaryExpr:
 		return c.inferType(e.X)
