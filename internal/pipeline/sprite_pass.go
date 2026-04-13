@@ -73,6 +73,12 @@ type SpritePass struct {
 	// when nil (no clear tracking) or when the target has no pending clear.
 	ConsumePendingClear func(targetID uint32) bool
 
+	// ApplyUniforms applies a snapshot of user-provided uniforms to a
+	// backend shader. Called per-draw for custom shader batches that have
+	// per-draw uniforms (e.g., each light has different LightPos/Color).
+	// The engine sets this to Shader.applyUniforms during initialization.
+	ApplyUniforms func(shader backend.Shader, uniforms map[string]any)
+
 	// Projection is the orthographic projection matrix, set each frame.
 	Projection [16]float32
 
@@ -258,22 +264,36 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			case b.ShaderID == 0:
 				sp.bindDefaultShader(enc)
 			case resolvedInfo != nil:
+				// Set blend mode before pipeline so WebGPU can
+				// recreate the pipeline if the blend differs.
+				enc.SetBlendMode(b.BlendMode)
 				enc.SetPipeline(resolvedInfo.Pipeline)
 				resolvedInfo.Shader.SetUniformMat4("uProjection", sp.Projection)
 			default:
 				sp.bindDefaultShader(enc)
 			}
 			currentShaderID = b.ShaderID
+		} else if b.ShaderID != 0 && resolvedInfo != nil {
+			// Same shader but potentially different blend mode.
+			enc.SetBlendMode(b.BlendMode)
+			enc.SetPipeline(resolvedInfo.Pipeline)
+		}
+
+		// For custom shader batches, re-apply the per-draw user uniforms
+		// before drawing. Each light (or other custom draw) has its own
+		// uniform values that were snapshotted at draw time.
+		activeShader := sp.shader
+		if resolvedInfo != nil {
+			activeShader = resolvedInfo.Shader
+			if sp.ApplyUniforms != nil && len(b.Uniforms) > 0 {
+				sp.ApplyUniforms(resolvedInfo.Shader, b.Uniforms)
+			}
 		}
 
 		// Set color matrix uniforms only when they differ from the
 		// previous batch. Most batches use the identity matrix, so this
 		// skips the SetUniform* → dirty-flag → pack → upload → bind
 		// chain for the majority of draws.
-		activeShader := sp.shader
-		if resolvedInfo != nil {
-			activeShader = resolvedInfo.Shader
-		}
 		if !sp.colorBodySet || b.ColorBody != sp.lastColorBody || b.ColorTranslation != sp.lastColorTrans {
 			activeShader.SetUniformMat4("uColorBody", b.ColorBody)
 			activeShader.SetUniformVec4("uColorTranslation", b.ColorTranslation)
@@ -295,6 +315,18 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 				enc.SetTexture(tex, 0)
 			}
 			sp.lastTextureID = b.TextureID
+		}
+
+		// Bind extra textures for custom shader draws (slots 1-3).
+		if b.ShaderID != 0 && sp.ResolveTexture != nil {
+			for slot, texID := range b.ExtraTextureIDs {
+				if texID != 0 {
+					tex := sp.ResolveTexture(texID)
+					if tex != nil {
+						enc.SetTexture(tex, slot+1)
+					}
+				}
+			}
 		}
 
 		// Draw using the pre-computed index region.

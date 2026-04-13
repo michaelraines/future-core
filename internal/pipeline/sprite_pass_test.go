@@ -44,6 +44,7 @@ func (s *mockShader) SetUniformVec4(name string, v [4]float32)  { s.uniforms[nam
 func (s *mockShader) SetUniformMat4(name string, v [16]float32) { s.uniforms[name] = v }
 func (s *mockShader) SetUniformInt(name string, v int32)        { s.uniforms[name] = v }
 func (s *mockShader) SetUniformBlock(_ string, _ []byte)        {}
+func (s *mockShader) PackCurrentUniforms() []byte               { return nil }
 func (s *mockShader) Dispose()                                  {}
 
 type mockPipeline struct{}
@@ -153,6 +154,7 @@ func (e *mockEncoder) Draw(vertexCount, instanceCount, firstVertex int) {
 func (e *mockEncoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 	e.record("DrawIndexed", indexCount, instanceCount, firstIndex)
 }
+func (e *mockEncoder) SetBlendMode(_ backend.BlendMode) {}
 func (e *mockEncoder) Flush() { e.record("Flush") }
 
 // callsByMethod returns all calls with the given method name.

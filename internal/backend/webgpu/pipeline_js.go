@@ -14,8 +14,9 @@ type Pipeline struct {
 	desc   backend.PipelineDescriptor
 	handle js.Value
 
-	// The texture format this pipeline was compiled for.
+	// The texture format and blend mode this pipeline was compiled for.
 	createdFormat string
+	createdBlend  backend.BlendMode
 
 	// Cached bind group layouts.
 	uniformBGL js.Value
@@ -29,11 +30,21 @@ func (p *Pipeline) InnerPipeline() backend.Pipeline { return nil }
 // ensurePipelineForFormat creates or recreates the pipeline if the target
 // format has changed (e.g. switching between canvas and offscreen targets).
 func (p *Pipeline) ensurePipelineForFormat(format string) {
+	p.ensurePipeline(format, p.desc.BlendMode)
+}
+
+// ensurePipeline creates or recreates the pipeline if the target format
+// or blend mode has changed. Custom shader draws may use different blend
+// modes per-draw (e.g., additive for light accumulation, multiply for
+// lightmap compositing).
+func (p *Pipeline) ensurePipeline(format string, blend backend.BlendMode) {
 	hasHandle := !p.handle.IsUndefined() && !p.handle.IsNull()
-	if hasHandle && p.createdFormat == format {
+	if hasHandle && p.createdFormat == format && p.createdBlend == blend {
 		return
 	}
 	p.createdFormat = format
+	p.createdBlend = blend
+	p.desc.BlendMode = blend
 	p.createPipeline()
 }
 

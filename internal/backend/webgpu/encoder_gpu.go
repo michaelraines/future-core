@@ -384,6 +384,9 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 // Flush submits all render passes accumulated in the current command
 // encoder as a single queue submission. Called once per frame after
 // the sprite pass has recorded all its render passes.
+// SetBlendMode is a no-op for this backend.
+func (e *Encoder) SetBlendMode(_ backend.BlendMode) {}
+
 func (e *Encoder) Flush() {
 	if e.cmdEncoder == 0 {
 		return

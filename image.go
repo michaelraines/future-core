@@ -1,7 +1,6 @@
 package futurerender
 
 import (
-	"fmt"
 	goimage "image"
 	"image/color"
 	"image/draw"
@@ -729,7 +728,7 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 		o = *opts
 	}
 
-	// Apply uniforms to shader before draw.
+	// Apply uniforms to shader before draw, then snapshot for the batcher.
 	shader.applyUniforms(o.Uniforms)
 
 	w := float32(width)
@@ -750,10 +749,22 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 		texID = o.Images[0].textureID
 	}
 
-	// Bind additional textures via shader uniforms.
-	for i := 0; i < 4; i++ {
+	// Collect extra texture IDs for multi-texture shader bindings.
+	var extraTexIDs [3]uint32
+	for i := 1; i < 4; i++ {
 		if o.Images[i] != nil && o.Images[i].texture != nil {
-			shader.backend.SetUniformInt(fmt.Sprintf("uTexture%d", i), int32(i))
+			extraTexIDs[i-1] = o.Images[i].textureID
+		}
+	}
+
+	// Copy user uniforms so per-draw state isn't overwritten by later
+	// draws using the same shader (e.g., different lights). The sprite
+	// pass re-applies these before each draw.
+	var uniformsCopy map[string]any
+	if len(o.Uniforms) > 0 {
+		uniformsCopy = make(map[string]any, len(o.Uniforms))
+		for k, v := range o.Uniforms {
+			uniformsCopy[k] = v
 		}
 	}
 
@@ -763,11 +774,13 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 		batch.Vertex2D{PosX: float32(x2), PosY: float32(y2), TexU: 1, TexV: 1, R: cr, G: cg, B: cb, A: ca},
 		batch.Vertex2D{PosX: float32(x3), PosY: float32(y3), TexU: 0, TexV: 1, R: cr, G: cg, B: cb, A: ca},
 		batch.DrawCommand{
-			TextureID: texID,
-			BlendMode: blend,
-			ShaderID:  shader.id,
-			TargetID:  img.textureID,
-			ColorBody: colorMatrixIdentityBody,
+			TextureID:       texID,
+			BlendMode:       blend,
+			ShaderID:        shader.id,
+			TargetID:        img.textureID,
+			ColorBody:       colorMatrixIdentityBody,
+			ExtraTextureIDs: extraTexIDs,
+			Uniforms:        uniformsCopy,
 		},
 	)
 }
@@ -794,7 +807,7 @@ func (img *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shade
 		o = *opts
 	}
 
-	// Apply uniforms.
+	// Apply uniforms, then snapshot for the batcher.
 	shader.applyUniforms(o.Uniforms)
 
 	batchVerts := make([]batch.Vertex2D, len(vertices))
@@ -819,15 +832,34 @@ func (img *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shade
 		texID = o.Images[0].textureID
 	}
 
+	// Collect extra texture IDs for multi-texture shader bindings.
+	var extraTexIDs [3]uint32
+	for i := 1; i < 4; i++ {
+		if o.Images[i] != nil && o.Images[i].texture != nil {
+			extraTexIDs[i-1] = o.Images[i].textureID
+		}
+	}
+
+	// Copy user uniforms so per-draw state isn't overwritten.
+	var dtUniformsCopy map[string]any
+	if len(o.Uniforms) > 0 {
+		dtUniformsCopy = make(map[string]any, len(o.Uniforms))
+		for k, v := range o.Uniforms {
+			dtUniformsCopy[k] = v
+		}
+	}
+
 	rend.batcher.Add(batch.DrawCommand{
-		Vertices:  batchVerts,
-		Indices:   indices,
-		TextureID: texID,
-		BlendMode: blend,
-		FillRule:  fillRule,
-		ShaderID:  shader.id,
-		TargetID:  img.textureID,
-		ColorBody: colorMatrixIdentityBody,
+		Vertices:        batchVerts,
+		Indices:         indices,
+		TextureID:       texID,
+		BlendMode:       blend,
+		FillRule:        fillRule,
+		ShaderID:        shader.id,
+		TargetID:        img.textureID,
+		ColorBody:       colorMatrixIdentityBody,
+		ExtraTextureIDs: extraTexIDs,
+		Uniforms:        dtUniformsCopy,
 	})
 }
 

@@ -37,6 +37,7 @@ func (s *mockShader) SetUniformVec4(name string, v [4]float32)  { s.vec4Uniforms
 func (s *mockShader) SetUniformMat4(name string, v [16]float32) { s.mat4Uniforms[name] = v }
 func (s *mockShader) SetUniformInt(name string, v int32)        { s.intUniforms[name] = v }
 func (s *mockShader) SetUniformBlock(_ string, _ []byte)        {}
+func (s *mockShader) PackCurrentUniforms() []byte               { return nil }
 func (s *mockShader) Dispose()                                  { s.disposed = true }
 
 type mockPipeline struct {

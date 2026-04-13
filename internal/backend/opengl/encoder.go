@@ -241,6 +241,9 @@ func glOffset(offset int) unsafe.Pointer {
 
 // Flush submits all recorded commands. For OpenGL this is a no-op since
 // commands execute immediately.
+// SetBlendMode is a no-op for this backend.
+func (e *commandEncoder) SetBlendMode(_ backend.BlendMode) {}
+
 func (e *commandEncoder) Flush() {
 	gl.Flush()
 }

@@ -176,6 +176,13 @@ type Shader interface {
 	// SetUniformBlock sets a uniform block's data.
 	SetUniformBlock(name string, data []byte)
 
+	// PackCurrentUniforms returns a byte snapshot of the shader's current
+	// uniform values, packed according to the backend's uniform layout.
+	// Returns nil if the shader has no uniforms. Used by DrawRectShader/
+	// DrawTrianglesShader to snapshot per-draw uniforms before the sprite
+	// pass runs (preventing later draws from overwriting earlier ones).
+	PackCurrentUniforms() []byte
+
 	// Dispose releases the shader's GPU resources.
 	Dispose()
 }
@@ -248,6 +255,12 @@ type CommandEncoder interface {
 
 	// SetPipeline binds a render pipeline.
 	SetPipeline(pipeline Pipeline)
+
+	// SetBlendMode sets the blend mode for subsequent draws. On backends
+	// where blend is baked into the pipeline (WebGPU), this triggers a
+	// pipeline recreation if the mode differs from the pipeline's current
+	// blend. No-op for backends that handle blend as mutable state.
+	SetBlendMode(mode BlendMode)
 
 	// SetVertexBuffer binds a vertex buffer at the given slot.
 	SetVertexBuffer(buf Buffer, slot int)

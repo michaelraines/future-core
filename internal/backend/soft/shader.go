@@ -58,6 +58,9 @@ func (s *Shader) SetUniformBlock(name string, data []byte) {
 }
 
 // Dispose releases the shader.
+// PackCurrentUniforms returns nil (soft backend has no GPU uniform buffer).
+func (s *Shader) PackCurrentUniforms() []byte { return nil }
+
 func (s *Shader) Dispose() {
 	s.disposed = true
 	s.uniforms = nil

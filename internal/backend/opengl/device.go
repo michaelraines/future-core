@@ -341,6 +341,7 @@ func (s *shader) SetUniformBlock(_ string, _ []byte) {
 	// UBO binding — not needed for M1, stubbed.
 }
 
+func (s *shader) PackCurrentUniforms() []byte { return nil }
 func (s *shader) Dispose() { gl.DeleteProgram(s.program) }
 
 type renderTarget struct {

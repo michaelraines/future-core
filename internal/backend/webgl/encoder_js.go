@@ -180,4 +180,7 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 }
 
 // Flush is a no-op for WebGL2 — presentation happens automatically.
+// SetBlendMode is a no-op for this backend.
+func (e *Encoder) SetBlendMode(_ backend.BlendMode) {}
+
 func (e *Encoder) Flush() {}

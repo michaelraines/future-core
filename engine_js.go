@@ -278,6 +278,11 @@ func (e *engine) initRenderResources() error {
 		}
 		return false
 	}
+	sp.ApplyUniforms = func(shader backend.Shader, uniforms map[string]any) {
+		for name, val := range uniforms {
+			applyUniformValue(shader, name, val)
+		}
+	}
 
 	e.renderPipeline = pipeline.New()
 	e.renderPipeline.AddPass(sp)

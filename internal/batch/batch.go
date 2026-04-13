@@ -33,7 +33,7 @@ func Vertex2DFormat() backend.VertexFormat {
 type DrawCommand struct {
 	Vertices  []Vertex2D
 	Indices   []uint16
-	TextureID uint32 // opaque texture identifier for sorting
+	TextureID uint32 // opaque texture identifier for sorting (slot 0)
 	BlendMode backend.BlendMode
 	Filter    backend.TextureFilter // texture filter (nearest or linear)
 	FillRule  backend.FillRule      // fill rule (NonZero or EvenOdd)
@@ -47,6 +47,19 @@ type DrawCommand struct {
 
 	// ColorTranslation is the 4-element translation of the color matrix.
 	ColorTranslation [4]float32
+
+	// ExtraTextureIDs holds additional texture bindings for custom shader
+	// draws (slots 1-3). Slot 0 is TextureID. Zero means no binding.
+	// Only used when ShaderID != 0.
+	ExtraTextureIDs [3]uint32
+
+	// Uniforms is a snapshot of the user-provided shader uniforms at draw
+	// time. Nil for default shader draws. For custom shader draws, this
+	// captures the per-draw uniform values (e.g., per-light position,
+	// color) so multiple draws with the same shader don't overwrite each
+	// other. The sprite pass applies these before each draw; built-in
+	// uniforms (uProjection, uColorBody) are set separately.
+	Uniforms map[string]any
 }
 
 // Batch represents a group of draw commands that share the same state.
@@ -62,6 +75,8 @@ type Batch struct {
 	TargetID         uint32 // render target identifier (0 = screen)
 	ColorBody        [16]float32
 	ColorTranslation [4]float32
+	ExtraTextureIDs  [3]uint32
+	Uniforms         map[string]any
 }
 
 // Batcher accumulates draw commands and produces optimized batches.
@@ -239,6 +254,8 @@ func (b *Batcher) Flush() []Batch {
 		cmd := &b.commands[i]
 
 		// Check if we can merge with the current batch.
+		// Custom shader draws with Uniforms never merge — each has
+		// unique per-draw uniforms (e.g., per-light position/color).
 		canMerge := current != nil &&
 			current.TargetID == cmd.TargetID &&
 			current.TextureID == cmd.TextureID &&
@@ -249,6 +266,8 @@ func (b *Batcher) Flush() []Batch {
 			current.Depth == cmd.Depth &&
 			current.ColorBody == cmd.ColorBody &&
 			current.ColorTranslation == cmd.ColorTranslation &&
+			current.ExtraTextureIDs == cmd.ExtraTextureIDs &&
+			cmd.Uniforms == nil && current.Uniforms == nil &&
 			len(current.Vertices)+len(cmd.Vertices) <= b.maxVertices &&
 			len(current.Indices)+len(cmd.Indices) <= b.maxIndices &&
 			len(current.Vertices)+len(cmd.Vertices) <= math.MaxUint16
@@ -274,6 +293,8 @@ func (b *Batcher) Flush() []Batch {
 				TargetID:         cmd.TargetID,
 				ColorBody:        cmd.ColorBody,
 				ColorTranslation: cmd.ColorTranslation,
+				ExtraTextureIDs:  cmd.ExtraTextureIDs,
+				Uniforms:      cmd.Uniforms,
 			})
 			current = &batches[len(batches)-1]
 			copy(current.Vertices, cmd.Vertices)

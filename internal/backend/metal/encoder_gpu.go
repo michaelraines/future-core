@@ -282,6 +282,9 @@ func mtlPrimitiveType(p backend.PrimitiveType) int {
 }
 
 // Flush is a no-op — submission happens in EndRenderPass.
+// SetBlendMode is a no-op for this backend.
+func (e *Encoder) SetBlendMode(_ backend.BlendMode) {}
+
 func (e *Encoder) Flush() {}
 
 // msgSend wraps the ObjC runtime call.

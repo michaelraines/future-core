@@ -38,6 +38,10 @@ type Encoder struct {
 	// command buffer. Without this, the Go GC may release JS references
 	// before the GPU executes the draws.
 	tempRefs []js.Value
+
+	// Pending blend mode set by SetBlendMode, applied on next SetPipeline.
+	pendingBlend    backend.BlendMode
+	pendingBlendSet bool
 }
 
 // BeginRenderPass begins a WebGPU render pass.
@@ -135,8 +139,15 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 	e.currentPipeline = p
 
-	// Lazily create (or recreate) the pipeline for the current target format.
-	p.ensurePipelineForFormat(e.targetFormat)
+	// Lazily create (or recreate) the pipeline for the current target
+	// format and blend mode. Custom shader draws use SetBlendMode to
+	// request per-draw blend (e.g., additive for lights).
+	if e.pendingBlendSet {
+		p.ensurePipeline(e.targetFormat, e.pendingBlend)
+		e.pendingBlendSet = false
+	} else {
+		p.ensurePipelineForFormat(e.targetFormat)
+	}
 
 	pipelineOK := !p.handle.IsUndefined() && !p.handle.IsNull()
 	if pipelineOK && e.inRenderPass {
@@ -321,6 +332,13 @@ func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
 func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {}
 
 // SetColorWrite enables or disables color writing (baked into pipeline in WebGPU).
+// SetBlendMode records the desired blend mode. On the next SetPipeline
+// call, the pipeline will be recreated if the blend differs.
+func (e *Encoder) SetBlendMode(mode backend.BlendMode) {
+	e.pendingBlend = mode
+	e.pendingBlendSet = true
+}
+
 func (e *Encoder) SetColorWrite(_ bool) {}
 
 // SetViewport sets the rendering viewport.

@@ -100,6 +100,9 @@ func (s *Shader) SetUniformInt(name string, v int32) { s.uniforms[name] = v }
 func (s *Shader) SetUniformBlock(name string, data []byte) { s.uniforms[name] = data }
 
 // Dispose releases shader resources.
+// PackCurrentUniforms returns nil (not yet implemented for this GPU backend).
+func (s *Shader) PackCurrentUniforms() []byte { return nil }
+
 func (s *Shader) Dispose() {
 	s.uniforms = nil
 	if !s.program.IsNull() && !s.program.IsUndefined() {

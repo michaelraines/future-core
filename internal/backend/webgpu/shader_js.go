@@ -179,6 +179,21 @@ func (s *Shader) SetUniformBlock(name string, data []byte) {
 	s.uniformsDirty = true
 }
 
+// PackCurrentUniforms returns a byte snapshot of the current uniform values.
+func (s *Shader) PackCurrentUniforms() []byte {
+	if len(s.combinedUniformLayout) == 0 {
+		return nil
+	}
+	data := s.packUniforms(s.combinedUniformLayout)
+	if len(data) == 0 {
+		return nil
+	}
+	// Return a copy so the caller owns the snapshot.
+	snapshot := make([]byte, len(data))
+	copy(snapshot, data)
+	return snapshot
+}
+
 // Dispose releases shader resources.
 func (s *Shader) Dispose() {
 	s.uniforms = nil

@@ -172,6 +172,24 @@ func (s *Shader) applyUniforms(uniforms map[string]any) {
 	}
 }
 
+// applyUniformValue sets a single uniform value on a backend shader,
+// handling type dispatch. Exported for use by the sprite pass's
+// ApplyUniforms callback.
+func applyUniformValue(sh backend.Shader, name string, val any) {
+	switch v := val.(type) {
+	case float32:
+		sh.SetUniformFloat(name, v)
+	case float64:
+		sh.SetUniformFloat(name, float32(v))
+	case int:
+		sh.SetUniformInt(name, int32(v))
+	case int32:
+		sh.SetUniformInt(name, v)
+	case []float32:
+		applyFloatSliceUniform(sh, name, v)
+	}
+}
+
 // applyFloatSliceUniform sets a uniform from a float32 slice, inferring the
 // type from the slice length.
 func applyFloatSliceUniform(sh backend.Shader, name string, v []float32) {

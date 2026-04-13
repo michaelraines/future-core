@@ -369,6 +369,9 @@ func (e *Encoder) bindUniforms() {
 }
 
 // Flush is a no-op for Vulkan — submission happens in EndFrame.
+// SetBlendMode is a no-op for this backend.
+func (e *Encoder) SetBlendMode(_ backend.BlendMode) {}
+
 func (e *Encoder) Flush() {}
 
 // resetFrame resets descriptor pool for the next frame.
