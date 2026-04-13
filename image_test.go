@@ -100,7 +100,7 @@ func withMockRenderer(t *testing.T) (dev *mockDevice, registered map[uint32]back
 			registered[id] = tex
 		},
 		registerRenderTarget: func(_ uint32, _ backend.RenderTarget) {},
-		pendingClears: newPendingClearTracker(),
+		pendingClears:        newPendingClearTracker(),
 	}
 	old := getRenderer()
 	setRenderer(rend)
