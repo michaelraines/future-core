@@ -98,6 +98,25 @@ separates vertex and fragment source. For 3D:
 **Constraint**: `ShaderDescriptor` must not be 2D-specific. Uniform types must include
 `mat4` and `vec3` (already present via `SetUniformMat4`, `SetUniformVec4`).
 
+### GLSL→WGSL Translator 2D Assumptions
+
+The shader translator (`internal/shadertranslate/wgsl.go`) has several
+2D-specific assumptions that must be addressed for 3D:
+
+| Assumption | Current (2D) | Needed for 3D |
+|---|---|---|
+| Texture sampling | `textureSampleLevel(..., 0.0)` — hardcoded LOD=0 | `textureSample` (auto LOD from derivatives) for mipmapped textures, or explicit LOD computation |
+| Texture types | All textures are `texture_2d<f32>` | `texture_3d`, `texture_cube`, `texture_depth_2d` for shadows/environment maps |
+| Vertex format | Hardcoded `Vertex2D` (pos, uv, color) | Normals, tangents, bone weights, multiple UV channels |
+| Kage image builtins | `imageSrcNAt` emits bounds-checked 2D sample | May need 3D variants or be replaced by a material system |
+
+The `textureSampleLevel` choice was forced by WebGPU's uniform control flow
+requirement — `textureSample` (which supports automatic mip selection) fails
+validation in any shader with non-uniform branches. For 3D, options include:
+1. Restructure shaders to keep `textureSample` calls in uniform flow
+2. Compute LOD explicitly via `textureSampleLevel` with `textureNumLevels`
+3. Use `textureSampleGrad` with explicit screen-space derivatives
+
 ---
 
 ## Planned 3D Features (Phase 2+)

@@ -521,8 +521,19 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   browser path creates per-draw temporary buffers (JS GC handles cleanup).
 - **WebGPU shader translation** — GLSL→WGSL via `internal/shadertranslate/wgsl.go`.
   Most GLSL built-ins pass through unchanged (WGSL has identical names).
-  `mod(x, y)` needs active translation to `(x % y)`. The translator does not
-  support array uniforms or custom function definitions.
+  `mod(x, y)` needs active translation to `(x % y)`. Kage image builtins
+  (`imageSrc0At`, etc.) are emitted as WGSL helper functions with
+  `textureSampleLevel`. The translator does not support array uniforms or
+  custom function definitions. WGSL output is validated by `naga-cli` in
+  CI (see `wgsl_naga_test.go`).
+  **2D assumptions in the translator** (must be revisited for 3D):
+  - `textureSampleLevel(..., 0.0)` hardcodes LOD=0 everywhere. For 3D
+    mipmapped textures, use `textureSample` (automatic LOD from
+    derivatives) or compute LOD explicitly.
+  - All textures are assumed `texture_2d<f32>`. 3D will need
+    `texture_3d`, `texture_cube`, and `texture_depth_2d`.
+  - Vertex format is hardcoded to `Vertex2D` (pos, uv, color). 3D
+    will need normals, tangents, bone weights.
 - **Known test requirement**: WebGPU native GPU tests require `libwgpu_native`
   at runtime. See `internal/backend/webgpu/GPU_TESTING.md` for the 7-tier
   validation checklist.

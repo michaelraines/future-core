@@ -430,6 +430,12 @@ func replaceWGSLTypes(s string) string {
 // Uses textureSampleLevel instead of textureSample because
 // textureSample requires uniform control flow, which fails in any
 // fragment shader that has non-uniform if-branches (common in lighting).
+//
+// 2D ASSUMPTION: LOD is hardcoded to 0.0 because Phase 1 only uses
+// non-mipmapped 2D textures. For 3D with mipmapped textures, this
+// should either use textureSample (automatic mip from derivatives,
+// but requires uniform control flow) or compute the LOD explicitly.
+// See FUTURE_3D.md.
 func replaceWGSLTextureCall(s, samplerName string) string {
 	re := reTextureCall(samplerName)
 	return re.ReplaceAllStringFunc(s, func(match string) string {
@@ -530,6 +536,10 @@ func emitWGSLImageHelpers(b *strings.Builder, glsl string, samplers []uniform) {
 		// because textureSample requires uniform control flow. Shaders that
 		// have ANY non-uniform if-branch before the call site would fail
 		// validation even if the call is outside the branch.
+		//
+		// 2D ASSUMPTION: LOD 0.0 is correct for non-mipmapped 2D textures.
+		// For 3D, mipmapped textures need automatic LOD (textureSample) or
+		// explicit LOD computation. See FUTURE_3D.md.
 		fmt.Fprintf(b, "fn imageSrc%dAt(pos: vec2<f32>) -> vec4<f32> {\n", i)
 		fmt.Fprintf(b, "    let origin = uniforms.uImageSrc%dOrigin;\n", i)
 		fmt.Fprintf(b, "    let size = uniforms.uImageSrc%dSize;\n", i)
