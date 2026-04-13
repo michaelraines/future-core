@@ -461,10 +461,16 @@ func buildWGSLUniformLayout(uniforms []uniform) []UniformField {
 	offset := 0
 	for i, u := range uniforms {
 		size := uniformSize(u.typ)
+		// WGSL std140 alignment rules:
+		// f32, i32: align 4
+		// vec2<f32>: align 8
+		// vec3<f32>, vec4<f32>: align 16
+		// mat3x3, mat4x4: align 16
 		align := 4
-		if size >= 16 {
+		switch u.typ {
+		case "vec3", "vec4", "mat3", "mat4":
 			align = 16
-		} else if size == 8 {
+		case "vec2":
 			align = 8
 		}
 		if offset%align != 0 {

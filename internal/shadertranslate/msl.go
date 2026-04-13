@@ -75,6 +75,10 @@ func uniformSize(glslType string) int {
 	case "vec2":
 		return 8
 	case "vec3":
+		// WGSL std140: vec3 is 12 bytes of data but occupies 16 bytes
+		// (4 bytes trailing padding to next 16-byte boundary). We return
+		// 12 here; the alignment logic in buildWGSLUniformLayout handles
+		// the 16-byte alignment requirement.
 		return 12
 	case "vec4":
 		return 16

@@ -180,6 +180,12 @@ func applyFloatSliceUniform(sh backend.Shader, name string, v []float32) {
 		sh.SetUniformFloat(name, v[0])
 	case 2:
 		sh.SetUniformVec2(name, [2]float32{v[0], v[1]})
+	case 3:
+		// vec3 uniforms (e.g., LightColor, LightPos) — pad to vec4 for
+		// GPU alignment. The shader's uniform struct uses vec3<f32> but
+		// most backends require 16-byte alignment for uniform buffer
+		// packing, so we set it as vec4 with w=0.
+		sh.SetUniformVec4(name, [4]float32{v[0], v[1], v[2], 0})
 	case 4:
 		sh.SetUniformVec4(name, [4]float32{v[0], v[1], v[2], v[3]})
 	case 16:
