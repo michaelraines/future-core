@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/draw"
 	gomath "math"
+	"os"
 	"sync/atomic"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -80,9 +81,15 @@ type Image struct {
 }
 
 // aaBufferScale is the supersample factor for anti-aliased DrawTriangles.
-// The AA buffer is allocated at 2x the 1x region so linear-downsampled
-// bilinear averaging of each 2x2 block produces a smooth edge.
-const aaBufferScale = 2
+// The AA buffer is allocated at Nx the 1x region so linear-downsampled
+// bilinear averaging produces a smooth edge. Controlled by
+// FUTURE_CORE_AA_SCALE (default "2").
+var aaBufferScale = func() int {
+	if os.Getenv("FUTURE_CORE_AA_SCALE") == "1" {
+		return 1
+	}
+	return 2
+}()
 
 // NewImage creates a new blank image with the given dimensions.
 // If the rendering backend is initialized, a GPU texture is allocated.
@@ -326,7 +333,7 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 	if img.disposed {
 		return
 	}
-	if opts != nil && opts.AntiAlias {
+	if opts != nil && opts.AntiAlias && os.Getenv("FUTURE_CORE_NO_AA") == "" {
 		img.drawTrianglesAA(vertices, indices, src, opts)
 		return
 	}
@@ -1358,8 +1365,8 @@ func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Imag
 	scaled := make([]Vertex, len(vertices))
 	for i, v := range vertices {
 		scaled[i] = v
-		scaled[i].DstX = (v.DstX - float32(region.Min.X)) * aaBufferScale
-		scaled[i].DstY = (v.DstY - float32(region.Min.Y)) * aaBufferScale
+		scaled[i].DstX = (v.DstX - float32(region.Min.X)) * float32(aaBufferScale)
+		scaled[i].DstY = (v.DstY - float32(region.Min.Y)) * float32(aaBufferScale)
 	}
 
 	// Forward to the non-AA path on the offscreen buffer. inner.AntiAlias

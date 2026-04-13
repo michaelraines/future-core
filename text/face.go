@@ -20,6 +20,7 @@ import (
 	"image/draw"
 	"io"
 	"math"
+	"os"
 	"sync"
 
 	futurerender "github.com/michaelraines/future-core"
@@ -189,6 +190,11 @@ func (g *GoTextFaceSource) getOrCreateGlyphImage(key glyphImageKey, segs []opent
 	}
 
 	img := segmentsToImage(segs, subpixelOffset, bounds)
+	if traceText && img != nil {
+		w, h := img.Size()
+		fmt.Fprintf(os.Stderr, "[text]   new glyph gid=%d size=%.0f img=%dx%d\n",
+			key.gid, key.size, w, h)
+	}
 	if img != nil {
 		g.glyphImageCache[key] = img
 	}
@@ -238,6 +244,11 @@ func (f *GoTextFace) advance(text string) float64 {
 // drawGlyphs renders a single line of text at the given offset, applying
 // the color scale and geometry transform. Matches Ebitengine's glyph
 // positioning exactly.
+// traceText controls diagnostic logging for text rendering.
+// Enabled by FUTURE_CORE_TRACE_TEXT=1. Logs glyph count, image creation,
+// and draw positions to help diagnose invisible text in specific backends.
+var traceText = os.Getenv("FUTURE_CORE_TRACE_TEXT") != ""
+
 func (f *GoTextFace) drawGlyphs(target *futurerender.Image, s string, ox, oy float64, cs futurerender.ColorScale, geoM futurerender.GeoM) {
 	if s == "" || f.Source == nil {
 		return
@@ -245,11 +256,17 @@ func (f *GoTextFace) drawGlyphs(target *futurerender.Image, s string, ox, oy flo
 
 	_, gs := f.Source.shape(s, f.Size)
 
+	if traceText {
+		tx, ty := geoM.Apply(0, 0)
+		fmt.Fprintf(os.Stderr, "[text] drawGlyphs size=%.0f glyphs=%d geo=(%.0f,%.0f) text=%q\n", f.Size, len(gs), tx, ty, truncate(s, 30))
+	}
+
 	origin := fixed.Point26_6{
 		X: float64ToFixed26_6(ox),
 		Y: float64ToFixed26_6(oy),
 	}
 
+	var drawn, skipped int
 	for _, g := range gs {
 		o := origin.Add(fixed.Point26_6{
 			X: g.sg.XOffset,
@@ -262,7 +279,18 @@ func (f *GoTextFace) drawGlyphs(target *futurerender.Image, s string, ox, oy flo
 			drawOpts.ColorScale = cs
 			drawOpts.GeoM.Translate(float64(imgX), float64(imgY))
 			drawOpts.GeoM.Concat(geoM)
+			if traceText && drawn == 0 {
+				// Log position of first glyph only (to avoid flood).
+				tw, th := target.Size()
+				gw, gh := img.Size()
+				fmt.Fprintf(os.Stderr, "[text]   pos=(%d,%d) glyph=%dx%d target=%dx%d cs=(%.2f,%.2f,%.2f,%.2f)\n",
+					imgX, imgY, gw, gh, tw, th,
+					cs.R(), cs.G(), cs.B(), cs.A())
+			}
 			target.DrawImage(img, drawOpts)
+			drawn++
+		} else {
+			skipped++
 		}
 
 		// Advance the pen by the glyph's advance. The text package only
@@ -275,6 +303,17 @@ func (f *GoTextFace) drawGlyphs(target *futurerender.Image, s string, ox, oy flo
 			Y: 0,
 		})
 	}
+
+	if traceText {
+		fmt.Fprintf(os.Stderr, "[text]   drawn=%d skipped=%d\n", drawn, skipped)
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 // glyphImage returns the rasterized glyph image and the integer pixel
@@ -433,6 +472,9 @@ func segmentsToImage(segs []opentype.Segment, subpixelOffset fixed.Point26_6, gl
 	w := (glyphBounds.Max.X - glyphBounds.Min.X).Ceil()
 	h := (glyphBounds.Max.Y - glyphBounds.Min.Y).Ceil()
 	if w == 0 || h == 0 {
+		if traceText {
+			fmt.Fprintf(os.Stderr, "[text]   segmentsToImage: zero size w=%d h=%d, returning nil\n", w, h)
+		}
 		return nil
 	}
 
@@ -468,7 +510,21 @@ func segmentsToImage(segs []opentype.Segment, subpixelOffset fixed.Point26_6, gl
 
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	rast.Draw(dst, dst.Bounds(), image.Opaque, image.Point{})
-	return futurerender.NewImageFromImage(dst)
+	if traceText {
+		// Count non-transparent pixels in the rasterized glyph.
+		nonZero := 0
+		for i := 3; i < len(dst.Pix); i += 4 {
+			if dst.Pix[i] > 0 {
+				nonZero++
+			}
+		}
+		fmt.Fprintf(os.Stderr, "[text]   rasterized %dx%d glyph: %d/%d opaque pixels\n", w, h, nonZero, w*h)
+	}
+	img := futurerender.NewImageFromImage(dst)
+	if traceText && img == nil {
+		fmt.Fprintf(os.Stderr, "[text]   segmentsToImage: NewImageFromImage returned nil for %dx%d glyph\n", w, h)
+	}
+	return img
 }
 
 // --- Fixed-point conversion helpers ---

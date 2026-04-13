@@ -1,6 +1,7 @@
 package futurerender
 
 import (
+	"os"
 	"sync"
 )
 
@@ -49,8 +50,8 @@ type atlasPageRow struct {
 var globalSpriteAtlas spriteAtlas
 
 // spriteAtlasEnabled controls whether NewImageFromImage uses atlasing.
-// Enabled by default.
-var spriteAtlasEnabled = true
+// Enabled by default. Can be disabled at startup via FUTURE_CORE_NO_ATLAS=1.
+var spriteAtlasEnabled = os.Getenv("FUTURE_CORE_NO_ATLAS") == ""
 
 // SetSpriteAtlasEnabled enables or disables automatic sprite atlasing.
 func SetSpriteAtlasEnabled(enabled bool) {
