@@ -520,21 +520,44 @@ func (c *compiler) inferType(expr ast.Expr) string {
 	case *ast.UnaryExpr:
 		return c.inferType(e.X)
 	case *ast.SelectorExpr:
-		// x.y — could be swizzle; infer from number of components.
 		sel := e.Sel.Name
-		switch len(sel) {
-		case 1:
-			return "float"
-		case 2:
-			return "vec2"
-		case 3:
-			return "vec3"
-		case 4:
-			return "vec4"
-		default:
-			return "float"
+		// Swizzles use characters from xyzwrgba and are 1-4 chars.
+		if len(sel) >= 1 && len(sel) <= 4 && isSwizzle(sel) {
+			switch len(sel) {
+			case 1:
+				return "float"
+			case 2:
+				return "vec2"
+			case 3:
+				return "vec3"
+			case 4:
+				return "vec4"
+			}
 		}
+		// Struct field access (e.g., uniforms.LightDir) — check if the
+		// field is a known uniform and use its declared type.
+		fieldName := sel
+		for _, u := range c.uniforms {
+			if u.Name == fieldName {
+				return u.Type.GLSLName()
+			}
+		}
+		// Fall back to inferring from the parent expression context.
+		return "float"
 	default:
 		return "float"
 	}
+}
+
+// isSwizzle returns true if s consists only of swizzle characters (xyzwrgba).
+func isSwizzle(s string) bool {
+	for _, c := range s {
+		switch c {
+		case 'x', 'y', 'z', 'w', 'r', 'g', 'b', 'a':
+			continue
+		default:
+			return false
+		}
+	}
+	return len(s) > 0
 }

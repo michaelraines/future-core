@@ -88,6 +88,10 @@ logs stay small.
 |---|---|
 | `FUTURE_CORE_TRACE_BATCHES=N` | The batcher's per-frame batch list after `Flush()`: target ID, texture ID, shader, filter, blend, vertex and index counts for each batch. Useful for confirming what the batcher actually handed to the sprite pass. |
 | `FUTURE_CORE_TRACE_PASSES=N` | Every `BeginRenderPass` call the sprite pass makes, with target ID, load action, viewport, and clear color. Useful for catching "the same target is entered twice per frame" and "the load action is wrong" bugs. |
+| `FUTURE_CORE_TRACE_TEXT=1` | Logs glyph creation, draw positions, target sizes, and color scale values. Diagnoses invisible text by confirming glyphs are rasterized and DrawImage is called. |
+| `FUTURE_CORE_NO_AA=1` | Bypasses `drawTrianglesAA` entirely, routing all `AntiAlias=true` draws through the aliased path. Useful for confirming whether a visual bug is caused by the AA buffer lifecycle. |
+| `FUTURE_CORE_AA_SCALE=1` | Uses 1x AA buffers instead of 2x. Keeps the AA pipeline active but eliminates supersample quality. Isolates buffer-size-related issues. |
+| `FUTURE_CORE_NO_ATLAS=1` | Disables sprite atlas packing. Each `NewImageFromImage` gets its own texture. Isolates atlas-related UV or texture-sharing bugs. |
 
 Typical debugging session — capture both traces for one frame of the
 `rttest` repro program:
@@ -581,16 +585,31 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   the full image and persistent across frames (matching Ebitengine's
   `bigOffscreenBuffer`). Flushed back via a linear-filtered downsample
   quad at sync points (any public method that reads/writes the target's
-  texture). After each flush, a `pendingClear` is registered so the next
-  AA draw starts clean. A blend change triggers a flush. `Clear()` on the
-  parent sets `aaBufferNeedsClear` so the buffer is cleared before the
-  next AA draw. Sub-images can't own a buffer and fall back to aliased
-  rendering.
+  texture). After each flush, `pendingClearTracker.Request()` registers
+  a clear so the next AA draw starts clean — this is a **counter**, not
+  a boolean, because the AA buffer can be flushed and re-entered 17+
+  times per frame. `Clear()` uses `RequestOnce()` (idempotent) to avoid
+  double-clearing when called multiple times per frame (e.g.,
+  `imageClearWrapper` + `Frame.Draw`). A blend change triggers a flush.
+  `Clear()` on the parent sets `aaBufferNeedsClear` so the buffer is
+  cleared before the next AA draw. Sub-images can't own a buffer and
+  fall back to aliased rendering.
 - **`DrawTriangles` with `src=nil` uses `whiteTextureID`** — untextured
   draws (e.g., vector fills/strokes with vertex colors) must bind the
   white texture so vertex colors pass through unmodified. Using `texID=0`
   causes the sprite pass to skip texture binding (since `lastTextureID`
   starts at 0), leaving whatever texture was previously bound.
+- **Sprite pass sets filter BEFORE texture** — `SetTextureFilter` must be
+  called before `SetTexture` because the WebGPU encoder reads the current
+  filter when creating the texture bind group. If reversed, the bind group
+  uses the stale filter value (e.g., AA downsample gets nearest instead
+  of linear).
+- **`pendingClearTracker` uses Request vs RequestOnce** — `Request()`
+  accumulates (each AA flush needs its own clear). `RequestOnce()` is
+  idempotent (multiple `Clear()` calls per frame should produce one
+  clear, not N). Using the wrong method causes either stale AA content
+  (boolean collapse) or over-clearing (background wipe). Both bugs are
+  covered by `renderer_test.go`.
 
 ## Test Coverage Requirements
 

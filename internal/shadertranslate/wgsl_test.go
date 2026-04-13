@@ -295,9 +295,11 @@ void main() {
 	src := result.Source
 	t.Logf("Translated WGSL:\n%s", src)
 
-	// The WGSL output should contain the imageSrc0At helper function.
+	// The WGSL output should contain the imageSrc0At helper function
+	// using select() for uniform control flow (no if-branch around textureSample).
 	require.Contains(t, src, "fn imageSrc0At(pos: vec2<f32>) -> vec4<f32>")
 	require.Contains(t, src, "textureSample(uTexture0, uTexture0_sampler, pos)")
+	require.Contains(t, src, "select(vec4<f32>(0.0), sampled, inBounds)")
 
 	// The body should call imageSrc0At (pass-through, not translated).
 	require.Contains(t, src, "imageSrc0At(in.vTexCoord)")

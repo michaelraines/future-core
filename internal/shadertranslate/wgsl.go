@@ -332,11 +332,13 @@ func translateWGSLFragmentLine(line string, uniforms []uniform, varyings []varyi
 		s = strings.Replace(s, fragOutName+"=", "return", 1)
 	}
 
-	// Bare "return;" is valid in GLSL void functions but invalid in WGSL
-	// non-void functions. The fragment function returns vec4<f32>, so
-	// convert bare returns to return a zero vector.
+	// Bare "return;" in GLSL fragment shaders is always redundant after
+	// the fragColor→return translation: either it follows a fragColor
+	// assignment (already translated to "return value;") or it's an
+	// early exit where fragColor was set earlier. Skip it to avoid
+	// WGSL "unreachable code" warnings.
 	if strings.TrimSpace(s) == "return;" {
-		s = strings.Replace(s, "return;", "return vec4<f32>(0.0);", 1)
+		return ""
 	}
 
 	return s
@@ -514,13 +516,14 @@ func emitWGSLImageHelpers(b *strings.Builder, glsl string, samplers []uniform) {
 		}
 
 		// imageSrcNAt — bounds-checked texture sample.
+		// WebGPU requires textureSample in uniform control flow, so we
+		// sample unconditionally and use select() to zero out OOB pixels.
 		fmt.Fprintf(b, "fn imageSrc%dAt(pos: vec2<f32>) -> vec4<f32> {\n", i)
 		fmt.Fprintf(b, "    let origin = uniforms.uImageSrc%dOrigin;\n", i)
 		fmt.Fprintf(b, "    let size = uniforms.uImageSrc%dSize;\n", i)
-		b.WriteString("    if (pos.x < origin.x || pos.y < origin.y || pos.x >= origin.x + size.x || pos.y >= origin.y + size.y) {\n")
-		b.WriteString("        return vec4<f32>(0.0);\n")
-		b.WriteString("    }\n")
-		fmt.Fprintf(b, "    return textureSample(%s, %s_sampler, pos);\n", texName, texName)
+		fmt.Fprintf(b, "    let sampled = textureSample(%s, %s_sampler, pos);\n", texName, texName)
+		b.WriteString("    let inBounds = pos.x >= origin.x && pos.y >= origin.y && pos.x < origin.x + size.x && pos.y < origin.y + size.y;\n")
+		b.WriteString("    return select(vec4<f32>(0.0), sampled, inBounds);\n")
 		b.WriteString("}\n\n")
 
 		// imageSrcNUnsafeAt — unchecked texture sample.
