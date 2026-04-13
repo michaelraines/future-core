@@ -592,22 +592,6 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   causes the sprite pass to skip texture binding (since `lastTextureID`
   starts at 0), leaving whatever texture was previously bound.
 
-- **AA buffer hides text drawn after AA vector draws (WebGPU only)** —
-  When the component system's Frame draws AA-enabled vector shapes
-  (panels, circles) interleaved with text (`DrawImage` of glyph images)
-  on the same offscreen canvas, the text after the first AA draw becomes
-  invisible. Headers drawn BEFORE the first AA draw render correctly.
-  The bug does NOT reproduce in minimal tests (cmd/texttest) — only in
-  the full component system pipeline (Frame → Clear → StyleConfig.Draw
-  → children Draw → composite). The soft backend renders correctly.
-  **Workaround:** set `FUTURE_CORE_NO_AA=1` to bypass the AA buffer
-  entirely (aliased but visible). **Root cause:** unknown — the AA
-  buffer flush/clear/composite lifecycle interacts incorrectly with the
-  component system's multi-layer rendering, but the exact trigger has
-  not been isolated. See `cmd/texttest/` for the minimal reproducer
-  that works correctly, and `parity-tests/scenarios/input-actions-demo.mjs`
-  for the scenario that demonstrates the bug.
-
 ## Test Coverage Requirements
 
 **All changes require test coverage.** This is enforced by CI.
