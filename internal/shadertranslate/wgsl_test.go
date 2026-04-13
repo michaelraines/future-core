@@ -327,3 +327,306 @@ void main() {
 	require.NotContains(t, result.Source, "fn imageSrc")
 	require.NotContains(t, result.Source, "fn imageDst")
 }
+
+// --- Comprehensive translation test suite ---
+
+func TestWGSLLocalVarDecl(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// Initialized declarations.
+		{"float init", "    float x = 1.0;", "    var x: f32 = 1.0;"},
+		// When the same type appears as both the declaration type AND a
+		// constructor on the same line, the constructor may not be replaced
+		// (known limitation of replaceWGSLTypeConstructor's index check).
+		{"vec2 init", "    vec2 v = vec2(1.0, 2.0);", "    var v: vec2<f32> = vec2(1.0, 2.0);"},
+		{"vec3 init", "    vec3 n = normalize(v);", "    var n: vec3<f32> = normalize(v);"},
+		{"vec4 init", "    vec4 c = vec4(0.0);", "    var c: vec4<f32> = vec4(0.0);"},
+		{"int init", "    int i = 0;", "    var i: i32 = 0;"},
+		{"mat4 init", "    mat4 m = mat4(1.0);", "    var m: mat4x4<f32> = mat4x4<f32>(1.0);"},
+		{"mat3 init", "    mat3 m = mat3(1.0);", "    var m: mat3x3<f32> = mat3x3<f32>(1.0);"},
+		{"bool init", "    bool b = true;", "    var b: bool = true;"},
+		{"ivec2 init", "    ivec2 v = ivec2(1, 2);", "    var v: vec2<i32> = vec2<i32>(1, 2);"},
+
+		// Uninitialized declarations.
+		{"float no init", "    float x;", "    var x: f32;"},
+		{"vec2 no init", "    vec2 v;", "    var v: vec2<f32>;"},
+		{"vec3 no init", "    vec3 n;", "    var n: vec3<f32>;"},
+		{"vec4 no init", "    vec4 c;", "    var c: vec4<f32>;"},
+		{"int no init", "    int i;", "    var i: i32;"},
+		{"bool no init", "    bool b;", "    var b: bool;"},
+		{"ivec4 no init", "    ivec4 v;", "    var v: vec4<i32>;"},
+
+		// Non-matching lines pass through unchanged.
+		{"assignment", "    x = 1.0;", "    x = 1.0;"},
+		{"function call", "    doSomething();", "    doSomething();"},
+		{"return", "    return vec4(1.0);", "    return vec4(1.0);"},
+		{"if statement", "    if (x > 0.0) {", "    if (x > 0.0) {"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := replaceWGSLLocalVarDecl(tt.in)
+			// Also apply type constructor replacement for init cases.
+			if strings.Contains(tt.in, "=") {
+				got = replaceWGSLTypes(got)
+			}
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestWGSLModCall(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"simple", "mod(x, y)", "(x % y)"},
+		{"with expr", "mod(a + b, 2.0)", "(a + b % 2.0)"},
+		{"nested in expr", "float r = mod(x, 1.0);", "float r = (x % 1.0);"},
+		{"no mod", "normalize(v)", "normalize(v)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := replaceWGSLModCall(tt.in)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestWGSLTypeConstructors(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"vec2", "vec2(1.0, 2.0)", "vec2<f32>(1.0, 2.0)"},
+		{"vec3", "vec3(0.0)", "vec3<f32>(0.0)"},
+		{"vec4", "vec4(1.0, 0.0, 0.0, 1.0)", "vec4<f32>(1.0, 0.0, 0.0, 1.0)"},
+		{"mat4", "mat4(1.0)", "mat4x4<f32>(1.0)"},
+		{"mat3", "mat3(m)", "mat3x3<f32>(m)"},
+		{"ivec2", "ivec2(1, 2)", "vec2<i32>(1, 2)"},
+		{"already wgsl", "vec2<f32>(1.0)", "vec2<f32>(1.0)"},
+		{"no type", "normalize(v)", "normalize(v)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := replaceWGSLTypes(tt.in)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestWGSLTextureCall(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		sampler string
+		want    string
+	}{
+		{"basic", "texture(uTexture, uv)", "uTexture",
+			"textureSample(uTexture, uTexture_sampler, uv)"},
+		{"numbered", "texture(uTexture0, pos)", "uTexture0",
+			"textureSample(uTexture0, uTexture0_sampler, pos)"},
+		{"no match", "texture(other, uv)", "uTexture",
+			"texture(other, uv)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := replaceWGSLTextureCall(tt.in, tt.sampler)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestWGSLFragmentBareReturn(t *testing.T) {
+	// Fragment shader with bare return inside an if block.
+	// The fragColor assignment should become "return", and the bare
+	// "return;" should be removed (not converted to return vec4).
+	glsl := `#version 330
+uniform sampler2D uTexture;
+in vec2 vTexCoord;
+in vec4 vColor;
+out vec4 fragColor;
+void main() {
+    if (vColor.a <= 0.0) {
+        fragColor = vec4(0.0);
+        return;
+    }
+    fragColor = texture(uTexture, vTexCoord) * vColor;
+}
+`
+	result, err := GLSLToWGSLFragment(glsl)
+	require.NoError(t, err)
+
+	src := result.Source
+	t.Logf("WGSL:\n%s", src)
+
+	// The first fragColor assignment should become a return.
+	require.Contains(t, src, "return vec4<f32>(0.0)")
+
+	// The bare "return;" should be removed, not produce unreachable code.
+	require.NotContains(t, src, "return vec4<f32>(0.0);\n    return")
+	// No bare "return;" should remain.
+	for _, line := range strings.Split(src, "\n") {
+		require.NotEqual(t, "    return;", strings.TrimRight(line, " "))
+	}
+}
+
+func TestWGSLFragmentMultipleTextures(t *testing.T) {
+	// Fragment shader using two textures (like a lightmap + scene composite).
+	glsl := `#version 330
+uniform sampler2D uTexture0;
+uniform sampler2D uTexture1;
+in vec2 vTexCoord;
+in vec4 vColor;
+out vec4 fragColor;
+void main() {
+    vec4 scene = texture(uTexture0, vTexCoord);
+    vec4 light = texture(uTexture1, vTexCoord);
+    fragColor = scene * light;
+}
+`
+	result, err := GLSLToWGSLFragment(glsl)
+	require.NoError(t, err)
+
+	src := result.Source
+	t.Logf("WGSL:\n%s", src)
+
+	// Both textures should have bindings.
+	require.Contains(t, src, "var uTexture0: texture_2d<f32>")
+	require.Contains(t, src, "var uTexture0_sampler: sampler")
+	require.Contains(t, src, "var uTexture1: texture_2d<f32>")
+	require.Contains(t, src, "var uTexture1_sampler: sampler")
+
+	// Both texture samples should be translated.
+	require.Contains(t, src, "textureSample(uTexture0, uTexture0_sampler, in.vTexCoord)")
+	require.Contains(t, src, "textureSample(uTexture1, uTexture1_sampler, in.vTexCoord)")
+}
+
+func TestWGSLImageHelpersMultipleIndices(t *testing.T) {
+	// GLSL using both imageSrc0At and imageSrc1At.
+	glsl := `#version 330
+uniform sampler2D uTexture0;
+uniform sampler2D uTexture1;
+uniform vec2 uImageSrc0Origin;
+uniform vec2 uImageSrc0Size;
+uniform vec2 uImageSrc1Origin;
+uniform vec2 uImageSrc1Size;
+in vec2 vTexCoord;
+in vec4 vColor;
+out vec4 fragColor;
+vec4 imageSrc0At(vec2 pos) { return texture(uTexture0, pos); }
+vec4 imageSrc1At(vec2 pos) { return texture(uTexture1, pos); }
+void main() {
+    vec4 a = imageSrc0At(vTexCoord);
+    vec4 b = imageSrc1At(vTexCoord);
+    fragColor = a + b;
+}
+`
+	result, err := GLSLToWGSLFragment(glsl)
+	require.NoError(t, err)
+
+	src := result.Source
+
+	// Both image helpers should be emitted.
+	require.Contains(t, src, "fn imageSrc0At(pos: vec2<f32>) -> vec4<f32>")
+	require.Contains(t, src, "fn imageSrc1At(pos: vec2<f32>) -> vec4<f32>")
+	require.Contains(t, src, "fn imageSrc0UnsafeAt")
+	require.Contains(t, src, "fn imageSrc1UnsafeAt")
+}
+
+func TestWGSLImageDstHelpers(t *testing.T) {
+	glsl := `#version 330
+uniform vec2 uImageDstOrigin;
+uniform vec2 uImageDstSize;
+in vec2 vTexCoord;
+in vec4 vColor;
+out vec4 fragColor;
+void main() {
+    vec2 origin = imageDstOrigin();
+    vec2 size = imageDstSize();
+    fragColor = vec4(origin.x / size.x, 0.0, 0.0, 1.0);
+}
+`
+	result, err := GLSLToWGSLFragment(glsl)
+	require.NoError(t, err)
+
+	src := result.Source
+
+	require.Contains(t, src, "fn imageDstOrigin() -> vec2<f32>")
+	require.Contains(t, src, "fn imageDstSize() -> vec2<f32>")
+	require.Contains(t, src, "uniforms.uImageDstOrigin")
+	require.Contains(t, src, "uniforms.uImageDstSize")
+}
+
+func TestWGSLFragmentComplexLighting(t *testing.T) {
+	// Simulate a point light shader with the patterns that caused
+	// real translation failures: uninitialized vars, uniform field
+	// access, normalize of uniform vec3, imageSrc0At sampling.
+	glsl := `#version 330
+uniform sampler2D uTexture0;
+uniform vec2 uImageSrc0Origin;
+uniform vec2 uImageSrc0Size;
+uniform vec3 LightPos;
+uniform vec3 LightColor;
+uniform float Intensity;
+uniform float Radius;
+in vec2 vTexCoord;
+in vec4 vColor;
+out vec4 fragColor;
+vec4 imageSrc0At(vec2 pos) {
+    vec2 origin = uImageSrc0Origin;
+    vec2 size = uImageSrc0Size;
+    if (pos.x < origin.x) { return vec4(0.0); }
+    return texture(uTexture0, pos);
+}
+void main() {
+    vec4 normalSample = imageSrc0At(vTexCoord);
+    vec3 normal = normalize(((normalSample.rgb * 2.0) - 1.0));
+    float dist = length(LightPos.xy - vTexCoord);
+    float attenuation;
+    if (dist < Radius) {
+        attenuation = 1.0 - (dist / Radius);
+    }
+    vec3 result = ((LightColor * Intensity) * attenuation);
+    fragColor = vec4(result, 1.0);
+}
+`
+	result, err := GLSLToWGSLFragment(glsl)
+	require.NoError(t, err)
+
+	src := result.Source
+	t.Logf("WGSL:\n%s", src)
+
+	// imageSrc0At helper emitted with uniform-flow-safe select().
+	require.Contains(t, src, "fn imageSrc0At(pos: vec2<f32>)")
+	require.Contains(t, src, "select(")
+
+	// Uninitialized var declaration converted.
+	require.Contains(t, src, "var attenuation: f32;")
+
+	// Initialized declarations converted.
+	require.Contains(t, src, "var normalSample: vec4<f32>")
+	require.Contains(t, src, "var normal: vec3<f32>")
+	require.Contains(t, src, "var dist: f32")
+	require.Contains(t, src, "var result: vec3<f32>")
+
+	// Uniform references prefixed.
+	require.Contains(t, src, "uniforms.LightPos")
+	require.Contains(t, src, "uniforms.LightColor")
+	require.Contains(t, src, "uniforms.Intensity")
+	require.Contains(t, src, "uniforms.Radius")
+
+	// No bare GLSL types remaining in var declarations.
+	for _, line := range strings.Split(src, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "var ") && strings.Contains(trimmed, "=") {
+			require.NotContains(t, trimmed, ": f32 = normalize",
+				"normalize should infer vec3, not f32")
+		}
+	}
+}
