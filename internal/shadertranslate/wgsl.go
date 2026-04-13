@@ -425,15 +425,25 @@ func replaceWGSLTypes(s string) string {
 	return s
 }
 
-// replaceWGSLTextureCall replaces texture(sampler, uv) with textureSample(sampler, sampler_sampler, uv).
+// replaceWGSLTextureCall replaces texture(samplerName, uv) with
+// textureSampleLevel(samplerName, samplerName_sampler, uv, 0.0).
+// Uses textureSampleLevel instead of textureSample because
+// textureSample requires uniform control flow, which fails in any
+// fragment shader that has non-uniform if-branches (common in lighting).
 func replaceWGSLTextureCall(s, samplerName string) string {
 	re := reTextureCall(samplerName)
-	return re.ReplaceAllString(s, "textureSample("+samplerName+", "+samplerName+"_sampler, ")
+	return re.ReplaceAllStringFunc(s, func(match string) string {
+		// match is "texture(samplerName, uv)" — extract the UV argument.
+		inner := match[strings.Index(match, ",")+1 : len(match)-1]
+		inner = strings.TrimSpace(inner)
+		return fmt.Sprintf("textureSampleLevel(%s, %s_sampler, %s, 0.0)", samplerName, samplerName, inner)
+	})
 }
 
-// reTextureCall builds a regex for texture(samplerName, ...).
+// reTextureCall builds a regex for texture(samplerName, uv).
+// Captures the full call including the closing paren.
 func reTextureCall(samplerName string) *regexp.Regexp {
-	return regexp.MustCompile(`texture\s*\(\s*` + regexp.QuoteMeta(samplerName) + `\s*,\s*`)
+	return regexp.MustCompile(`texture\s*\(\s*` + regexp.QuoteMeta(samplerName) + `\s*,\s*[^)]+\)`)
 }
 
 // buildWGSLUniformLayout computes byte offsets for uniform fields using WGSL/std140 rules.
@@ -516,19 +526,21 @@ func emitWGSLImageHelpers(b *strings.Builder, glsl string, samplers []uniform) {
 		}
 
 		// imageSrcNAt — bounds-checked texture sample.
-		// WebGPU requires textureSample in uniform control flow, so we
-		// sample unconditionally and use select() to zero out OOB pixels.
+		// Uses textureSampleLevel (explicit LOD=0) instead of textureSample
+		// because textureSample requires uniform control flow. Shaders that
+		// have ANY non-uniform if-branch before the call site would fail
+		// validation even if the call is outside the branch.
 		fmt.Fprintf(b, "fn imageSrc%dAt(pos: vec2<f32>) -> vec4<f32> {\n", i)
 		fmt.Fprintf(b, "    let origin = uniforms.uImageSrc%dOrigin;\n", i)
 		fmt.Fprintf(b, "    let size = uniforms.uImageSrc%dSize;\n", i)
-		fmt.Fprintf(b, "    let sampled = textureSample(%s, %s_sampler, pos);\n", texName, texName)
+		fmt.Fprintf(b, "    let sampled = textureSampleLevel(%s, %s_sampler, pos, 0.0);\n", texName, texName)
 		b.WriteString("    let inBounds = pos.x >= origin.x && pos.y >= origin.y && pos.x < origin.x + size.x && pos.y < origin.y + size.y;\n")
 		b.WriteString("    return select(vec4<f32>(0.0), sampled, inBounds);\n")
 		b.WriteString("}\n\n")
 
 		// imageSrcNUnsafeAt — unchecked texture sample.
 		fmt.Fprintf(b, "fn imageSrc%dUnsafeAt(pos: vec2<f32>) -> vec4<f32> {\n", i)
-		fmt.Fprintf(b, "    return textureSample(%s, %s_sampler, pos);\n", texName, texName)
+		fmt.Fprintf(b, "    return textureSampleLevel(%s, %s_sampler, pos, 0.0);\n", texName, texName)
 		b.WriteString("}\n\n")
 
 		// imageSrcNOrigin — returns origin uniform.

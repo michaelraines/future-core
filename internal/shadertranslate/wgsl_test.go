@@ -86,7 +86,7 @@ func TestGLSLToWGSLFragment(t *testing.T) {
 	require.Contains(t, src, "var c: vec4<f32> =")
 
 	// Body: texture sampling.
-	require.Contains(t, src, "textureSample(uTexture, uTexture_sampler, in.vTexCoord)")
+	require.Contains(t, src, "textureSampleLevel(uTexture, uTexture_sampler, in.vTexCoord, 0.0)")
 
 	// Body: uniform struct access.
 	require.Contains(t, src, "uniforms.uColorBody")
@@ -118,7 +118,7 @@ func TestWGSLTypeMapping(t *testing.T) {
 func TestWGSLTextureCallReplace(t *testing.T) {
 	input := "vec4 c = texture(uTexture, vTexCoord) * vColor;"
 	result := replaceWGSLTextureCall(input, "uTexture")
-	require.Contains(t, result, "textureSample(uTexture, uTexture_sampler, vTexCoord)")
+	require.Contains(t, result, "textureSampleLevel(uTexture, uTexture_sampler, vTexCoord, 0.0)")
 }
 
 func TestWGSLUniformLayout(t *testing.T) {
@@ -298,7 +298,7 @@ void main() {
 	// The WGSL output should contain the imageSrc0At helper function
 	// using select() for uniform control flow (no if-branch around textureSample).
 	require.Contains(t, src, "fn imageSrc0At(pos: vec2<f32>) -> vec4<f32>")
-	require.Contains(t, src, "textureSample(uTexture0, uTexture0_sampler, pos)")
+	require.Contains(t, src, "textureSampleLevel(uTexture0, uTexture0_sampler, pos, 0.0)")
 	require.Contains(t, src, "select(vec4<f32>(0.0), sampled, inBounds)")
 
 	// The body should call imageSrc0At (pass-through, not translated).
@@ -428,9 +428,9 @@ func TestWGSLTextureCall(t *testing.T) {
 		want    string
 	}{
 		{"basic", "texture(uTexture, uv)", "uTexture",
-			"textureSample(uTexture, uTexture_sampler, uv)"},
+			"textureSampleLevel(uTexture, uTexture_sampler, uv, 0.0)"},
 		{"numbered", "texture(uTexture0, pos)", "uTexture0",
-			"textureSample(uTexture0, uTexture0_sampler, pos)"},
+			"textureSampleLevel(uTexture0, uTexture0_sampler, pos, 0.0)"},
 		{"no match", "texture(other, uv)", "uTexture",
 			"texture(other, uv)"},
 	}
@@ -503,8 +503,8 @@ void main() {
 	require.Contains(t, src, "var uTexture1_sampler: sampler")
 
 	// Both texture samples should be translated.
-	require.Contains(t, src, "textureSample(uTexture0, uTexture0_sampler, in.vTexCoord)")
-	require.Contains(t, src, "textureSample(uTexture1, uTexture1_sampler, in.vTexCoord)")
+	require.Contains(t, src, "textureSampleLevel(uTexture0, uTexture0_sampler, in.vTexCoord, 0.0)")
+	require.Contains(t, src, "textureSampleLevel(uTexture1, uTexture1_sampler, in.vTexCoord, 0.0)")
 }
 
 func TestWGSLImageHelpersMultipleIndices(t *testing.T) {
