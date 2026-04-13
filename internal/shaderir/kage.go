@@ -27,6 +27,7 @@ func Compile(src []byte) (*CompileResult, error) {
 		fset:          fset,
 		uniforms:      nil,
 		usesPixelUnit: false,
+		localTypes:    make(map[string]string),
 	}
 
 	// Process directives from comments.
@@ -103,6 +104,9 @@ type compiler struct {
 	fragDstPos string
 	fragSrcPos string
 	fragColor  string
+	// localTypes tracks inferred types for local variables (name → GLSL type).
+	// Populated during compilation for use by inferType.
+	localTypes map[string]string
 }
 
 func (c *compiler) validateFragmentSig(fn *ast.FuncDecl) error {
@@ -203,6 +207,11 @@ func (c *compiler) emitFragmentShader(fn *ast.FuncDecl) string {
 	b.WriteString(c.fragColor)
 	b.WriteString(" = vColor;\n")
 
+	// Register fragment parameter types for type inference.
+	c.localTypes[c.fragDstPos] = "vec4"
+	c.localTypes[c.fragSrcPos] = "vec2"
+	c.localTypes[c.fragColor] = "vec4"
+
 	// Transpile the function body.
 	c.emitBlock(&b, fn.Body, 1)
 
@@ -276,6 +285,7 @@ func (c *compiler) emitStmt(b *strings.Builder, stmt ast.Stmt, indent int) {
 				}
 				typeName := c.typeString(vs.Type)
 				for i, name := range vs.Names {
+					c.localTypes[name.Name] = typeName
 					if i < len(vs.Values) {
 						fmt.Fprintf(b, "%s%s %s = %s;\n", prefix, typeName, name.Name, c.exprString(vs.Values[i]))
 					} else {
@@ -313,9 +323,10 @@ func (c *compiler) emitAssign(b *strings.Builder, s *ast.AssignStmt, prefix stri
 		for i, lhs := range s.Lhs {
 			if i < len(s.Rhs) {
 				rhsStr := c.exprString(s.Rhs[i])
-				// Infer type from RHS. For simplicity, use auto-typed declaration.
 				typeName := c.inferType(s.Rhs[i])
-				fmt.Fprintf(b, "%s%s %s = %s;\n", prefix, typeName, c.exprString(lhs), rhsStr)
+				varName := c.exprString(lhs)
+				c.localTypes[varName] = typeName
+				fmt.Fprintf(b, "%s%s %s = %s;\n", prefix, typeName, varName, rhsStr)
 			}
 		}
 	} else {
@@ -515,6 +526,8 @@ func (c *compiler) inferType(expr ast.Expr) string {
 			return c.inferType(e.Args[0])
 		}
 		return "float"
+	case *ast.ParenExpr:
+		return c.inferType(e.X)
 	case *ast.BinaryExpr:
 		return c.inferType(e.X)
 	case *ast.UnaryExpr:
@@ -544,6 +557,19 @@ func (c *compiler) inferType(expr ast.Expr) string {
 		}
 		// Fall back to inferring from the parent expression context.
 		return "float"
+	case *ast.Ident:
+		// Check uniforms.
+		for _, u := range c.uniforms {
+			if u.Name == e.Name {
+				return u.Type.GLSLName()
+			}
+		}
+		// Check local variables.
+		if t, ok := c.localTypes[e.Name]; ok {
+			return t
+		}
+		return "float"
+
 	default:
 		return "float"
 	}

@@ -25,10 +25,25 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
-      - name: Install GLFW system library
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libglfw3-dev
+
+      - name: Install Rust toolchain (for naga WGSL validator)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: cargo-naga-${{ runner.os }}
+
+      - name: Install naga-cli
+        run: |
+          if ! command -v naga &> /dev/null; then
+            cargo install naga-cli
+          fi
 
       - name: Check formatting
         run: make fmt
@@ -76,6 +91,21 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
+
+      - name: Install Rust toolchain (for naga WGSL validator)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: cargo-naga-${{ runner.os }}
+
+      - name: Install naga-cli
+        run: |
+          if ! command -v naga &> /dev/null; then
+            cargo install naga-cli
+          fi
 
       - name: Test
         run: make TAGS=soft test
