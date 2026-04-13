@@ -492,7 +492,7 @@ func (img *Image) Clear() {
 	// ConsumePendingClear and emits LoadActionClear with transparent
 	// black — no CPU data transfer required.
 	if rend := getRenderer(); rend != nil {
-		rend.pendingClears.Request(img.textureID)
+		rend.pendingClears.RequestOnce(img.textureID)
 	}
 	// Discard any pending AA buffer flush and mark the buffer for clearing
 	// at the next AA draw. We can't use pendingClear here because its
@@ -1342,7 +1342,7 @@ func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Imag
 		// by the sprite pass's beginTargetPass on the buffer's first
 		// render pass, emitting LoadActionClear.
 		if rend := getRenderer(); rend != nil {
-			rend.pendingClears.Request(img.aaBuffer.textureID)
+			rend.pendingClears.RequestOnce(img.aaBuffer.textureID)
 		}
 	}
 	img.aaBufferBlend = reqBlend
@@ -1355,7 +1355,7 @@ func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Imag
 	if img.aaBufferNeedsClear {
 		img.aaBufferNeedsClear = false
 		if rend := getRenderer(); rend != nil {
-			rend.pendingClears.Request(img.aaBuffer.textureID)
+			rend.pendingClears.RequestOnce(img.aaBuffer.textureID)
 		}
 	}
 

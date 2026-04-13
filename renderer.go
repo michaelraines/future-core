@@ -94,12 +94,26 @@ func newPendingClearTracker() pendingClearTracker {
 
 // Request registers a clear request for the given target. Multiple
 // requests accumulate — each will be consumed by a separate
-// BeginRenderPass.
+// BeginRenderPass. Used by flushAABuffer where each flush cycle
+// needs its own independent clear.
 func (t *pendingClearTracker) Request(targetID uint32) {
 	if t.counts == nil {
 		t.counts = make(map[uint32]int)
 	}
 	t.counts[targetID]++
+}
+
+// RequestOnce ensures at least one clear is pending for the target,
+// but does not accumulate. Multiple calls are idempotent. Used by
+// Image.Clear() where the caller wants the target cleared on its
+// next render pass regardless of how many times Clear() is called.
+func (t *pendingClearTracker) RequestOnce(targetID uint32) {
+	if t.counts == nil {
+		t.counts = make(map[uint32]int)
+	}
+	if t.counts[targetID] == 0 {
+		t.counts[targetID] = 1
+	}
 }
 
 // Consume returns true and decrements the counter if the target has
