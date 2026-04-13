@@ -100,7 +100,7 @@ func withMockRenderer(t *testing.T) (dev *mockDevice, registered map[uint32]back
 			registered[id] = tex
 		},
 		registerRenderTarget: func(_ uint32, _ backend.RenderTarget) {},
-		pendingClears:        make(map[uint32]bool),
+		pendingClears: newPendingClearTracker(),
 	}
 	old := getRenderer()
 	setRenderer(rend)
@@ -1786,7 +1786,7 @@ func TestAABufferClearedOnCreation(t *testing.T) {
 	// The newly created AA buffer must have a pending clear registered
 	// so its first render pass uses LoadActionClear instead of loading
 	// undefined content.
-	require.True(t, rend.pendingClears[img.aaBuffer.textureID],
+	require.True(t, rend.pendingClears.Has(img.aaBuffer.textureID),
 		"newly allocated AA buffer must have a pending clear")
 }
 
@@ -1803,7 +1803,7 @@ func TestAABufferClearedAfterFlush(t *testing.T) {
 	bufID := img.aaBuffer.textureID
 
 	// Consume the creation clear so we can observe the post-flush clear.
-	delete(rend.pendingClears, bufID)
+	_ = rend.pendingClears.Consume(bufID)
 
 	// Trigger a flush via a public sync point (DrawImage reads src's
 	// AA buffer, which is our img).
@@ -1811,7 +1811,7 @@ func TestAABufferClearedAfterFlush(t *testing.T) {
 	dst.DrawImage(img, nil)
 
 	require.False(t, img.aaBufferDirty, "flush must clear dirty flag")
-	require.True(t, rend.pendingClears[bufID],
+	require.True(t, rend.pendingClears.Has(bufID),
 		"flushed AA buffer must have a pending clear so the next AA draw starts clean")
 }
 
@@ -1832,8 +1832,8 @@ func TestAABufferNeedsClearOnParentClear(t *testing.T) {
 	dst.DrawImage(img, nil)
 
 	// Consume any pending clears.
-	delete(rend.pendingClears, bufID)
-	delete(rend.pendingClears, img.textureID)
+	_ = rend.pendingClears.Consume(bufID)
+	_ = rend.pendingClears.Consume(img.textureID)
 
 	// Clear the parent. The AA buffer should be flagged for clearing.
 	img.Clear()
@@ -1842,7 +1842,7 @@ func TestAABufferNeedsClearOnParentClear(t *testing.T) {
 
 	// Next AA draw should register pendingClear for the AA buffer.
 	img.DrawTriangles(verts, idx, nil, &DrawTrianglesOptions{AntiAlias: true})
-	require.True(t, rend.pendingClears[bufID],
+	require.True(t, rend.pendingClears.Has(bufID),
 		"aaBufferNeedsClear must register a pending clear on next AA draw")
 	require.False(t, img.aaBufferNeedsClear, "flag must be consumed")
 }
@@ -1870,7 +1870,7 @@ func TestClearDisposedIsNoop(t *testing.T) {
 	// Clear on a disposed image must be a no-op — no pending clear
 	// should be registered and no panic should occur.
 	img.Clear()
-	require.False(t, rend.pendingClears[img.textureID])
+	require.False(t, rend.pendingClears.Has(img.textureID))
 }
 
 func TestClearWithDirtyAABufferFlushesFirst(t *testing.T) {

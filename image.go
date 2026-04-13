@@ -491,8 +491,8 @@ func (img *Image) Clear() {
 	// BeginRenderPass. The sprite pass checks this via
 	// ConsumePendingClear and emits LoadActionClear with transparent
 	// black — no CPU data transfer required.
-	if rend := getRenderer(); rend != nil && rend.pendingClears != nil {
-		rend.pendingClears[img.textureID] = true
+	if rend := getRenderer(); rend != nil {
+		rend.pendingClears.Request(img.textureID)
 	}
 	// Discard any pending AA buffer flush and mark the buffer for clearing
 	// at the next AA draw. We can't use pendingClear here because its
@@ -1341,8 +1341,8 @@ func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Imag
 		// black rather than undefined content. The pendingClear is consumed
 		// by the sprite pass's beginTargetPass on the buffer's first
 		// render pass, emitting LoadActionClear.
-		if rend := getRenderer(); rend != nil && rend.pendingClears != nil {
-			rend.pendingClears[buf.textureID] = true
+		if rend := getRenderer(); rend != nil {
+			rend.pendingClears.Request(img.aaBuffer.textureID)
 		}
 	}
 	img.aaBufferBlend = reqBlend
@@ -1354,8 +1354,8 @@ func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Imag
 	// first render pass this frame.
 	if img.aaBufferNeedsClear {
 		img.aaBufferNeedsClear = false
-		if rend := getRenderer(); rend != nil && rend.pendingClears != nil {
-			rend.pendingClears[img.aaBuffer.textureID] = true
+		if rend := getRenderer(); rend != nil {
+			rend.pendingClears.Request(img.aaBuffer.textureID)
 		}
 	}
 
@@ -1408,8 +1408,8 @@ func (img *Image) flushAABuffer() {
 	// Clear the persistent buffer after compositing so subsequent AA
 	// draws start from transparent black. Without this, the next flush
 	// would re-composite stale content that was already applied above.
-	if rend := getRenderer(); rend != nil && rend.pendingClears != nil {
-		rend.pendingClears[img.aaBuffer.textureID] = true
+	if rend := getRenderer(); rend != nil {
+		rend.pendingClears.Request(img.aaBuffer.textureID)
 	}
 }
 

@@ -29,9 +29,10 @@ type renderer struct {
 	registerShader func(id uint32, shader *Shader)
 
 	// pendingClears tracks render targets that need GPU-native clearing on
-	// their next BeginRenderPass. Set by Image.Clear(), consumed by the
-	// sprite pass's ConsumePendingClear callback.
-	pendingClears map[uint32]bool
+	// their next BeginRenderPass. Supports multiple clear requests per
+	// target within a single frame (the AA buffer is flushed and
+	// re-entered many times per frame).
+	pendingClears pendingClearTracker
 
 	// registerRenderTarget is called when a new render target is created
 	// so the engine can resolve target IDs during rendering.
@@ -74,4 +75,47 @@ func setRenderer(r *renderer) { globalRendererPtr.Store(r) }
 
 func (r *renderer) allocTextureID() uint32 {
 	return r.nextTextureID.Add(1)
+}
+
+// pendingClearTracker tracks render targets that need GPU-native clearing.
+// Each Request call increments a per-target counter; each Consume call
+// decrements and returns true while the count is positive. This supports
+// multiple clear requests per target within a single frame — the AA
+// buffer is flushed and re-entered many times per frame, and each
+// re-entry needs its own clear.
+type pendingClearTracker struct {
+	counts map[uint32]int
+}
+
+// newPendingClearTracker creates an initialized tracker.
+func newPendingClearTracker() pendingClearTracker {
+	return pendingClearTracker{counts: make(map[uint32]int)}
+}
+
+// Request registers a clear request for the given target. Multiple
+// requests accumulate — each will be consumed by a separate
+// BeginRenderPass.
+func (t *pendingClearTracker) Request(targetID uint32) {
+	if t.counts == nil {
+		t.counts = make(map[uint32]int)
+	}
+	t.counts[targetID]++
+}
+
+// Consume returns true and decrements the counter if the target has
+// pending clears. Returns false when no clears remain.
+func (t *pendingClearTracker) Consume(targetID uint32) bool {
+	if t.counts == nil || t.counts[targetID] <= 0 {
+		return false
+	}
+	t.counts[targetID]--
+	if t.counts[targetID] == 0 {
+		delete(t.counts, targetID)
+	}
+	return true
+}
+
+// Has returns true if the target has any pending clear requests.
+func (t *pendingClearTracker) Has(targetID uint32) bool {
+	return t.counts != nil && t.counts[targetID] > 0
 }

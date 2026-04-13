@@ -219,8 +219,7 @@ func (e *engine) initRenderResources() error {
 		return e.renderTargets[targetID]
 	}
 	sp.ConsumePendingClear = func(targetID uint32) bool {
-		if e.rend.pendingClears[targetID] {
-			delete(e.rend.pendingClears, targetID)
+		if e.rend.pendingClears.Consume(targetID) {
 			return true
 		}
 		return false
@@ -339,7 +338,7 @@ func (e *engine) run() error {
 		registerRenderTarget: func(id uint32, rt backend.RenderTarget) {
 			e.renderTargets[id] = rt
 		},
-		pendingClears: make(map[uint32]bool),
+		pendingClears: newPendingClearTracker(),
 	}
 	e.rend = rend
 	setRenderer(rend)
