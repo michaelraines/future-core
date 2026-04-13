@@ -208,7 +208,7 @@ func jsVertexFormat(f backend.AttributeFormat) string {
 func jsBlendState(mode backend.BlendMode) js.Value {
 	switch mode {
 	case backend.BlendSourceOver:
-		return jsBlend("src-alpha", "one-minus-src-alpha", "one", "one-minus-src-alpha")
+		return jsBlend("one", "one-minus-src-alpha", "one", "one-minus-src-alpha")
 	case backend.BlendAdditive:
 		return jsBlend("src-alpha", "one", "one", "one")
 	case backend.BlendMultiplicative:

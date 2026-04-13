@@ -273,7 +273,7 @@ func wgpuBlendState(mode backend.BlendMode) (enabled bool, state wgpu.BlendState
 		return true, wgpu.BlendState{
 			Color: wgpu.BlendComponent{
 				Operation: wgpu.BlendOperationAdd,
-				SrcFactor: wgpu.BlendFactorSrcAlpha,
+				SrcFactor: wgpu.BlendFactorOne,
 				DstFactor: wgpu.BlendFactorOneMinusSrcAlpha,
 			},
 			Alpha: wgpu.BlendComponent{

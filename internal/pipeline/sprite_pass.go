@@ -282,18 +282,19 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			sp.colorBodySet = true
 		}
 
-		// Bind texture and filter only when they differ from the previous
-		// batch, avoiding redundant Go→JS (or Go→wgpu) round-trips.
+		// Set filter BEFORE texture: the WebGPU encoder reads the current
+		// filter when creating the texture bind group in SetTexture. If
+		// filter is set after, the bind group uses the stale filter value.
+		if b.Filter != sp.lastFilter {
+			enc.SetTextureFilter(0, b.Filter)
+			sp.lastFilter = b.Filter
+		}
 		if sp.ResolveTexture != nil && b.TextureID != sp.lastTextureID {
 			tex := sp.ResolveTexture(b.TextureID)
 			if tex != nil {
 				enc.SetTexture(tex, 0)
 			}
 			sp.lastTextureID = b.TextureID
-		}
-		if b.Filter != sp.lastFilter {
-			enc.SetTextureFilter(0, b.Filter)
-			sp.lastFilter = b.Filter
 		}
 
 		// Draw using the pre-computed index region.
