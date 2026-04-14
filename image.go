@@ -1179,20 +1179,72 @@ func colorMatrixToUniforms(cm fmath.ColorMatrix) (body [16]float32, translation 
 	return body, translation
 }
 
-// blendToBackend maps a public Blend to a backend BlendMode.
-// For now, we map preset Blend values to the backend's BlendMode enum.
-// A zero-valued Blend maps to source-over (standard alpha blending).
+// blendToBackend converts the public Blend struct to the internal
+// backend.BlendMode struct by copying each factor and operation directly.
+// A zero-valued Blend produces a BlendMode that has Enabled=true with
+// src-over semantics, matching Ebitengine's behaviour where an uninitialised
+// Blend value blends as source-over.
 func blendToBackend(b Blend) backend.BlendMode {
-	switch b {
-	case BlendLighter:
-		return backend.BlendAdditive
-	case BlendMultiply:
-		return backend.BlendMultiplicative
-	case BlendSourceOver:
+	if (b == Blend{}) {
 		return backend.BlendSourceOver
+	}
+	return backend.BlendMode{
+		Enabled:        true,
+		SrcFactorRGB:   blendFactorToBackend(b.BlendFactorSourceRGB),
+		SrcFactorAlpha: blendFactorToBackend(b.BlendFactorSourceAlpha),
+		DstFactorRGB:   blendFactorToBackend(b.BlendFactorDestinationRGB),
+		DstFactorAlpha: blendFactorToBackend(b.BlendFactorDestinationAlpha),
+		OpRGB:          blendOperationToBackend(b.BlendOperationRGB),
+		OpAlpha:        blendOperationToBackend(b.BlendOperationAlpha),
+	}
+}
+
+// blendFactorToBackend maps the public BlendFactor enum (matching Ebitengine)
+// to the backend equivalent. The two enums intentionally have different
+// integer orderings so that a direct cast is incorrect.
+func blendFactorToBackend(f BlendFactor) backend.BlendFactor {
+	switch f {
+	case BlendFactorZero:
+		return backend.BlendFactorZero
+	case BlendFactorOne:
+		return backend.BlendFactorOne
+	case BlendFactorSourceAlpha:
+		return backend.BlendFactorSrcAlpha
+	case BlendFactorOneMinusSourceAlpha:
+		return backend.BlendFactorOneMinusSrcAlpha
+	case BlendFactorDestinationAlpha:
+		return backend.BlendFactorDstAlpha
+	case BlendFactorOneMinusDestinationAlpha:
+		return backend.BlendFactorOneMinusDstAlpha
+	case BlendFactorSourceColor:
+		return backend.BlendFactorSrcColor
+	case BlendFactorDestinationColor:
+		return backend.BlendFactorDstColor
 	default:
-		// Zero-valued Blend or unrecognized custom blend -> source-over.
-		return backend.BlendSourceOver
+		// Unknown factor (e.g. zero-value of a future extension) →
+		// treat as opaque source (safe default that won't silently
+		// darken or brighten the scene).
+		return backend.BlendFactorOne
+	}
+}
+
+// blendOperationToBackend maps the public BlendOperation enum to the backend
+// equivalent. The two enums currently share the same ordering but this
+// conversion makes the dependence explicit.
+func blendOperationToBackend(op BlendOperation) backend.BlendOperation {
+	switch op {
+	case BlendOperationAdd:
+		return backend.BlendOpAdd
+	case BlendOperationSubtract:
+		return backend.BlendOpSubtract
+	case BlendOperationReverseSubtract:
+		return backend.BlendOpReverseSubtract
+	case BlendOperationMin:
+		return backend.BlendOpMin
+	case BlendOperationMax:
+		return backend.BlendOpMax
+	default:
+		return backend.BlendOpAdd
 	}
 }
 

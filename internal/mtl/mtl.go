@@ -727,18 +727,28 @@ func initPipelineSelectors() {
 }
 
 // MTLBlendFactor constants.
+// https://developer.apple.com/documentation/metal/mtlblendfactor
 const (
-	BlendFactorZero                = 0
-	BlendFactorOne                 = 1
-	BlendFactorSourceAlpha         = 4
-	BlendFactorOneMinusSourceAlpha = 5
-	BlendFactorDestinationColor    = 8
-	BlendFactorDestinationAlpha    = 10
+	BlendFactorZero                     = 0
+	BlendFactorOne                      = 1
+	BlendFactorSourceColor              = 2
+	BlendFactorOneMinusSourceColor      = 3
+	BlendFactorSourceAlpha              = 4
+	BlendFactorOneMinusSourceAlpha      = 5
+	BlendFactorDestinationColor         = 8
+	BlendFactorOneMinusDestinationColor = 9
+	BlendFactorDestinationAlpha         = 10
+	BlendFactorOneMinusDestinationAlpha = 11
 )
 
 // MTLBlendOperation constants.
+// https://developer.apple.com/documentation/metal/mtlblendoperation
 const (
-	BlendOperationAdd = 0
+	BlendOperationAdd             = 0
+	BlendOperationSubtract        = 1
+	BlendOperationReverseSubtract = 2
+	BlendOperationMin             = 3
+	BlendOperationMax             = 4
 )
 
 // MTLCullMode constants.
@@ -786,7 +796,7 @@ type VertexAttr struct {
 // CreateRenderPipelineState creates a render pipeline state from vertex/fragment functions.
 // If vertexAttrs is non-empty, a vertex descriptor is configured with the given
 // attributes at buffer index 0 with the given stride.
-func CreateRenderPipelineState(dev Device, vertexFn, fragmentFn Function, pixelFormat int, blendEnabled bool, srcRGB, dstRGB, srcAlpha, dstAlpha int, vertexAttrs []VertexAttr, vertexStride int) (RenderPipelineState, error) {
+func CreateRenderPipelineState(dev Device, vertexFn, fragmentFn Function, pixelFormat int, blendEnabled bool, srcRGB, dstRGB, srcAlpha, dstAlpha, opRGB, opAlpha int, vertexAttrs []VertexAttr, vertexStride int) (RenderPipelineState, error) {
 	initPipelineSelectors()
 
 	// Create MTLRenderPipelineDescriptor.
@@ -830,8 +840,8 @@ func CreateRenderPipelineState(dev Device, vertexFn, fragmentFn Function, pixelF
 		msgSend(ca0, selSetDestinationRGBBlendFactor, uintptr(dstRGB))
 		msgSend(ca0, selSetSourceAlphaBlendFactor, uintptr(srcAlpha))
 		msgSend(ca0, selSetDestinationAlphaBlendFactor, uintptr(dstAlpha))
-		msgSend(ca0, selSetRGBBlendOperation, uintptr(BlendOperationAdd))
-		msgSend(ca0, selSetAlphaBlendOperation, uintptr(BlendOperationAdd))
+		msgSend(ca0, selSetRGBBlendOperation, uintptr(opRGB))
+		msgSend(ca0, selSetAlphaBlendOperation, uintptr(opAlpha))
 	}
 
 	// Create pipeline state.

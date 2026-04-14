@@ -75,11 +75,16 @@ func uniformSize(glslType string) int {
 	case "vec2":
 		return 8
 	case "vec3":
-		// WGSL std140: vec3 is 12 bytes of data but occupies 16 bytes
-		// (4 bytes trailing padding to next 16-byte boundary). We return
-		// 12 here; the alignment logic in buildWGSLUniformLayout handles
-		// the 16-byte alignment requirement.
-		return 12
+		// WGSL std140 / MSL: vec3 is 12 bytes of data but occupies
+		// 16 bytes (4 bytes trailing padding so the following field
+		// starts on a 16-byte boundary). Returning 16 here keeps the
+		// CPU-side packing offsets in sync with how the shader
+		// compiler lays out the struct; without the trailing pad,
+		// every field AFTER a vec3 would be read from the wrong
+		// offset (seen via a black lighting demo: `Intensity` and
+		// `Radius` landed at offsets 4 bytes before what the GPU
+		// expected, so the shader read 0.0 for both).
+		return 16
 	case "vec4":
 		return 16
 	case "mat3":

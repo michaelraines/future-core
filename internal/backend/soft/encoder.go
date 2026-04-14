@@ -375,21 +375,132 @@ func (e *Encoder) textureSampler() func(u, v float32) (float32, float32, float32
 }
 
 // resolveBlendFunc returns the blend function for the current pipeline blend mode.
+// Preset modes map to hand-tuned functions for clarity; any other factor/op
+// combination (e.g. alpha-masking or shadow-modulated additive blends used
+// by the lighting system) falls through to a generic factor-based blender
+// that honours the pipeline descriptor's BlendMode struct exactly.
 func (e *Encoder) resolveBlendFunc() blendFunc {
 	if e.boundPipeline == nil {
 		return blendSourceOver
 	}
-	switch e.boundPipeline.desc.BlendMode {
+	mode := e.boundPipeline.desc.BlendMode
+	switch mode {
 	case backend.BlendNone:
 		return blendNone
+	case backend.BlendSourceOver, backend.BlendPremultiplied:
+		return blendSourceOver
 	case backend.BlendAdditive:
 		return blendAdditive
 	case backend.BlendMultiplicative:
 		return blendMultiplicative
-	case backend.BlendPremultiplied:
-		return blendPremultiplied
+	}
+	if !mode.Enabled {
+		return blendNone
+	}
+	return makeGenericBlender(mode)
+}
+
+// makeGenericBlender returns a blendFunc that evaluates
+//
+//	out = op(src * srcFactor, dst * dstFactor)
+//
+// per channel, using the factors and operations from mode. This is the
+// correctness path for arbitrary blend modes (e.g. lighting's
+// blendAddModAlpha) and is why the software rasterizer can act as the
+// reference implementation for every GPU backend.
+func makeGenericBlender(mode backend.BlendMode) blendFunc {
+	return func(sr, sg, sb, sa, dr, dg, db, da float32) (or, og, ob, oa float32) {
+		srcFR, srcFG, srcFB := blendFactorRGB(mode.SrcFactorRGB, sr, sg, sb, sa, dr, dg, db, da)
+		dstFR, dstFG, dstFB := blendFactorRGB(mode.DstFactorRGB, sr, sg, sb, sa, dr, dg, db, da)
+		srcFA := blendFactorAlpha(mode.SrcFactorAlpha, sa, da)
+		dstFA := blendFactorAlpha(mode.DstFactorAlpha, sa, da)
+
+		or = combineChannel(mode.OpRGB, sr*srcFR, dr*dstFR, sr, dr)
+		og = combineChannel(mode.OpRGB, sg*srcFG, dg*dstFG, sg, dg)
+		ob = combineChannel(mode.OpRGB, sb*srcFB, db*dstFB, sb, db)
+		oa = combineChannel(mode.OpAlpha, sa*srcFA, da*dstFA, sa, da)
+
+		return clampf(or), clampf(og), clampf(ob), clampf(oa)
+	}
+}
+
+// blendFactorRGB returns the per-channel multiplier for an RGB factor. The
+// last two unnamed return values correspond to channels r, g, b; when a
+// factor is a scalar (like src-alpha) all three channels receive the same
+// multiplier.
+func blendFactorRGB(f backend.BlendFactor, sr, sg, sb, sa, dr, dg, db, da float32) (fr, fg, fb float32) {
+	switch f {
+	case backend.BlendFactorZero:
+		return 0, 0, 0
+	case backend.BlendFactorOne:
+		return 1, 1, 1
+	case backend.BlendFactorSrcAlpha:
+		return sa, sa, sa
+	case backend.BlendFactorOneMinusSrcAlpha:
+		return 1 - sa, 1 - sa, 1 - sa
+	case backend.BlendFactorDstAlpha:
+		return da, da, da
+	case backend.BlendFactorOneMinusDstAlpha:
+		return 1 - da, 1 - da, 1 - da
+	case backend.BlendFactorSrcColor:
+		return sr, sg, sb
+	case backend.BlendFactorOneMinusSrcColor:
+		return 1 - sr, 1 - sg, 1 - sb
+	case backend.BlendFactorDstColor:
+		return dr, dg, db
+	case backend.BlendFactorOneMinusDstColor:
+		return 1 - dr, 1 - dg, 1 - db
 	default:
-		return blendSourceOver
+		return 1, 1, 1
+	}
+}
+
+// blendFactorAlpha returns the alpha-channel multiplier for a factor.
+// Color-based factors degrade to their alpha equivalents here because the
+// alpha channel has no separate RGB components to sample.
+func blendFactorAlpha(f backend.BlendFactor, sa, da float32) float32 {
+	switch f {
+	case backend.BlendFactorZero:
+		return 0
+	case backend.BlendFactorOne:
+		return 1
+	case backend.BlendFactorSrcAlpha, backend.BlendFactorSrcColor:
+		return sa
+	case backend.BlendFactorOneMinusSrcAlpha, backend.BlendFactorOneMinusSrcColor:
+		return 1 - sa
+	case backend.BlendFactorDstAlpha, backend.BlendFactorDstColor:
+		return da
+	case backend.BlendFactorOneMinusDstAlpha, backend.BlendFactorOneMinusDstColor:
+		return 1 - da
+	default:
+		return 1
+	}
+}
+
+// combineChannel applies a BlendOperation to already-weighted source and
+// destination values. For min/max the weighted values are ignored per the
+// GPU spec — factors are inputs only to Add/Subtract/ReverseSubtract. The
+// raw (unweighted) values are passed in via rawS/rawD for Min/Max.
+func combineChannel(op backend.BlendOperation, weightedS, weightedD, rawS, rawD float32) float32 {
+	switch op {
+	case backend.BlendOpAdd:
+		return weightedS + weightedD
+	case backend.BlendOpSubtract:
+		return weightedS - weightedD
+	case backend.BlendOpReverseSubtract:
+		return weightedD - weightedS
+	case backend.BlendOpMin:
+		if rawS < rawD {
+			return rawS
+		}
+		return rawD
+	case backend.BlendOpMax:
+		if rawS > rawD {
+			return rawS
+		}
+		return rawD
+	default:
+		return weightedS + weightedD
 	}
 }
 

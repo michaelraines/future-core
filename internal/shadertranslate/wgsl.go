@@ -543,20 +543,28 @@ func emitWGSLImageHelpers(b *strings.Builder, glsl string, samplers []uniform) {
 		// have ANY non-uniform if-branch before the call site would fail
 		// validation even if the call is outside the branch.
 		//
+		// Kage's `kage:unit pixels` directive (the common case for 2D effects
+		// like lighting) passes pixel coordinates to imageSrcNAt. WGSL
+		// textureSampleLevel expects normalized UVs, so we divide by the
+		// texture dimensions before sampling.
+		//
 		// 2D ASSUMPTION: LOD 0.0 is correct for non-mipmapped 2D textures.
 		// For 3D, mipmapped textures need automatic LOD (textureSample) or
 		// explicit LOD computation. See FUTURE_3D.md.
 		fmt.Fprintf(b, "fn imageSrc%dAt(pos: vec2<f32>) -> vec4<f32> {\n", i)
 		fmt.Fprintf(b, "    let origin = uniforms.uImageSrc%dOrigin;\n", i)
 		fmt.Fprintf(b, "    let size = uniforms.uImageSrc%dSize;\n", i)
-		fmt.Fprintf(b, "    let sampled = textureSampleLevel(%s, %s_sampler, pos, 0.0);\n", texName, texName)
+		fmt.Fprintf(b, "    let texDim = vec2<f32>(textureDimensions(%s));\n", texName)
+		fmt.Fprintf(b, "    let uv = pos / texDim;\n")
+		fmt.Fprintf(b, "    let sampled = textureSampleLevel(%s, %s_sampler, uv, 0.0);\n", texName, texName)
 		b.WriteString("    let inBounds = pos.x >= origin.x && pos.y >= origin.y && pos.x < origin.x + size.x && pos.y < origin.y + size.y;\n")
 		b.WriteString("    return select(vec4<f32>(0.0), sampled, inBounds);\n")
 		b.WriteString("}\n\n")
 
 		// imageSrcNUnsafeAt — unchecked texture sample.
 		fmt.Fprintf(b, "fn imageSrc%dUnsafeAt(pos: vec2<f32>) -> vec4<f32> {\n", i)
-		fmt.Fprintf(b, "    return textureSampleLevel(%s, %s_sampler, pos, 0.0);\n", texName, texName)
+		fmt.Fprintf(b, "    let texDim = vec2<f32>(textureDimensions(%s));\n", texName)
+		fmt.Fprintf(b, "    return textureSampleLevel(%s, %s_sampler, pos / texDim, 0.0);\n", texName, texName)
 		b.WriteString("}\n\n")
 
 		// imageSrcNOrigin — returns origin uniform.

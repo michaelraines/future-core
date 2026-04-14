@@ -216,36 +216,76 @@ func jsVertexFormat(f backend.AttributeFormat) string {
 	}
 }
 
+// jsBlendState builds a WebGPU GPUBlendState object from the backend
+// BlendMode struct. Returns js.Undefined() when blending is disabled so
+// that the pipeline target descriptor omits the blend key (required by
+// the WebGPU spec when Enabled=false).
 func jsBlendState(mode backend.BlendMode) js.Value {
-	switch mode {
-	case backend.BlendSourceOver:
-		return jsBlend("one", "one-minus-src-alpha", "one", "one-minus-src-alpha")
-	case backend.BlendAdditive:
-		return jsBlend("src-alpha", "one", "one", "one")
-	case backend.BlendMultiplicative:
-		return jsBlend("dst", "zero", "dst-alpha", "zero")
-	case backend.BlendPremultiplied:
-		return jsBlend("one", "one-minus-src-alpha", "one", "one-minus-src-alpha")
-	default:
+	if !mode.Enabled {
 		return js.Undefined()
 	}
-}
-
-func jsBlend(colorSrc, colorDst, alphaSrc, alphaDst string) js.Value {
 	color := js.Global().Get("Object").New()
-	color.Set("operation", "add")
-	color.Set("srcFactor", colorSrc)
-	color.Set("dstFactor", colorDst)
+	color.Set("operation", jsBlendOp(mode.OpRGB))
+	color.Set("srcFactor", jsBlendFactor(mode.SrcFactorRGB))
+	color.Set("dstFactor", jsBlendFactor(mode.DstFactorRGB))
 
 	alpha := js.Global().Get("Object").New()
-	alpha.Set("operation", "add")
-	alpha.Set("srcFactor", alphaSrc)
-	alpha.Set("dstFactor", alphaDst)
+	alpha.Set("operation", jsBlendOp(mode.OpAlpha))
+	alpha.Set("srcFactor", jsBlendFactor(mode.SrcFactorAlpha))
+	alpha.Set("dstFactor", jsBlendFactor(mode.DstFactorAlpha))
 
 	blend := js.Global().Get("Object").New()
 	blend.Set("color", color)
 	blend.Set("alpha", alpha)
 	return blend
+}
+
+// jsBlendFactor maps a backend BlendFactor to the WebGPU string value.
+// https://www.w3.org/TR/webgpu/#enumdef-gpublendfactor
+func jsBlendFactor(f backend.BlendFactor) string {
+	switch f {
+	case backend.BlendFactorZero:
+		return "zero"
+	case backend.BlendFactorOne:
+		return "one"
+	case backend.BlendFactorSrcAlpha:
+		return "src-alpha"
+	case backend.BlendFactorOneMinusSrcAlpha:
+		return "one-minus-src-alpha"
+	case backend.BlendFactorDstAlpha:
+		return "dst-alpha"
+	case backend.BlendFactorOneMinusDstAlpha:
+		return "one-minus-dst-alpha"
+	case backend.BlendFactorSrcColor:
+		return "src"
+	case backend.BlendFactorOneMinusSrcColor:
+		return "one-minus-src"
+	case backend.BlendFactorDstColor:
+		return "dst"
+	case backend.BlendFactorOneMinusDstColor:
+		return "one-minus-dst"
+	default:
+		return "one"
+	}
+}
+
+// jsBlendOp maps a backend BlendOperation to the WebGPU string value.
+// https://www.w3.org/TR/webgpu/#enumdef-gpublendoperation
+func jsBlendOp(op backend.BlendOperation) string {
+	switch op {
+	case backend.BlendOpAdd:
+		return "add"
+	case backend.BlendOpSubtract:
+		return "subtract"
+	case backend.BlendOpReverseSubtract:
+		return "reverse-subtract"
+	case backend.BlendOpMin:
+		return "min"
+	case backend.BlendOpMax:
+		return "max"
+	default:
+		return "add"
+	}
 }
 
 func jsTopology(p backend.PrimitiveType) string {

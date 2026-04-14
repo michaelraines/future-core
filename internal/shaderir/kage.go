@@ -152,7 +152,13 @@ func (c *compiler) emitVertexShader() string {
 	b.WriteString("    vTexCoord = aTexCoord;\n")
 	b.WriteString("    vColor = aColor;\n")
 	b.WriteString("    gl_Position = uProjection * vec4(aPosition, 0.0, 1.0);\n")
-	b.WriteString("    vDstPos = gl_Position;\n")
+	// Kage's `dstPos` fragment input is documented to be the destination
+	// pixel coordinates (matching the `kage:unit pixels` directive). Pass
+	// through the raw input position — NOT gl_Position, which is already
+	// in clip space and would make light shaders' pixel-space distance
+	// comparisons (e.g. `distance(dstPos.xy, uniforms.Center)` where
+	// Center is in pixels) return huge values, triggering early returns.
+	b.WriteString("    vDstPos = vec4(aPosition, 0.0, 1.0);\n")
 	b.WriteString("}\n")
 	return b.String()
 }
@@ -529,7 +535,9 @@ func (c *compiler) inferType(expr ast.Expr) string {
 	case *ast.ParenExpr:
 		return c.inferType(e.X)
 	case *ast.BinaryExpr:
-		return c.inferType(e.X)
+		// Scalar-vector broadcasting: `float - vec3` yields vec3.
+		// Matrix-vector / matrix-matrix multiplies follow GLSL rules.
+		return widenBinaryType(c.inferType(e.X), c.inferType(e.Y), e.Op.String())
 	case *ast.UnaryExpr:
 		return c.inferType(e.X)
 	case *ast.SelectorExpr:
@@ -573,6 +581,32 @@ func (c *compiler) inferType(expr ast.Expr) string {
 	default:
 		return "float"
 	}
+}
+
+// widenBinaryType returns the GLSL type of a binary operation on two operands.
+// GLSL rules: scalar-vector broadcasts to the vector; matrix*vector yields
+// the vector; matrix*matrix yields the matrix; matrix*scalar yields the
+// matrix. Same-category same-size operands preserve their type.
+func widenBinaryType(a, b, op string) string {
+	isScalar := func(t string) bool { return t == "float" || t == "int" || t == "bool" }
+	isVec := func(t string) bool { return strings.HasPrefix(t, "vec") }
+	isMat := func(t string) bool { return strings.HasPrefix(t, "mat") }
+
+	if op == "*" {
+		switch {
+		case isMat(a) && isVec(b):
+			return b
+		case isVec(a) && isMat(b):
+			return a
+		}
+	}
+	switch {
+	case isScalar(a) && (isVec(b) || isMat(b)):
+		return b
+	case (isVec(a) || isMat(a)) && isScalar(b):
+		return a
+	}
+	return a
 }
 
 // isSwizzle returns true if s consists only of swizzle characters (xyzwrgba).

@@ -58,30 +58,67 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 }
 
 // applyBlendMode sets WebGL2 blend state from a backend blend mode.
+// Honours arbitrary factor/operation combinations via
+// blendFuncSeparate + blendEquationSeparate.
 func (e *Encoder) applyBlendMode(mode backend.BlendMode) {
-	switch mode {
-	case backend.BlendSourceOver:
-		e.gl.Call("enable", e.gl.Get("BLEND").Int())
-		e.gl.Call("blendFunc",
-			e.gl.Get("SRC_ALPHA").Int(),
-			e.gl.Get("ONE_MINUS_SRC_ALPHA").Int())
-	case backend.BlendAdditive:
-		e.gl.Call("enable", e.gl.Get("BLEND").Int())
-		e.gl.Call("blendFunc",
-			e.gl.Get("SRC_ALPHA").Int(),
-			e.gl.Get("ONE").Int())
-	case backend.BlendMultiplicative:
-		e.gl.Call("enable", e.gl.Get("BLEND").Int())
-		e.gl.Call("blendFunc",
-			e.gl.Get("DST_COLOR").Int(),
-			e.gl.Get("ZERO").Int())
-	case backend.BlendPremultiplied:
-		e.gl.Call("enable", e.gl.Get("BLEND").Int())
-		e.gl.Call("blendFunc",
-			e.gl.Get("ONE").Int(),
-			e.gl.Get("ONE_MINUS_SRC_ALPHA").Int())
-	default:
+	if !mode.Enabled {
 		e.gl.Call("disable", e.gl.Get("BLEND").Int())
+		return
+	}
+	e.gl.Call("enable", e.gl.Get("BLEND").Int())
+	e.gl.Call("blendFuncSeparate",
+		glBlendFactor(e.gl, mode.SrcFactorRGB),
+		glBlendFactor(e.gl, mode.DstFactorRGB),
+		glBlendFactor(e.gl, mode.SrcFactorAlpha),
+		glBlendFactor(e.gl, mode.DstFactorAlpha))
+	e.gl.Call("blendEquationSeparate",
+		glBlendOp(e.gl, mode.OpRGB),
+		glBlendOp(e.gl, mode.OpAlpha))
+}
+
+// glBlendFactor returns the WebGL2 constant for a backend BlendFactor.
+func glBlendFactor(gl js.Value, f backend.BlendFactor) int {
+	switch f {
+	case backend.BlendFactorZero:
+		return gl.Get("ZERO").Int()
+	case backend.BlendFactorOne:
+		return gl.Get("ONE").Int()
+	case backend.BlendFactorSrcAlpha:
+		return gl.Get("SRC_ALPHA").Int()
+	case backend.BlendFactorOneMinusSrcAlpha:
+		return gl.Get("ONE_MINUS_SRC_ALPHA").Int()
+	case backend.BlendFactorDstAlpha:
+		return gl.Get("DST_ALPHA").Int()
+	case backend.BlendFactorOneMinusDstAlpha:
+		return gl.Get("ONE_MINUS_DST_ALPHA").Int()
+	case backend.BlendFactorSrcColor:
+		return gl.Get("SRC_COLOR").Int()
+	case backend.BlendFactorOneMinusSrcColor:
+		return gl.Get("ONE_MINUS_SRC_COLOR").Int()
+	case backend.BlendFactorDstColor:
+		return gl.Get("DST_COLOR").Int()
+	case backend.BlendFactorOneMinusDstColor:
+		return gl.Get("ONE_MINUS_DST_COLOR").Int()
+	default:
+		return gl.Get("ONE").Int()
+	}
+}
+
+// glBlendOp returns the WebGL2 constant for a backend BlendOperation.
+func glBlendOp(gl js.Value, op backend.BlendOperation) int {
+	switch op {
+	case backend.BlendOpAdd:
+		return gl.Get("FUNC_ADD").Int()
+	case backend.BlendOpSubtract:
+		return gl.Get("FUNC_SUBTRACT").Int()
+	case backend.BlendOpReverseSubtract:
+		return gl.Get("FUNC_REVERSE_SUBTRACT").Int()
+	case backend.BlendOpMin:
+		return gl.Get("MIN").Int()
+	case backend.BlendOpMax:
+		return gl.Get("MAX").Int()
+	default:
+		return gl.Get("FUNC_ADD").Int()
 	}
 }
 

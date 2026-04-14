@@ -298,7 +298,10 @@ void main() {
 	// The WGSL output should contain the imageSrc0At helper function
 	// using select() for uniform control flow (no if-branch around textureSample).
 	require.Contains(t, src, "fn imageSrc0At(pos: vec2<f32>) -> vec4<f32>")
-	require.Contains(t, src, "textureSampleLevel(uTexture0, uTexture0_sampler, pos, 0.0)")
+	// pos is in pixel coords (Kage `kage:unit pixels`); helper divides
+	// by textureDimensions before passing to textureSampleLevel.
+	require.Contains(t, src, "textureSampleLevel(uTexture0, uTexture0_sampler, uv, 0.0)")
+	require.Contains(t, src, "textureDimensions(uTexture0)")
 	require.Contains(t, src, "select(vec4<f32>(0.0), sampled, inBounds)")
 
 	// The body should call imageSrc0At (pass-through, not translated).

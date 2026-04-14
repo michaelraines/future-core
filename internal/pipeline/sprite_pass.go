@@ -156,7 +156,7 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		tracef("=== frame %d: %d batches ===\n", n, len(batches))
 		for i := range batches {
 			b := &batches[i]
-			tracef("  batch[%d] target=%d texture=%d shader=%d filter=%d blend=%d verts=%d indices=%d\n",
+			tracef("  batch[%d] target=%d texture=%d shader=%d filter=%d blend=%v verts=%d indices=%d\n",
 				i, b.TargetID, b.TextureID, b.ShaderID, b.Filter, b.BlendMode,
 				len(b.Vertices), len(b.Indices))
 		}

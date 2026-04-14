@@ -266,63 +266,71 @@ func boolToUint32(b bool) uint32 {
 	return 0
 }
 
-// wgpuBlendState returns blend configuration for a backend blend mode.
+// wgpuBlendState builds a wgpu-native BlendState from the backend
+// BlendMode struct. Honours arbitrary factor/operation combinations so
+// that custom shader blends (e.g. lighting's shadow-modulated additive
+// blend) reach the GPU unmodified.
 func wgpuBlendState(mode backend.BlendMode) (enabled bool, state wgpu.BlendState) {
-	switch mode {
-	case backend.BlendSourceOver:
-		return true, wgpu.BlendState{
-			Color: wgpu.BlendComponent{
-				Operation: wgpu.BlendOperationAdd,
-				SrcFactor: wgpu.BlendFactorOne,
-				DstFactor: wgpu.BlendFactorOneMinusSrcAlpha,
-			},
-			Alpha: wgpu.BlendComponent{
-				Operation: wgpu.BlendOperationAdd,
-				SrcFactor: wgpu.BlendFactorOne,
-				DstFactor: wgpu.BlendFactorOneMinusSrcAlpha,
-			},
-		}
-	case backend.BlendAdditive:
-		return true, wgpu.BlendState{
-			Color: wgpu.BlendComponent{
-				Operation: wgpu.BlendOperationAdd,
-				SrcFactor: wgpu.BlendFactorSrcAlpha,
-				DstFactor: wgpu.BlendFactorOne,
-			},
-			Alpha: wgpu.BlendComponent{
-				Operation: wgpu.BlendOperationAdd,
-				SrcFactor: wgpu.BlendFactorOne,
-				DstFactor: wgpu.BlendFactorOne,
-			},
-		}
-	case backend.BlendMultiplicative:
-		return true, wgpu.BlendState{
-			Color: wgpu.BlendComponent{
-				Operation: wgpu.BlendOperationAdd,
-				SrcFactor: wgpu.BlendFactorDst,
-				DstFactor: wgpu.BlendFactorZero,
-			},
-			Alpha: wgpu.BlendComponent{
-				Operation: wgpu.BlendOperationAdd,
-				SrcFactor: wgpu.BlendFactorDstAlpha,
-				DstFactor: wgpu.BlendFactorZero,
-			},
-		}
-	case backend.BlendPremultiplied:
-		return true, wgpu.BlendState{
-			Color: wgpu.BlendComponent{
-				Operation: wgpu.BlendOperationAdd,
-				SrcFactor: wgpu.BlendFactorOne,
-				DstFactor: wgpu.BlendFactorOneMinusSrcAlpha,
-			},
-			Alpha: wgpu.BlendComponent{
-				Operation: wgpu.BlendOperationAdd,
-				SrcFactor: wgpu.BlendFactorOne,
-				DstFactor: wgpu.BlendFactorOneMinusSrcAlpha,
-			},
-		}
-	default:
+	if !mode.Enabled {
 		return false, wgpu.BlendState{}
+	}
+	return true, wgpu.BlendState{
+		Color: wgpu.BlendComponent{
+			Operation: wgpuBlendOp(mode.OpRGB),
+			SrcFactor: wgpuBlendFactor(mode.SrcFactorRGB),
+			DstFactor: wgpuBlendFactor(mode.DstFactorRGB),
+		},
+		Alpha: wgpu.BlendComponent{
+			Operation: wgpuBlendOp(mode.OpAlpha),
+			SrcFactor: wgpuBlendFactor(mode.SrcFactorAlpha),
+			DstFactor: wgpuBlendFactor(mode.DstFactorAlpha),
+		},
+	}
+}
+
+// wgpuBlendFactor maps a backend BlendFactor to the wgpu-native enum.
+func wgpuBlendFactor(f backend.BlendFactor) wgpu.BlendFactor {
+	switch f {
+	case backend.BlendFactorZero:
+		return wgpu.BlendFactorZero
+	case backend.BlendFactorOne:
+		return wgpu.BlendFactorOne
+	case backend.BlendFactorSrcAlpha:
+		return wgpu.BlendFactorSrcAlpha
+	case backend.BlendFactorOneMinusSrcAlpha:
+		return wgpu.BlendFactorOneMinusSrcAlpha
+	case backend.BlendFactorDstAlpha:
+		return wgpu.BlendFactorDstAlpha
+	case backend.BlendFactorOneMinusDstAlpha:
+		return wgpu.BlendFactorOneMinusDstAlpha
+	case backend.BlendFactorSrcColor:
+		return wgpu.BlendFactorSrc
+	case backend.BlendFactorOneMinusSrcColor:
+		return wgpu.BlendFactorOneMinusSrc
+	case backend.BlendFactorDstColor:
+		return wgpu.BlendFactorDst
+	case backend.BlendFactorOneMinusDstColor:
+		return wgpu.BlendFactorOneMinusDst
+	default:
+		return wgpu.BlendFactorOne
+	}
+}
+
+// wgpuBlendOp maps a backend BlendOperation to the wgpu-native enum.
+func wgpuBlendOp(op backend.BlendOperation) wgpu.BlendOperation {
+	switch op {
+	case backend.BlendOpAdd:
+		return wgpu.BlendOperationAdd
+	case backend.BlendOpSubtract:
+		return wgpu.BlendOperationSubtract
+	case backend.BlendOpReverseSubtract:
+		return wgpu.BlendOperationReverseSubtract
+	case backend.BlendOpMin:
+		return wgpu.BlendOperationMin
+	case backend.BlendOpMax:
+		return wgpu.BlendOperationMax
+	default:
+		return wgpu.BlendOperationAdd
 	}
 }
 

@@ -429,6 +429,32 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
 	require.Contains(t, result.FragmentShader, "x--")
 }
 
+// TestCompileScalarVectorBroadcast verifies that `scalar op vec` (and
+// similar mixed-type binary operations) infer the vector type for the
+// short variable declaration. Previously `inverted := 1.0 - rgb` declared
+// `inverted` as float, causing a WGSL type mismatch downstream.
+func TestCompileScalarVectorBroadcast(t *testing.T) {
+	src := []byte(`
+//go:build ignore
+
+package main
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	rgb := color.rgb / color.a
+	inverted := 1.0 - rgb
+	scaled := rgb * 2.0
+	sum := 1.0 + color.rgb
+	return vec4(inverted + scaled + sum, color.a)
+}
+`)
+	result, err := Compile(src)
+	require.NoError(t, err)
+	// All three should be declared as vec3, not float.
+	require.Contains(t, result.FragmentShader, "vec3 inverted")
+	require.Contains(t, result.FragmentShader, "vec3 scaled")
+	require.Contains(t, result.FragmentShader, "vec3 sum")
+}
+
 func TestCompileAssignOps(t *testing.T) {
 	src := []byte(`
 //go:build ignore

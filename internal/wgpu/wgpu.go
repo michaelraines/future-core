@@ -120,7 +120,11 @@ const (
 type BlendOperation uint32
 
 const (
-	BlendOperationAdd BlendOperation = 1
+	BlendOperationAdd             BlendOperation = 1
+	BlendOperationSubtract        BlendOperation = 2
+	BlendOperationReverseSubtract BlendOperation = 3
+	BlendOperationMin             BlendOperation = 4
+	BlendOperationMax             BlendOperation = 5
 )
 
 // IndexFormat mirrors WGPUIndexFormat.

@@ -251,21 +251,66 @@ func (e *commandEncoder) Flush() {
 // --- helpers ---
 
 func applyBlendMode(mode backend.BlendMode) {
-	switch mode {
-	case backend.BlendNone:
+	if !mode.Enabled {
 		gl.Disable(gl.BLEND)
-	case backend.BlendSourceOver:
-		gl.Enable(gl.BLEND)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-	case backend.BlendAdditive:
-		gl.Enable(gl.BLEND)
-		gl.BlendFunc(gl.SRC_ALPHA, gl.ONE)
-	case backend.BlendMultiplicative:
-		gl.Enable(gl.BLEND)
-		gl.BlendFunc(gl.DST_COLOR, gl.ZERO)
-	case backend.BlendPremultiplied:
-		gl.Enable(gl.BLEND)
-		gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+		return
+	}
+	gl.Enable(gl.BLEND)
+	gl.BlendFuncSeparate(
+		glBlendFactor(mode.SrcFactorRGB),
+		glBlendFactor(mode.DstFactorRGB),
+		glBlendFactor(mode.SrcFactorAlpha),
+		glBlendFactor(mode.DstFactorAlpha),
+	)
+	gl.BlendEquationSeparate(
+		glBlendOp(mode.OpRGB),
+		glBlendOp(mode.OpAlpha),
+	)
+}
+
+// glBlendFactor maps a backend BlendFactor to its OpenGL enum.
+func glBlendFactor(f backend.BlendFactor) uint32 {
+	switch f {
+	case backend.BlendFactorZero:
+		return gl.ZERO
+	case backend.BlendFactorOne:
+		return gl.ONE
+	case backend.BlendFactorSrcAlpha:
+		return gl.SRC_ALPHA
+	case backend.BlendFactorOneMinusSrcAlpha:
+		return gl.ONE_MINUS_SRC_ALPHA
+	case backend.BlendFactorDstAlpha:
+		return gl.DST_ALPHA
+	case backend.BlendFactorOneMinusDstAlpha:
+		return gl.ONE_MINUS_DST_ALPHA
+	case backend.BlendFactorSrcColor:
+		return gl.SRC_COLOR
+	case backend.BlendFactorOneMinusSrcColor:
+		return gl.ONE_MINUS_SRC_COLOR
+	case backend.BlendFactorDstColor:
+		return gl.DST_COLOR
+	case backend.BlendFactorOneMinusDstColor:
+		return gl.ONE_MINUS_DST_COLOR
+	default:
+		return gl.ONE
+	}
+}
+
+// glBlendOp maps a backend BlendOperation to its OpenGL enum.
+func glBlendOp(op backend.BlendOperation) uint32 {
+	switch op {
+	case backend.BlendOpAdd:
+		return gl.FUNC_ADD
+	case backend.BlendOpSubtract:
+		return gl.FUNC_SUBTRACT
+	case backend.BlendOpReverseSubtract:
+		return gl.FUNC_REVERSE_SUBTRACT
+	case backend.BlendOpMin:
+		return gl.MIN
+	case backend.BlendOpMax:
+		return gl.MAX
+	default:
+		return gl.FUNC_ADD
 	}
 }
 
