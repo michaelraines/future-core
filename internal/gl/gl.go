@@ -191,6 +191,7 @@ var (
 	fnProgramUniform1f        func(program uint32, location int32, v0 float32)
 	fnProgramUniform1i        func(program uint32, location int32, v0 int32)
 	fnProgramUniform2fv       func(program uint32, location, count int32, value *float32)
+	fnProgramUniform3fv       func(program uint32, location, count int32, value *float32)
 	fnProgramUniform4fv       func(program uint32, location, count int32, value *float32)
 	fnProgramUniformMatrix4fv func(program uint32, location, count int32, transpose uint8, value *float32)
 
@@ -347,6 +348,10 @@ func ProgramUniform1i(program uint32, location int32, v0 int32) {
 
 func ProgramUniform2fv(program uint32, location, count int32, value *float32) {
 	fnProgramUniform2fv(program, location, count, value)
+}
+
+func ProgramUniform3fv(program uint32, location, count int32, value *float32) {
+	fnProgramUniform3fv(program, location, count, value)
 }
 
 func ProgramUniform4fv(program uint32, location, count int32, value *float32) {
@@ -654,6 +659,7 @@ func Init() error {
 		{&fnProgramUniform1f, "glProgramUniform1f"},
 		{&fnProgramUniform1i, "glProgramUniform1i"},
 		{&fnProgramUniform2fv, "glProgramUniform2fv"},
+		{&fnProgramUniform3fv, "glProgramUniform3fv"},
 		{&fnProgramUniform4fv, "glProgramUniform4fv"},
 		{&fnProgramUniformMatrix4fv, "glProgramUniformMatrix4fv"},
 	} {

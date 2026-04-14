@@ -42,13 +42,13 @@ func buildCombinedUniformLayout(vertex, fragment []shadertranslate.UniformField)
 		if seen[f.Name] {
 			continue
 		}
-		// Apply WGSL/std140 alignment rules.
-		align := 4
-		if f.Size >= 16 {
-			align = 16
-		} else if f.Size == 8 {
-			align = 8
-		}
+		// Apply WGSL/std140 alignment rules. We must key on the type
+		// name rather than f.Size: vec3<f32> has SizeOf=12 but
+		// AlignOf=16, so a size-based heuristic would give it the
+		// wrong alignment (4) and every field placed after it in the
+		// combined struct would land at a CPU offset that disagrees
+		// with the WGSL layout.
+		align := wgslFieldAlign(f.Type)
 		if offset%align != 0 {
 			offset += align - (offset % align)
 		}
@@ -63,6 +63,24 @@ func buildCombinedUniformLayout(vertex, fragment []shadertranslate.UniformField)
 	}
 
 	return combined
+}
+
+// wgslFieldAlign returns the WGSL/std140 alignment (in bytes) of a uniform
+// struct field given its declared type name.
+// https://www.w3.org/TR/WGSL/#alignment-and-size
+func wgslFieldAlign(typeName string) int {
+	switch typeName {
+	case "f32", "i32", "u32", "int", "float":
+		return 4
+	case "vec2<f32>", "vec2<i32>", "vec2<u32>", "vec2":
+		return 8
+	case "vec3<f32>", "vec3<i32>", "vec3<u32>", "vec3",
+		"vec4<f32>", "vec4<i32>", "vec4<u32>", "vec4",
+		"mat3x3<f32>", "mat3", "mat4x4<f32>", "mat4":
+		return 16
+	default:
+		return 4
+	}
 }
 
 // buildUniformStructWGSL generates a WGSL struct declaration from uniform fields.

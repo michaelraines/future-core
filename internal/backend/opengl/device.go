@@ -322,6 +322,11 @@ func (s *shader) SetUniformVec2(name string, v [2]float32) {
 	gl.ProgramUniform2fv(s.program, loc, 1, &v[0])
 }
 
+func (s *shader) SetUniformVec3(name string, v [3]float32) {
+	loc := gl.GetUniformLocation(s.program, gl.Str(name+"\x00"))
+	gl.ProgramUniform3fv(s.program, loc, 1, &v[0])
+}
+
 func (s *shader) SetUniformVec4(name string, v [4]float32) {
 	loc := gl.GetUniformLocation(s.program, gl.Str(name+"\x00"))
 	gl.ProgramUniform4fv(s.program, loc, 1, &v[0])

@@ -552,12 +552,16 @@ func emitWGSLImageHelpers(b *strings.Builder, glsl string, samplers []uniform) {
 		// For 3D, mipmapped textures need automatic LOD (textureSample) or
 		// explicit LOD computation. See FUTURE_3D.md.
 		fmt.Fprintf(b, "fn imageSrc%dAt(pos: vec2<f32>) -> vec4<f32> {\n", i)
-		fmt.Fprintf(b, "    let origin = uniforms.uImageSrc%dOrigin;\n", i)
-		fmt.Fprintf(b, "    let size = uniforms.uImageSrc%dSize;\n", i)
 		fmt.Fprintf(b, "    let texDim = vec2<f32>(textureDimensions(%s));\n", texName)
 		fmt.Fprintf(b, "    let uv = pos / texDim;\n")
 		fmt.Fprintf(b, "    let sampled = textureSampleLevel(%s, %s_sampler, uv, 0.0);\n", texName, texName)
-		b.WriteString("    let inBounds = pos.x >= origin.x && pos.y >= origin.y && pos.x < origin.x + size.x && pos.y < origin.y + size.y;\n")
+		// Bounds check uses the texture's actual dimensions rather than the
+		// uImageSrcNOrigin/Size uniforms: those uniforms describe sub-image
+		// regions within an atlas and aren't populated by the CPU-side
+		// draw path today, so relying on them would make imageSrcNAt
+		// always return vec4(0) (lit up the lighting demo bug where every
+		// shader that sampled a source image wrote zero).
+		b.WriteString("    let inBounds = pos.x >= 0.0 && pos.y >= 0.0 && pos.x < texDim.x && pos.y < texDim.y;\n")
 		b.WriteString("    return select(vec4<f32>(0.0), sampled, inBounds);\n")
 		b.WriteString("}\n\n")
 

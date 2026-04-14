@@ -40,6 +40,7 @@ type mockShader struct {
 
 func (s *mockShader) SetUniformFloat(name string, v float32)    { s.uniforms[name] = v }
 func (s *mockShader) SetUniformVec2(name string, v [2]float32)  { s.uniforms[name] = v }
+func (s *mockShader) SetUniformVec3(name string, v [3]float32)  { s.uniforms[name] = v }
 func (s *mockShader) SetUniformVec4(name string, v [4]float32)  { s.uniforms[name] = v }
 func (s *mockShader) SetUniformMat4(name string, v [16]float32) { s.uniforms[name] = v }
 func (s *mockShader) SetUniformInt(name string, v int32)        { s.uniforms[name] = v }

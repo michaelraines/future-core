@@ -268,7 +268,12 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 				// recreate the pipeline if the blend differs.
 				enc.SetBlendMode(b.BlendMode)
 				enc.SetPipeline(resolvedInfo.Pipeline)
-				resolvedInfo.Shader.SetUniformMat4("uProjection", sp.Projection)
+				// Custom shaders read uProjection too. Use the
+				// per-target ortho — sp.Projection is screen-space
+				// only; a lightmap RT with a different size (or even
+				// the same size with a different orientation) would
+				// produce off-screen quads otherwise.
+				resolvedInfo.Shader.SetUniformMat4("uProjection", sp.projectionForTarget(currentTargetID))
 			default:
 				sp.bindDefaultShader(enc)
 			}
@@ -408,19 +413,32 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 // engine from Layout dimensions). Off-screen targets use a per-target
 // ortho projection so draws map 1:1 to the target's pixels.
 func (sp *SpritePass) setProjectionForTarget(_ backend.CommandEncoder, _ *PassContext, targetID uint32) {
+	sp.shader.SetUniformMat4("uProjection", sp.projectionForTarget(targetID))
+}
+
+// projectionForTarget returns the ortho projection matrix that maps the
+// target's pixel space to NDC. Screen targets reuse sp.Projection (set by
+// the engine); offscreen targets need their own ortho derived from RT size,
+// otherwise custom shaders that bind sp.Projection would draw quads at
+// wrong NDC coordinates whenever the offscreen RT differs from the screen
+// dimensions.
+func (sp *SpritePass) projectionForTarget(targetID uint32) [16]float32 {
 	if targetID == 0 {
-		// Screen: use the engine-provided projection (logical dimensions).
-		sp.shader.SetUniformMat4("uProjection", sp.Projection)
-	} else if sp.ResolveRenderTarget != nil {
-		if rt := sp.ResolveRenderTarget(targetID); rt != nil {
-			w, h := float32(rt.Width()), float32(rt.Height())
-			sp.shader.SetUniformMat4("uProjection", [16]float32{
-				2 / w, 0, 0, 0,
-				0, -2 / h, 0, 0,
-				0, 0, -1, 0,
-				-1, 1, 0, 1,
-			})
-		}
+		return sp.Projection
+	}
+	if sp.ResolveRenderTarget == nil {
+		return sp.Projection
+	}
+	rt := sp.ResolveRenderTarget(targetID)
+	if rt == nil {
+		return sp.Projection
+	}
+	w, h := float32(rt.Width()), float32(rt.Height())
+	return [16]float32{
+		2 / w, 0, 0, 0,
+		0, -2 / h, 0, 0,
+		0, 0, -1, 0,
+		-1, 1, 0, 1,
 	}
 }
 

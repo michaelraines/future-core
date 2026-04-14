@@ -768,11 +768,17 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 		}
 	}
 
+	// Kage convention: when `kage:unit pixels` is declared (true for every
+	// shader we ship today) the fragment's `srcPos` is expected to be in
+	// pixel coordinates of the source image. DrawTrianglesShader callers
+	// (e.g. lighting) already set TexU/TexV in pixel space, so DrawRectShader
+	// must too — otherwise `imageSrc0At(srcPos)` samples in sub-pixel UV
+	// space and the multiply_dither/bloom shaders return near-zero.
 	rend.batcher.AddQuadDirect(
 		batch.Vertex2D{PosX: float32(x0), PosY: float32(y0), TexU: 0, TexV: 0, R: cr, G: cg, B: cb, A: ca},
-		batch.Vertex2D{PosX: float32(x1), PosY: float32(y1), TexU: 1, TexV: 0, R: cr, G: cg, B: cb, A: ca},
-		batch.Vertex2D{PosX: float32(x2), PosY: float32(y2), TexU: 1, TexV: 1, R: cr, G: cg, B: cb, A: ca},
-		batch.Vertex2D{PosX: float32(x3), PosY: float32(y3), TexU: 0, TexV: 1, R: cr, G: cg, B: cb, A: ca},
+		batch.Vertex2D{PosX: float32(x1), PosY: float32(y1), TexU: w, TexV: 0, R: cr, G: cg, B: cb, A: ca},
+		batch.Vertex2D{PosX: float32(x2), PosY: float32(y2), TexU: w, TexV: h, R: cr, G: cg, B: cb, A: ca},
+		batch.Vertex2D{PosX: float32(x3), PosY: float32(y3), TexU: 0, TexV: h, R: cr, G: cg, B: cb, A: ca},
 		batch.DrawCommand{
 			TextureID:       texID,
 			BlendMode:       blend,

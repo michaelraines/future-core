@@ -164,6 +164,13 @@ type Shader interface {
 	// SetUniformVec2 sets a vec2 uniform.
 	SetUniformVec2(name string, v [2]float32)
 
+	// SetUniformVec3 sets a vec3 uniform. The three floats occupy the
+	// declared 12 bytes of the vec3 slot in the uniform struct; callers
+	// that historically padded to vec4 and used SetUniformVec4 would
+	// corrupt the following struct member (because WGSL packs a scalar
+	// after a vec3 at offset+12, not offset+16).
+	SetUniformVec3(name string, v [3]float32)
+
 	// SetUniformVec4 sets a vec4 uniform.
 	SetUniformVec4(name string, v [4]float32)
 
