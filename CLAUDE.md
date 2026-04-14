@@ -80,18 +80,23 @@ soft mode works with fewer frames. The script defaults to 60.
 
 When a rendering regression is hard to reproduce with visual testing alone
 (e.g. "some draws are missing on WebGPU but the same code works on soft"),
-two env-gated tracers in `internal/pipeline/trace.go` can dump per-frame
-metadata to stderr. Both tracers cap themselves at the first N frames so
-logs stay small.
+env-gated tracers and a shader-dump test can dump per-frame metadata to
+stderr. All tracers cap themselves at the first N frames so logs stay
+small, and the hot-path cost when disabled is a single atomic-int
+comparison.
 
-| Env var | Dumps |
-|---|---|
-| `FUTURE_CORE_TRACE_BATCHES=N` | The batcher's per-frame batch list after `Flush()`: target ID, texture ID, shader, filter, blend, vertex and index counts for each batch. Useful for confirming what the batcher actually handed to the sprite pass. |
-| `FUTURE_CORE_TRACE_PASSES=N` | Every `BeginRenderPass` call the sprite pass makes, with target ID, load action, viewport, and clear color. Useful for catching "the same target is entered twice per frame" and "the load action is wrong" bugs. |
-| `FUTURE_CORE_TRACE_TEXT=1` | Logs glyph creation, draw positions, target sizes, and color scale values. Diagnoses invisible text by confirming glyphs are rasterized and DrawImage is called. |
-| `FUTURE_CORE_NO_AA=1` | Bypasses `drawTrianglesAA` entirely, routing all `AntiAlias=true` draws through the aliased path. Useful for confirming whether a visual bug is caused by the AA buffer lifecycle. |
-| `FUTURE_CORE_AA_SCALE=1` | Uses 1x AA buffers instead of 2x. Keeps the AA pipeline active but eliminates supersample quality. Isolates buffer-size-related issues. |
-| `FUTURE_CORE_NO_ATLAS=1` | Disables sprite atlas packing. Each `NewImageFromImage` gets its own texture. Isolates atlas-related UV or texture-sharing bugs. |
+**Diagnostic tools**
+
+| Env var / command | Source | Dumps |
+|---|---|---|
+| `FUTURE_CORE_TRACE_BATCHES=N` | `internal/pipeline/trace.go` | The batcher's per-frame batch list after `Flush()`: target ID, texture ID, shader, filter, blend, vertex and index counts for each batch. Useful for confirming what the batcher actually handed to the sprite pass. |
+| `FUTURE_CORE_TRACE_PASSES=N` | `internal/pipeline/trace.go` | Every `BeginRenderPass` call the sprite pass makes, with target ID, load action, viewport, and clear color. Useful for catching "the same target is entered twice per frame" and "the load action is wrong" bugs. |
+| `FUTURE_CORE_TRACE_WEBGPU=N` | `internal/backend/webgpu/trace_js.go` | Every browser-WebGPU encoder call for the first N frames: `BeginRenderPass`, `SetPipeline` (with blend + format), `bindUniforms` (with dynamic offset and first 8 bytes of payload), `SetTexture`, `DrawIndexed`, `Flush`. WASM-only. Use when the batch/pass traces show the right sequence but pixels still look wrong — this dumps the actual WebGPU calls leaving the encoder, so you can diff against a hand-written baseline (e.g. `parity-tests/wgsl-lighting-demo/`). |
+| `go test -v -run TestDumpPointLightWGSL ./internal/shadertranslate/` | `internal/shadertranslate/tooling_dump_wgsl_test.go` | Prints every stage of the Kage → GLSL → WGSL translation for the lighting point-light shader, plus the combined uniform layout and the final post-merge WGSL actually sent to `createShaderModule`. Use when you suspect the translator is emitting something different from what you think it is. |
+| `FUTURE_CORE_TRACE_TEXT=1` | (text package) | Logs glyph creation, draw positions, target sizes, and color scale values. Diagnoses invisible text by confirming glyphs are rasterized and DrawImage is called. |
+| `FUTURE_CORE_NO_AA=1` | (image.go) | Bypasses `drawTrianglesAA` entirely, routing all `AntiAlias=true` draws through the aliased path. Useful for confirming whether a visual bug is caused by the AA buffer lifecycle. |
+| `FUTURE_CORE_AA_SCALE=1` | (image.go) | Uses 1x AA buffers instead of 2x. Keeps the AA pipeline active but eliminates supersample quality. Isolates buffer-size-related issues. |
+| `FUTURE_CORE_NO_ATLAS=1` | (sprite_atlas.go) | Disables sprite atlas packing. Each `NewImageFromImage` gets its own texture. Isolates atlas-related UV or texture-sharing bugs. |
 
 Typical debugging session — capture both traces for one frame of the
 `rttest` repro program:

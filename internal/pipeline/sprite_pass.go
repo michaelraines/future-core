@@ -55,6 +55,7 @@ type SpritePass struct {
 	lastColorTrans [4]float32
 	lastTextureID  uint32
 	lastFilter     backend.TextureFilter
+	lastBlendMode  backend.BlendMode
 	colorBodySet   bool // false until the first batch sets it this frame
 
 	// ResolveTexture maps batch texture IDs to backend textures.
@@ -262,6 +263,13 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		if b.ShaderID != currentShaderID {
 			switch {
 			case b.ShaderID == 0:
+				// Default-shader batches can carry non-default blend
+				// modes too — e.g. the lighting system's
+				// blendSetAlpha / blendMaskAlpha shadow-stamp passes
+				// use DrawImage (ShaderID=0) with a custom blend.
+				// Apply the blend BEFORE SetPipeline so the encoder
+				// recreates the pipeline with the correct blend state.
+				enc.SetBlendMode(b.BlendMode)
 				sp.bindDefaultShader(enc)
 			case resolvedInfo != nil:
 				// Set blend mode before pipeline so WebGPU can
@@ -275,13 +283,25 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 				// produce off-screen quads otherwise.
 				resolvedInfo.Shader.SetUniformMat4("uProjection", sp.projectionForTarget(currentTargetID))
 			default:
+				enc.SetBlendMode(b.BlendMode)
 				sp.bindDefaultShader(enc)
 			}
 			currentShaderID = b.ShaderID
+			sp.lastBlendMode = b.BlendMode
 		} else if b.ShaderID != 0 && resolvedInfo != nil {
 			// Same shader but potentially different blend mode.
 			enc.SetBlendMode(b.BlendMode)
 			enc.SetPipeline(resolvedInfo.Pipeline)
+			sp.lastBlendMode = b.BlendMode
+		} else if b.ShaderID == 0 && b.BlendMode != sp.lastBlendMode {
+			// Same default shader, but the blend differs from the
+			// previous default-shader batch. This fires between the
+			// lighting system's shadow-stamp passes (SourceOver →
+			// blendSetAlpha → blendMaskAlpha → SourceOver) and must
+			// recreate the default pipeline for the new blend.
+			enc.SetBlendMode(b.BlendMode)
+			enc.SetPipeline(sp.pipeline)
+			sp.lastBlendMode = b.BlendMode
 		}
 
 		// For custom shader batches, re-apply the per-draw user uniforms
