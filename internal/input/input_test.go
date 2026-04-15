@@ -419,6 +419,277 @@ func TestOnResizeEventNoOp(t *testing.T) {
 	s.OnResizeEvent(800, 600)
 }
 
+// --- Press durations ---
+
+func TestKeyPressDurationCountsTicksHeld(t *testing.T) {
+	s := New()
+
+	// Not held: 0.
+	require.Equal(t, 0, s.KeyPressDuration(platform.KeyA))
+
+	// Press, then advance: the first tick after a press registers
+	// duration 1 (one full tick of being held).
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionPress})
+	s.Update()
+	require.Equal(t, 1, s.KeyPressDuration(platform.KeyA))
+
+	// Two more ticks while still held.
+	s.Update()
+	s.Update()
+	require.Equal(t, 3, s.KeyPressDuration(platform.KeyA))
+
+	// Release: the next Update resets the counter. The release event
+	// itself already cleared s.keys[A], so Update() sees it as not-held.
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionRelease})
+	s.Update()
+	require.Equal(t, 0, s.KeyPressDuration(platform.KeyA))
+}
+
+func TestKeyPressDurationOutOfBoundsReturnsZero(t *testing.T) {
+	s := New()
+	require.Equal(t, 0, s.KeyPressDuration(platform.Key(-1)))
+	require.Equal(t, 0, s.KeyPressDuration(platform.Key(platform.KeyCount+10)))
+}
+
+func TestMouseButtonPressDurationCountsTicksHeld(t *testing.T) {
+	s := New()
+
+	require.Equal(t, 0, s.MouseButtonPressDuration(platform.MouseButtonLeft))
+
+	s.OnMouseButtonEvent(platform.MouseButtonEvent{Button: platform.MouseButtonLeft, Action: platform.ActionPress})
+	s.Update()
+	require.Equal(t, 1, s.MouseButtonPressDuration(platform.MouseButtonLeft))
+
+	s.Update()
+	require.Equal(t, 2, s.MouseButtonPressDuration(platform.MouseButtonLeft))
+
+	s.OnMouseButtonEvent(platform.MouseButtonEvent{Button: platform.MouseButtonLeft, Action: platform.ActionRelease})
+	s.Update()
+	require.Equal(t, 0, s.MouseButtonPressDuration(platform.MouseButtonLeft))
+}
+
+func TestMouseButtonPressDurationOutOfBoundsReturnsZero(t *testing.T) {
+	s := New()
+	require.Equal(t, 0, s.MouseButtonPressDuration(platform.MouseButton(-1)))
+	require.Equal(t, 0, s.MouseButtonPressDuration(platform.MouseButton(99)))
+}
+
+// --- Key append helpers ---
+
+func TestAppendPressedKeys(t *testing.T) {
+	s := New()
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionPress})
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyZ, Action: platform.ActionPress})
+
+	keys := s.AppendPressedKeys(nil)
+	require.ElementsMatch(t, []platform.Key{platform.KeyA, platform.KeyZ}, keys)
+
+	// Existing slice is preserved and appended to.
+	keys = s.AppendPressedKeys([]platform.Key{platform.KeySpace})
+	require.Contains(t, keys, platform.KeySpace)
+	require.Contains(t, keys, platform.KeyA)
+	require.Contains(t, keys, platform.KeyZ)
+}
+
+func TestAppendJustPressedKeysOnlyFiresOnEdge(t *testing.T) {
+	s := New()
+
+	// Press two keys and verify JustPressed fires.
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionPress})
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyB, Action: platform.ActionPress})
+	require.ElementsMatch(t,
+		[]platform.Key{platform.KeyA, platform.KeyB},
+		s.AppendJustPressedKeys(nil))
+
+	// After Update, holding the same keys does NOT re-fire JustPressed.
+	s.Update()
+	require.Empty(t, s.AppendJustPressedKeys(nil))
+
+	// Pressing a new key fires JustPressed only for the new one.
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyC, Action: platform.ActionPress})
+	require.ElementsMatch(t,
+		[]platform.Key{platform.KeyC},
+		s.AppendJustPressedKeys(nil))
+}
+
+func TestAppendJustReleasedKeysOnlyFiresOnEdge(t *testing.T) {
+	s := New()
+
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionPress})
+	s.Update()
+
+	// Nothing released yet.
+	require.Empty(t, s.AppendJustReleasedKeys(nil))
+
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionRelease})
+	require.ElementsMatch(t,
+		[]platform.Key{platform.KeyA},
+		s.AppendJustReleasedKeys(nil))
+
+	// After Update the release edge is gone.
+	s.Update()
+	require.Empty(t, s.AppendJustReleasedKeys(nil))
+}
+
+// --- Touch edge triggers ---
+
+func TestAppendJustPressedTouchIDsOnlyFiresOnBegan(t *testing.T) {
+	s := New()
+
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 10, Y: 20, Action: platform.ActionPress})
+	s.OnTouchEvent(platform.TouchEvent{ID: 2, X: 30, Y: 40, Action: platform.ActionPress})
+	require.ElementsMatch(t, []int{1, 2}, s.AppendJustPressedTouchIDs(nil))
+
+	// After Update, still-held touches no longer count as just-pressed.
+	s.Update()
+	require.Empty(t, s.AppendJustPressedTouchIDs(nil))
+
+	// A new touch fires; the still-held ones do not.
+	s.OnTouchEvent(platform.TouchEvent{ID: 3, X: 50, Y: 60, Action: platform.ActionPress})
+	require.ElementsMatch(t, []int{3}, s.AppendJustPressedTouchIDs(nil))
+}
+
+func TestAppendJustReleasedTouchIDsOnlyFiresOnEnded(t *testing.T) {
+	s := New()
+
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 10, Y: 20, Action: platform.ActionPress})
+	s.Update()
+
+	require.Empty(t, s.AppendJustReleasedTouchIDs(nil))
+
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, Action: platform.ActionRelease})
+	require.ElementsMatch(t, []int{1}, s.AppendJustReleasedTouchIDs(nil))
+
+	s.Update()
+	require.Empty(t, s.AppendJustReleasedTouchIDs(nil))
+}
+
+func TestTouchEdgeIgnoresMoveOnlyUpdates(t *testing.T) {
+	s := New()
+
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 10, Y: 20, Action: platform.ActionPress})
+	s.Update()
+	// A move-only event (no press/release) must not look like a new press.
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 15, Y: 25})
+	require.Empty(t, s.AppendJustPressedTouchIDs(nil))
+	require.Empty(t, s.AppendJustReleasedTouchIDs(nil))
+}
+
+// --- Gamepad edge triggers + duration + capability ---
+
+func TestIsGamepadButtonJustPressedOnlyFiresOnEdge(t *testing.T) {
+	s := New()
+
+	buttons := [16]bool{}
+	buttons[0] = true
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	require.True(t, s.IsGamepadButtonJustPressed(0, 0))
+
+	// After Update, holding the same button no longer counts as just-pressed.
+	s.Update()
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	require.False(t, s.IsGamepadButtonJustPressed(0, 0))
+
+	// Releasing then pressing again re-fires.
+	buttons[0] = false
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	s.Update()
+	buttons[0] = true
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	require.True(t, s.IsGamepadButtonJustPressed(0, 0))
+}
+
+func TestIsGamepadButtonJustReleasedOnlyFiresOnEdge(t *testing.T) {
+	s := New()
+
+	buttons := [16]bool{}
+	buttons[1] = true
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	s.Update()
+
+	require.False(t, s.IsGamepadButtonJustReleased(0, 1))
+
+	buttons[1] = false
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	require.True(t, s.IsGamepadButtonJustReleased(0, 1))
+
+	s.Update()
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	require.False(t, s.IsGamepadButtonJustReleased(0, 1))
+}
+
+func TestGamepadButtonEdgeOutOfRangeReturnsFalse(t *testing.T) {
+	s := New()
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0})
+	require.False(t, s.IsGamepadButtonJustPressed(0, -1))
+	require.False(t, s.IsGamepadButtonJustPressed(0, 99))
+	require.False(t, s.IsGamepadButtonJustReleased(0, -1))
+	require.False(t, s.IsGamepadButtonJustReleased(0, 99))
+}
+
+func TestGamepadButtonEdgeOnUnknownGamepad(t *testing.T) {
+	s := New()
+	// Neither prev nor current has this gamepad — no edges possible.
+	require.False(t, s.IsGamepadButtonJustPressed(42, 0))
+	require.False(t, s.IsGamepadButtonJustReleased(42, 0))
+}
+
+func TestGamepadButtonPressDurationCountsTicksHeld(t *testing.T) {
+	s := New()
+
+	require.Equal(t, 0, s.GamepadButtonPressDuration(0, 0))
+
+	buttons := [16]bool{}
+	buttons[0] = true
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	s.Update()
+	require.Equal(t, 1, s.GamepadButtonPressDuration(0, 0))
+
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	s.Update()
+	require.Equal(t, 2, s.GamepadButtonPressDuration(0, 0))
+
+	buttons[0] = false
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	s.Update()
+	require.Equal(t, 0, s.GamepadButtonPressDuration(0, 0))
+}
+
+func TestGamepadButtonPressDurationOutOfRange(t *testing.T) {
+	s := New()
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0})
+	require.Equal(t, 0, s.GamepadButtonPressDuration(0, -1))
+	require.Equal(t, 0, s.GamepadButtonPressDuration(0, 99))
+	require.Equal(t, 0, s.GamepadButtonPressDuration(999, 0))
+}
+
+func TestGamepadButtonDurationCleanedUpOnDisconnect(t *testing.T) {
+	s := New()
+
+	buttons := [16]bool{}
+	buttons[0] = true
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 7, Buttons: buttons})
+	s.Update()
+	require.Equal(t, 1, s.GamepadButtonPressDuration(7, 0))
+
+	// Disconnect event.
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 7, Disconnected: true})
+	s.Update()
+	require.Equal(t, 0, s.GamepadButtonPressDuration(7, 0))
+}
+
+func TestGamepadButtonCountAndAxisCount(t *testing.T) {
+	s := New()
+
+	// Unknown gamepad → 0.
+	require.Equal(t, 0, s.GamepadButtonCount(0))
+	require.Equal(t, 0, s.GamepadAxisCount(0))
+
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0})
+	require.Equal(t, 16, s.GamepadButtonCount(0))
+	require.Equal(t, 6, s.GamepadAxisCount(0))
+}
+
 // --- Update frame advance ---
 
 func TestUpdateResetsDeltasAndCopiesState(t *testing.T) {

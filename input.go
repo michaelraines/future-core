@@ -159,6 +159,111 @@ func IsGamepadButtonPressed(id GamepadID, button GamepadButton) bool {
 	return e.inputState.GamepadButton(int(id), int(button))
 }
 
+// KeyPressDuration returns the number of ticks the key has been held
+// continuously. Returns 0 if the key is not held, or if called before
+// the engine is running. Callers typically use this with a threshold
+// (e.g. >0 && <N) to distinguish "just pressed" from "held long enough
+// to repeat".
+func KeyPressDuration(key Key) int {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return 0
+	}
+	return e.inputState.KeyPressDuration(keyToInternal(key))
+}
+
+// MouseButtonPressDuration returns the number of ticks the mouse button
+// has been held continuously. Returns 0 if not held.
+func MouseButtonPressDuration(button MouseButton) int {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return 0
+	}
+	return e.inputState.MouseButtonPressDuration(platform.MouseButton(button))
+}
+
+// IsGamepadButtonJustPressed returns whether a gamepad button transitioned
+// from released to pressed this tick.
+func IsGamepadButtonJustPressed(id GamepadID, button GamepadButton) bool {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return false
+	}
+	return e.inputState.IsGamepadButtonJustPressed(int(id), int(button))
+}
+
+// IsGamepadButtonJustReleased returns whether a gamepad button transitioned
+// from pressed to released this tick.
+func IsGamepadButtonJustReleased(id GamepadID, button GamepadButton) bool {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return false
+	}
+	return e.inputState.IsGamepadButtonJustReleased(int(id), int(button))
+}
+
+// GamepadButtonPressDuration returns the number of ticks the given
+// gamepad button has been held. Returns 0 if the gamepad isn't
+// connected, the button is out of range, or not held.
+func GamepadButtonPressDuration(id GamepadID, button GamepadButton) int {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return 0
+	}
+	return e.inputState.GamepadButtonPressDuration(int(id), int(button))
+}
+
+// GamepadButtonCount returns the number of buttons available on the
+// given gamepad. Returns 0 if the gamepad isn't connected.
+func GamepadButtonCount(id GamepadID) int {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return 0
+	}
+	return e.inputState.GamepadButtonCount(int(id))
+}
+
+// GamepadAxisCount returns the number of axes available on the given
+// gamepad. Returns 0 if the gamepad isn't connected.
+func GamepadAxisCount(id GamepadID) int {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return 0
+	}
+	return e.inputState.GamepadAxisCount(int(id))
+}
+
+// AppendJustPressedTouchIDs appends IDs of touches that started this
+// tick (present now but absent last tick). Returns the input slice
+// unchanged if the engine isn't running.
+func AppendJustPressedTouchIDs(ids []TouchID) []TouchID {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return ids
+	}
+	var tmp []int
+	tmp = e.inputState.AppendJustPressedTouchIDs(tmp)
+	for _, id := range tmp {
+		ids = append(ids, TouchID(id))
+	}
+	return ids
+}
+
+// AppendJustReleasedTouchIDs appends IDs of touches that ended this
+// tick (present last tick but absent now).
+func AppendJustReleasedTouchIDs(ids []TouchID) []TouchID {
+	e := getEngine()
+	if e == nil || e.inputState == nil {
+		return ids
+	}
+	var tmp []int
+	tmp = e.inputState.AppendJustReleasedTouchIDs(tmp)
+	for _, id := range tmp {
+		ids = append(ids, TouchID(id))
+	}
+	return ids
+}
+
 // Key represents a keyboard key.
 type Key int
 

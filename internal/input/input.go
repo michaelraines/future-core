@@ -3,28 +3,39 @@
 package input
 
 import (
+	"maps"
+
 	"github.com/michaelraines/future-core/internal/platform"
 )
 
 // State tracks the current and previous frame's input state.
 type State struct {
-	// Keyboard
-	keys     [platform.KeyCount]bool
-	prevKeys [platform.KeyCount]bool
-	chars    []rune
+	// Keyboard. keyDuration[k] is the number of ticks key k has been held
+	// continuously; reset to 0 the tick it is released.
+	keys        [platform.KeyCount]bool
+	prevKeys    [platform.KeyCount]bool
+	keyDuration [platform.KeyCount]int
+	chars       []rune
 
-	// Mouse
-	mouseButtons       [5]bool
-	prevMouseButtons   [5]bool
-	mouseX, mouseY     float64
-	mouseDX, mouseDY   float64
-	scrollDX, scrollDY float64
+	// Mouse. mouseButtonDuration mirrors keyDuration for mouse buttons.
+	mouseButtons        [5]bool
+	prevMouseButtons    [5]bool
+	mouseButtonDuration [5]int
+	mouseX, mouseY      float64
+	mouseDX, mouseDY    float64
+	scrollDX, scrollDY  float64
 
-	// Touch
-	touches map[int]Touch
+	// Touch. prevTouches is a snapshot of touches at the start of the
+	// current tick (captured in Update) so justPressed / justReleased
+	// can be computed from set difference against touches.
+	touches     map[int]Touch
+	prevTouches map[int]Touch
 
-	// Gamepads
-	gamepads map[int]Gamepad
+	// Gamepads. prevGamepads mirrors prevTouches for edge-triggered
+	// button queries. gamepadButtonDuration[id][b] tracks hold time.
+	gamepads              map[int]Gamepad
+	prevGamepads          map[int]Gamepad
+	gamepadButtonDuration map[int]*[16]int
 }
 
 // Touch represents an active touch point.
@@ -42,16 +53,72 @@ type Gamepad struct {
 // New creates a new input state manager.
 func New() *State {
 	return &State{
-		touches:  make(map[int]Touch),
-		gamepads: make(map[int]Gamepad),
+		touches:               make(map[int]Touch),
+		prevTouches:           make(map[int]Touch),
+		gamepads:              make(map[int]Gamepad),
+		prevGamepads:          make(map[int]Gamepad),
+		gamepadButtonDuration: make(map[int]*[16]int),
 	}
 }
 
 // Update advances the input state to the next frame. Call at the beginning
-// of each update tick.
+// of each update tick, AFTER all platform events for the previous tick
+// have been dispatched. It does three things:
+//   - snapshots the held state into prev* so edge-triggered queries
+//     (IsKeyJustPressed, AppendJustPressed/JustReleasedTouchIDs,
+//     IsGamepadButtonJustPressed) can compare against it next tick;
+//   - increments per-key / per-button duration counters for anything
+//     still held, and resets to 0 for anything released;
+//   - clears per-frame accumulators (mouse + scroll delta, chars).
 func (s *State) Update() {
+	for i := range s.keys {
+		if s.keys[i] {
+			s.keyDuration[i]++
+		} else {
+			s.keyDuration[i] = 0
+		}
+	}
 	s.prevKeys = s.keys
+
+	for i := range s.mouseButtons {
+		if s.mouseButtons[i] {
+			s.mouseButtonDuration[i]++
+		} else {
+			s.mouseButtonDuration[i] = 0
+		}
+	}
 	s.prevMouseButtons = s.mouseButtons
+
+	// Snapshot touches before next tick's events land. Build a fresh map
+	// so subsequent mutations of s.touches don't leak into s.prevTouches.
+	s.prevTouches = make(map[int]Touch, len(s.touches))
+	maps.Copy(s.prevTouches, s.touches)
+
+	// Snapshot gamepads and bump per-button duration counters for
+	// still-held buttons on each connected gamepad.
+	s.prevGamepads = make(map[int]Gamepad, len(s.gamepads))
+	maps.Copy(s.prevGamepads, s.gamepads)
+	for id, gp := range s.gamepads {
+		dur := s.gamepadButtonDuration[id]
+		if dur == nil {
+			dur = &[16]int{}
+			s.gamepadButtonDuration[id] = dur
+		}
+		for b, pressed := range gp.Buttons {
+			if pressed {
+				dur[b]++
+			} else {
+				dur[b] = 0
+			}
+		}
+	}
+	// Drop duration counters for gamepads that went away.
+	for id := range s.gamepadButtonDuration {
+		if _, ok := s.gamepads[id]; !ok {
+			delete(s.gamepadButtonDuration, id)
+		}
+	}
+
 	s.mouseDX = 0
 	s.mouseDY = 0
 	s.scrollDX = 0
@@ -267,4 +334,137 @@ func (s *State) GamepadButton(id, button int) bool {
 		return false
 	}
 	return gp.Buttons[button]
+}
+
+// KeyPressDuration returns the number of ticks the key has been held
+// continuously. Returns 0 if the key is not held, or if the key is out
+// of range.
+func (s *State) KeyPressDuration(key platform.Key) int {
+	if key < 0 || int(key) >= len(s.keys) {
+		return 0
+	}
+	return s.keyDuration[key]
+}
+
+// MouseButtonPressDuration returns the number of ticks the mouse button
+// has been held continuously. Returns 0 if not held or out of range.
+func (s *State) MouseButtonPressDuration(button platform.MouseButton) int {
+	if button < 0 || int(button) >= len(s.mouseButtons) {
+		return 0
+	}
+	return s.mouseButtonDuration[button]
+}
+
+// AppendPressedKeys appends every currently-held key to the slice and
+// returns the result. The slice is appended in ascending key-code order
+// so callers get a deterministic iteration.
+func (s *State) AppendPressedKeys(keys []platform.Key) []platform.Key {
+	for k, pressed := range s.keys {
+		if pressed {
+			keys = append(keys, platform.Key(k))
+		}
+	}
+	return keys
+}
+
+// AppendJustPressedKeys appends every key that transitioned from released
+// to pressed this tick. Order is ascending by key code.
+func (s *State) AppendJustPressedKeys(keys []platform.Key) []platform.Key {
+	for k := range s.keys {
+		if s.keys[k] && !s.prevKeys[k] {
+			keys = append(keys, platform.Key(k))
+		}
+	}
+	return keys
+}
+
+// AppendJustReleasedKeys appends every key that transitioned from pressed
+// to released this tick. Order is ascending by key code.
+func (s *State) AppendJustReleasedKeys(keys []platform.Key) []platform.Key {
+	for k := range s.keys {
+		if !s.keys[k] && s.prevKeys[k] {
+			keys = append(keys, platform.Key(k))
+		}
+	}
+	return keys
+}
+
+// AppendJustPressedTouchIDs appends IDs of touches that started this tick
+// (present now but absent last tick). Order is not specified — touch IDs
+// are typically unordered anyway.
+func (s *State) AppendJustPressedTouchIDs(ids []int) []int {
+	for id := range s.touches {
+		if _, had := s.prevTouches[id]; !had {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// AppendJustReleasedTouchIDs appends IDs of touches that ended this tick
+// (present last tick but absent now).
+func (s *State) AppendJustReleasedTouchIDs(ids []int) []int {
+	for id := range s.prevTouches {
+		if _, still := s.touches[id]; !still {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// IsGamepadButtonJustPressed returns whether the given button on the
+// given gamepad transitioned from released to pressed this tick.
+func (s *State) IsGamepadButtonJustPressed(id, button int) bool {
+	return s.gamepadButtonEdge(id, button, false, true)
+}
+
+// IsGamepadButtonJustReleased returns whether the given button on the
+// given gamepad transitioned from pressed to released this tick.
+func (s *State) IsGamepadButtonJustReleased(id, button int) bool {
+	return s.gamepadButtonEdge(id, button, true, false)
+}
+
+func (s *State) gamepadButtonEdge(id, button int, wantPrev, wantNow bool) bool {
+	if button < 0 || button >= 16 {
+		return false
+	}
+	gp, nowConnected := s.gamepads[id]
+	prev, prevConnected := s.prevGamepads[id]
+	nowHeld := nowConnected && gp.Buttons[button]
+	prevHeld := prevConnected && prev.Buttons[button]
+	return prevHeld == wantPrev && nowHeld == wantNow
+}
+
+// GamepadButtonPressDuration returns the number of ticks the given
+// gamepad button has been held continuously. Returns 0 if the gamepad
+// is disconnected, the button is out of range, or not held.
+func (s *State) GamepadButtonPressDuration(id, button int) int {
+	if button < 0 || button >= 16 {
+		return 0
+	}
+	dur, ok := s.gamepadButtonDuration[id]
+	if !ok {
+		return 0
+	}
+	return dur[button]
+}
+
+// GamepadButtonCount returns the number of buttons on the given gamepad.
+// Returns 0 if the gamepad is not connected. Currently always reports 16
+// (the fixed internal button capacity); when the platform layer starts
+// reporting true per-pad button counts this will switch to that.
+func (s *State) GamepadButtonCount(id int) int {
+	if _, ok := s.gamepads[id]; !ok {
+		return 0
+	}
+	return 16
+}
+
+// GamepadAxisCount returns the number of axes on the given gamepad.
+// Returns 0 if the gamepad is not connected.
+func (s *State) GamepadAxisCount(id int) int {
+	if _, ok := s.gamepads[id]; !ok {
+		return 0
+	}
+	return 6
 }
