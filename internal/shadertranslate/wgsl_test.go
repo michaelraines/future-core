@@ -194,9 +194,15 @@ void main() {
 	src := result.Source
 	t.Logf("Translated fragment WGSL with builtins:\n%s", src)
 
-	// sin/cos/clamp pass through unchanged.
+	// sin passes through unchanged.
 	require.Contains(t, src, "sin(uniforms.uTime")
-	require.Contains(t, src, "clamp(cos(uniforms.uTime)")
+
+	// clamp(x, 0.0, 1.0) is rewritten to saturate(x) so the call works
+	// for both scalar and vector x under WGSL's strict typing — GLSL
+	// auto-broadcasts the scalar min/max args, WGSL doesn't. See
+	// replaceWGSLClampSaturate in wgsl.go for details.
+	require.Contains(t, src, "saturate(cos(uniforms.uTime))")
+	require.NotContains(t, src, "clamp(cos")
 
 	// mod(x, y) → (x % y)
 	require.Contains(t, src, "(uniforms.uTime % 1.0)")
@@ -209,6 +215,61 @@ void main() {
 	require.Contains(t, src, "var r: f32 =")
 	require.Contains(t, src, "var g: f32 =")
 	require.Contains(t, src, "var b: f32 =")
+}
+
+// TestGLSLToWGSLFragmentClampVec3 regresses the common Kage/GLSL pattern
+// `clamp(vec_expr, 0, 1)` — which relies on scalar broadcast — compiling
+// as valid WGSL. The translator rewrites it to `saturate(vec_expr)` so
+// it works for both scalar and vector first args under WGSL's strict
+// typing rules.
+func TestGLSLToWGSLFragmentClampVec3(t *testing.T) {
+	glsl := `#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+void main() {
+    vec3 rgb = clamp(vColor.rgb * 2.0, 0, 1);
+    fragColor = vec4(rgb, 1.0);
+}
+`
+	result, err := GLSLToWGSLFragment(glsl)
+	require.NoError(t, err)
+
+	src := result.Source
+	t.Logf("Translated fragment WGSL with vec3 clamp:\n%s", src)
+
+	require.Contains(t, src, "saturate(in.vColor.rgb * 2.0)")
+	require.NotContains(t, src, "clamp(in.vColor.rgb * 2.0, 0, 1)")
+
+	// Also accepts the explicit-float form `clamp(x, 0.0, 1.0)`.
+	glslFloats := `#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(clamp(vColor.rgb, 0.0, 1.0), 1.0);
+}
+`
+	result2, err := GLSLToWGSLFragment(glslFloats)
+	require.NoError(t, err)
+	require.Contains(t, result2.Source, "saturate(in.vColor.rgb)")
+	require.NotContains(t, result2.Source, "clamp(in.vColor.rgb, 0.0, 1.0)")
+}
+
+// TestGLSLToWGSLFragmentClampPreserved confirms that non-saturate
+// clamps (e.g. `clamp(x, 0.2, 0.8)`) are left as-is so downstream
+// behavior matches GLSL exactly.
+func TestGLSLToWGSLFragmentClampPreserved(t *testing.T) {
+	glsl := `#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+void main() {
+    float v = clamp(vColor.a, 0.2, 0.8);
+    fragColor = vec4(vColor.rgb, v);
+}
+`
+	result, err := GLSLToWGSLFragment(glsl)
+	require.NoError(t, err)
+	require.Contains(t, result.Source, "clamp(in.vColor.a, 0.2, 0.8)")
+	require.NotContains(t, result.Source, "saturate")
 }
 
 func TestGLSLToWGSLFragmentWithControlFlow(t *testing.T) {

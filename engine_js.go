@@ -58,6 +58,19 @@ out vec4 fragColor;
 
 void main() {
     vec4 c = texture(uTexture, vTexCoord) * vColor;
+    // Clamp RGB to alpha. Vertex-color scales of the form (1,1,1,<1),
+    // which DrawImage and DrawTriangles produce when the caller does
+    // ColorScale.ScaleAlpha(<1), would otherwise yield invalid
+    // premultiplied output: SourceOver (One, OneMinusSrcAlpha) would
+    // composite 1 + dst * 0.5 and blow out to white. This min() makes
+    // the result correctly premultiplied. Matches Ebitengines default
+    // sprite shader (internal/builtinshader, min(clr.rgb, clr.a)).
+    //
+    // We reconstruct the vec4 in one expression instead of assigning
+    // to c.rgb directly: WGSL rejects swizzle assignment (c.rgb = ...
+    // errors with "cannot assign to swizzle"), while GLSL allows it.
+    // The reconstruct form compiles cleanly through both backends.
+    c = vec4(min(c.rgb, vec3(c.a)), c.a);
     fragColor = uColorBody * c + uColorTranslation;
 }
 `
@@ -193,6 +206,17 @@ func (e *engine) run() error {
 	e.startRAFLoop()
 
 	// Block forever — the browser event loop drives everything.
+	//
+	// Note: synchronous waits on JS Promises from inside a RAF callback
+	// (e.g. awaiting GPUBuffer.mapAsync) deadlock Go's runtime. The JS
+	// event loop can't tick until the callback returns, so the promise
+	// never resolves, so the waiter never wakes, and Go declares
+	// "all goroutines are asleep - deadlock!". Changing this `select {}`
+	// to a channel receive or ticker-based wait doesn't help — the
+	// runtime's deadlock detector fires either way. GPU→CPU readback on
+	// WebGPU browser must be done without awaiting the map promise (see
+	// Image.cpuPixels cache for the sync fast path; AtlasPacker composites
+	// directly on GPU to avoid the roundtrip entirely).
 	select {}
 }
 

@@ -272,6 +272,7 @@ func translateWGSLVertexLine(line string, attrs []attribute, uniforms []uniform,
 
 	// GLSL built-in translations.
 	s = replaceWGSLModCall(s)
+	s = replaceWGSLClampSaturate(s)
 
 	// gl_Position → out.position
 	s = strings.ReplaceAll(s, "gl_Position", "out.position")
@@ -308,6 +309,7 @@ func translateWGSLFragmentLine(line string, uniforms []uniform, varyings []varyi
 
 	// GLSL built-in translations.
 	s = replaceWGSLModCall(s)
+	s = replaceWGSLClampSaturate(s)
 
 	// texture(sampler, uv) → textureSample(sampler, sampler_sampler, uv)
 	for _, samp := range samplers {
@@ -386,6 +388,108 @@ var reModCall = regexp.MustCompile(`\bmod\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)`)
 // behavior for float operands.
 func replaceWGSLModCall(s string) string {
 	return reModCall.ReplaceAllString(s, "($1 % $2)")
+}
+
+// replaceWGSLClampSaturate rewrites `clamp(X, 0, 1)` / `clamp(X, 0.0, 1.0)`
+// as `saturate(X)`. Motivation: GLSL (and Kage) auto-broadcast scalar
+// min/max args to match a vector first arg — `clamp(vec3, 0, 1)` is
+// valid and means per-channel clamp to [0,1]. WGSL is strictly typed
+// and rejects `clamp(vec3<f32>, abstract-int, abstract-int)` with
+// "no matching call". The WGSL `saturate(e)` built-in is defined for
+// scalars AND vectors of any float type and is semantically identical
+// to `clamp(e, 0.0, 1.0)`, so it threads through without needing full
+// type analysis of the first argument.
+//
+// Uses lexical scanning with paren-depth tracking rather than a single
+// regex because the first argument can itself contain commas and nested
+// parens (e.g. `clamp(mix(a, b, t) * scale, 0, 1)`).
+func replaceWGSLClampSaturate(s string) string {
+	var out strings.Builder
+	i := 0
+	for i < len(s) {
+		// Find the next `clamp(` that isn't part of a longer identifier.
+		idx := strings.Index(s[i:], "clamp(")
+		if idx < 0 {
+			out.WriteString(s[i:])
+			break
+		}
+		absIdx := i + idx
+		if absIdx > 0 && isIdentRune(s[absIdx-1]) {
+			// Something like `myClamp(` — skip past this match.
+			out.WriteString(s[i : absIdx+len("clamp(")])
+			i = absIdx + len("clamp(")
+			continue
+		}
+		// Emit everything up to and including `clamp(`.
+		out.WriteString(s[i:absIdx])
+		argStart := absIdx + len("clamp(")
+		// Walk forward to find the matching `)`, tracking paren depth.
+		depth := 1
+		end := argStart
+		for end < len(s) && depth > 0 {
+			switch s[end] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					goto foundEnd
+				}
+			}
+			end++
+		}
+	foundEnd:
+		if depth != 0 {
+			// Malformed — emit the rest unchanged and stop.
+			out.WriteString(s[absIdx:])
+			return out.String()
+		}
+		args := splitTopLevelCommas(s[argStart:end])
+		if len(args) == 3 &&
+			isZeroLiteral(strings.TrimSpace(args[1])) &&
+			isOneLiteral(strings.TrimSpace(args[2])) {
+			out.WriteString("saturate(")
+			out.WriteString(strings.TrimSpace(args[0]))
+			out.WriteString(")")
+		} else {
+			// Not the saturate pattern — preserve the original call.
+			out.WriteString("clamp(")
+			out.WriteString(s[argStart:end])
+			out.WriteString(")")
+		}
+		i = end + 1
+	}
+	return out.String()
+}
+
+// splitTopLevelCommas splits a string on commas that are not nested
+// inside parentheses, matching how a function-argument list is parsed.
+func splitTopLevelCommas(s string) []string {
+	var parts []string
+	depth := 0
+	last := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[last:i])
+				last = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[last:])
+	return parts
+}
+
+func isZeroLiteral(s string) bool { return s == "0" || s == "0.0" || s == "0." || s == ".0" }
+func isOneLiteral(s string) bool  { return s == "1" || s == "1.0" || s == "1." }
+
+func isIdentRune(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
 }
 
 // stripLineComment removes trailing // comments from a line.

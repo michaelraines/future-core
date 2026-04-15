@@ -188,6 +188,20 @@ func TestColorToFloatTransparent(t *testing.T) {
 	require.InDelta(t, float32(0), a, 1e-6)
 }
 
+// TestColorToFloatPremultiplied verifies that colorToFloat returns
+// premultiplied RGBA values. Regression test for a glow/gradient bug
+// where semi-transparent vertex colors were divided by alpha
+// (converted to straight alpha), producing blown-out white halos
+// instead of soft edges when drawn through SourceOver.
+func TestColorToFloatPremultiplied(t *testing.T) {
+	// NRGBA white at 50% alpha → premultiplied RGBA ~= (128, 128, 128, 128).
+	r, g, b, a := colorToFloat(color.NRGBA{R: 255, G: 255, B: 255, A: 128})
+	require.InDelta(t, float32(128.0/255.0), r, 0.01)
+	require.InDelta(t, float32(128.0/255.0), g, 0.01)
+	require.InDelta(t, float32(128.0/255.0), b, 0.01)
+	require.InDelta(t, float32(128.0/255.0), a, 0.01)
+}
+
 func TestCircleSegments(t *testing.T) {
 	// Small radius.
 	n := circleSegments(5)

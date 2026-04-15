@@ -77,6 +77,27 @@ type Image struct {
 	aaBufferBlend      Blend             // blend mode currently accumulated in the buffer
 	aaBufferDirty      bool              // true when buffer has pending draws not yet flushed
 	aaBufferNeedsClear bool              // set by Clear(); consumed by drawTrianglesAA before first AA draw
+
+	// cpuPixels is a CPU-side copy of this image's unpadded RGBA content,
+	// populated when the image is constructed from CPU data
+	// (NewImageFromImage, WritePixels). When cpuPixelsValid is true,
+	// ReadPixels serves the cache synchronously without a GPU round-trip.
+	// The cache is invalidated by any GPU-side write (DrawImage,
+	// DrawTriangles, Fill, Clear, Set, DrawRectShader, DrawTrianglesShader,
+	// AA flush) because the GPU texture then holds newer bytes than the
+	// CPU cache. Rationale: WebGPU browser mode has no synchronous GPU
+	// readback path — mapAsync is the only option, and awaiting it from
+	// inside a RAF callback deadlocks the Go runtime (the JS event loop
+	// can't tick until the callback returns, so the promise never
+	// resolves). The cache fast-paths the common "read back an image I
+	// just loaded from disk" pattern (AtlasPacker) so it doesn't need to
+	// hit the GPU at all. Render-target readback still goes through the
+	// async path — see ReadPixelsAsync for callers that need that.
+	//
+	// Format: len = width * height * 4 bytes, RGBA, row-major, no padding,
+	// matching what ReadPixels(dst) would produce from a GPU readback.
+	cpuPixels      []byte
+	cpuPixelsValid bool
 }
 
 // aaBufferScale is the supersample factor for anti-aliased DrawTriangles.
@@ -201,6 +222,18 @@ func NewImageFromImage(src goimage.Image) *Image {
 		padded: true,
 	}
 
+	// Cache the unpadded CPU bytes so ReadPixels can serve them
+	// synchronously without a GPU round-trip. rgba.Pix may have a stride
+	// wider than w*4 when the source was a SubImage; copy row-by-row.
+	contentBytes := make([]byte, w*h*4)
+	for row := 0; row < h; row++ {
+		srcOff := row * rgba.Stride
+		dstOff := row * w * 4
+		copy(contentBytes[dstOff:dstOff+w*4], rgba.Pix[srcOff:srcOff+w*4])
+	}
+	img.cpuPixels = contentBytes
+	img.cpuPixelsValid = true
+
 	if rend := getRenderer(); rend != nil && rend.device != nil {
 		tex, err := rend.device.NewTexture(backend.TextureDescriptor{
 			Width:  padW,
@@ -226,6 +259,17 @@ func NewImageFromImage(src goimage.Image) *Image {
 	}
 
 	return img
+}
+
+// invalidateCPUPixels marks the CPU-side pixel cache stale so the next
+// ReadPixels will go to the GPU. Called from every GPU write path
+// (DrawImage, DrawTriangles, Fill, Clear, Set, DrawRectShader,
+// DrawTrianglesShader, AA buffer flush). Cheap no-op when the image
+// never had a cache in the first place.
+func (img *Image) invalidateCPUPixels() {
+	if img.cpuPixelsValid {
+		img.cpuPixelsValid = false
+	}
 }
 
 // Size returns the image dimensions.
@@ -259,6 +303,7 @@ func (img *Image) drawImageRaw(src *Image, opts *DrawImageOptions) {
 	if img.disposed || src == nil || src.disposed {
 		return
 	}
+	img.invalidateCPUPixels()
 	rend := getRenderer()
 	if rend == nil || rend.batcher == nil {
 		return
@@ -290,7 +335,12 @@ func (img *Image) drawImageRaw(src *Image, opts *DrawImageOptions) {
 		x3, y3 = pixelSnap(x3), pixelSnap(y3)
 	}
 
-	// Color scale (default to opaque white).
+	// Color scale (default to opaque white). Passed through to the vertex
+	// verbatim — matching Ebitengine's DrawImage, which lets the shader
+	// handle the premultiplication + RGB-clamp. See the `min(clr.rgb,
+	// clr.a)` line in spriteFragmentShader for the shader-side
+	// correction that makes `ColorScale.ScaleAlpha(0.5)` produce a
+	// correctly-premultiplied 50% fade instead of a blown-out SourceOver.
 	cr, cg, cb, ca := o.ColorScale.rgbaOrDefault()
 
 	// Determine texture ID: use source texture, or white texture for nil.
@@ -338,24 +388,61 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 	}
 	src.flushAABufferIfNeeded()
 	img.flushAABufferIfNeeded()
+	img.invalidateCPUPixels()
 	rend := getRenderer()
 	if rend == nil || rend.batcher == nil {
 		return
 	}
 
+	// Vertex.SrcX/SrcY are defined in source-image PIXEL coordinates
+	// (matching Ebitengine's Vertex semantics), but the default sprite
+	// shader samples texture(uTexture, vTexCoord) expecting normalized
+	// UV in [0, 1]. Convert here using the src image's stored UV range,
+	// which correctly accounts for the 1-pixel border that
+	// NewImageFromImage adds around content. Without this conversion a
+	// caller that computed sx/sy in atlas pixels (e.g. SpriteBatch,
+	// ParticleEmitter) would see sprites rendered as a single texel
+	// because pixel coordinates > 1 get clamped to the texture edge.
+	var u0, v0, u1, v1 float32
+	var srcW, srcH float32
+	if src != nil {
+		u0, v0, u1, v1 = src.u0, src.v0, src.u1, src.v1
+		srcW = float32(src.width)
+		srcH = float32(src.height)
+	}
+
 	// Write vertex data directly to the batcher's arena to avoid a
 	// temporary make([]Vertex2D) allocation per call. In WASM, these
 	// per-call allocations accumulate faster than GC can collect.
+	//
+	// Vertex colors (ColorR/G/B) arrive as STRAIGHT-alpha values, matching
+	// Ebitengine's `DrawTrianglesOptions.ColorScaleMode ==
+	// ColorScaleModeStraightAlpha` default (see ebitengine/image.go:479).
+	// The default sprite shader samples `texture(uTex, uv) * vColor` and
+	// BlendSourceOver uses (One, OneMinusSrcAlpha) — the PREMULTIPLIED-alpha
+	// blend equation — so we must premultiply RGB by alpha here before
+	// the vertex hits the shader. Without this, a caller passing (1, 1,
+	// 1, 0.5) for "half-opaque white" sees SourceOver compute
+	// `(1,1,1) + dst*0.5` — a blown-out white halo — instead of the
+	// correct `(0.5,0.5,0.5) + dst*0.5`. Most callers construct colors
+	// via `color.RGBA{...}` or `applyOpacity` which yields RGB unscaled
+	// relative to A (the "invalid premultiplied"/"straight-ish" form);
+	// those work correctly only with this premultiply step.
 	batchVerts := rend.batcher.AllocVertices(len(vertices))
 	for i, v := range vertices {
+		texU, texV := v.SrcX, v.SrcY
+		if src != nil && srcW > 0 && srcH > 0 {
+			texU = u0 + (v.SrcX/srcW)*(u1-u0)
+			texV = v0 + (v.SrcY/srcH)*(v1-v0)
+		}
 		batchVerts[i] = batch.Vertex2D{
 			PosX: v.DstX,
 			PosY: v.DstY,
-			TexU: v.SrcX,
-			TexV: v.SrcY,
-			R:    v.ColorR,
-			G:    v.ColorG,
-			B:    v.ColorB,
+			TexU: texU,
+			TexV: texV,
+			R:    v.ColorR * v.ColorA,
+			G:    v.ColorG * v.ColorA,
+			B:    v.ColorB * v.ColorA,
 			A:    v.ColorA,
 		}
 	}
@@ -396,6 +483,7 @@ func (img *Image) Fill(clr color.Color) {
 		return
 	}
 	img.flushAABufferIfNeeded()
+	img.invalidateCPUPixels()
 	rend := getRenderer()
 	if rend == nil || rend.batcher == nil {
 		return
@@ -486,6 +574,7 @@ func (img *Image) Clear() {
 		return
 	}
 	img.flushAABufferIfNeeded()
+	img.invalidateCPUPixels()
 	// Mark this target for GPU-native clearing on its next
 	// BeginRenderPass. The sprite pass checks this via
 	// ConsumePendingClear and emits LoadActionClear with transparent
@@ -511,6 +600,21 @@ func (img *Image) ReadPixels(dst []byte) {
 		return
 	}
 	img.flushAABufferIfNeeded()
+
+	// Fast path: serve from the CPU cache when it's still authoritative
+	// (image was created from CPU data and no GPU writes have
+	// invalidated the cache since). Avoids the GPU readback entirely —
+	// critical on WebGPU browser mode where synchronous GPU readback
+	// deadlocks (see cpuPixels field doc on Image).
+	if img.cpuPixelsValid && img.cpuPixels != nil {
+		n := len(img.cpuPixels)
+		if n > len(dst) {
+			n = len(dst)
+		}
+		copy(dst[:n], img.cpuPixels[:n])
+		return
+	}
+
 	if img.padded {
 		// Read the full padded texture, then extract the content region.
 		padW := img.width + 2
@@ -546,13 +650,42 @@ func (img *Image) Dispose() {
 		tracker.UntrackImage(img)
 	}
 
+	// Defer the actual GPU-resource teardown until AFTER the current
+	// frame's command buffer has been submitted. Callers routinely
+	// Dispose temporary canvases mid-Draw (see e.g. future's
+	// comp/ui/vector/ops.go drawWithTransform, which allocates a temp
+	// canvas, draws to it, composites back with a transform, and
+	// `defer tmp.Dispose()`s on return). The batcher has already
+	// recorded draw commands referencing this image's texture; destroying
+	// the GPU texture synchronously would trigger the WebGPU validation
+	// error "Destroyed texture used in a submit" on the next queue
+	// submit. The engine drains the deferred list via
+	// renderer.disposeDeferred() immediately AFTER device.EndFrame()
+	// completes submit, so resources are released exactly one frame
+	// later — still bounded memory, still deterministic.
+	//
+	// When no renderer is active (tests, teardown before/after engine
+	// run), fall through to immediate disposal.
+	if rend := getRenderer(); rend != nil {
+		rend.deferDispose(img)
+		return
+	}
+	img.disposeNow()
+}
+
+// disposeNow performs the actual GPU-resource teardown. Called
+// immediately for images disposed outside an active frame, or via
+// renderer.disposeDeferred() one frame after Dispose() for images
+// disposed mid-frame. Safe to call once; subsequent calls are no-ops
+// because texture/renderTarget/aaBuffer have been nilled out.
+func (img *Image) disposeNow() {
 	// Dispose the AA buffer BEFORE tearing down this image's own GPU
 	// resources. We deliberately skip flushing pending AA content: the
 	// parent is being thrown away, so the content is worthless. Calling
 	// flushAABuffer here would enqueue a draw against a soon-to-be-dead
 	// target.
 	if img.aaBuffer != nil {
-		img.aaBuffer.Dispose()
+		img.aaBuffer.disposeNow()
 		img.aaBuffer = nil
 		img.aaBufferDirty = false
 	}
@@ -588,6 +721,15 @@ func (img *Image) Set(x, y int, clr color.Color) {
 		ty++
 	}
 	img.texture.UploadRegion(pix, tx, ty, 1, 1, 0)
+	// Keep the CPU cache in sync for single-pixel writes when the cache
+	// was previously valid — the new byte is known, no need to
+	// invalidate.
+	if img.cpuPixelsValid && len(img.cpuPixels) >= (y*img.width+x+1)*4 {
+		off := (y*img.width + x) * 4
+		copy(img.cpuPixels[off:off+4], pix)
+	} else {
+		img.invalidateCPUPixels()
+	}
 }
 
 // WritePixels uploads RGBA pixel data to the entire image.
@@ -601,9 +743,18 @@ func (img *Image) WritePixels(pix []byte) {
 	if img.padded {
 		// Upload into the content region of the padded texture.
 		img.texture.UploadRegion(pix, 1, 1, img.width, img.height, 0)
-		return
+	} else {
+		img.texture.Upload(pix, 0)
 	}
-	img.texture.Upload(pix, 0)
+	// Refresh the CPU cache with the newly-written bytes so ReadPixels
+	// stays on the fast path. Allocate the backing buffer if this is the
+	// first write to an image that didn't start from CPU data.
+	expected := img.width * img.height * 4
+	if len(img.cpuPixels) != expected {
+		img.cpuPixels = make([]byte, expected)
+	}
+	copy(img.cpuPixels, pix)
+	img.cpuPixelsValid = true
 }
 
 // WritePixelsRegion uploads RGBA pixel data to a rectangular region of the image.
@@ -619,6 +770,18 @@ func (img *Image) WritePixelsRegion(pix []byte, x, y, width, height int) {
 		ty++
 	}
 	img.texture.UploadRegion(pix, tx, ty, width, height, 0)
+	// Update the CPU cache region in-place when the cache is live so
+	// ReadPixels stays on the fast path after a partial write.
+	if img.cpuPixelsValid && len(img.cpuPixels) == img.width*img.height*4 &&
+		x >= 0 && y >= 0 && x+width <= img.width && y+height <= img.height {
+		for row := 0; row < height; row++ {
+			srcOff := row * width * 4
+			dstOff := ((y+row)*img.width + x) * 4
+			copy(img.cpuPixels[dstOff:dstOff+width*4], pix[srcOff:srcOff+width*4])
+		}
+	} else {
+		img.invalidateCPUPixels()
+	}
 }
 
 // DrawImageOptions holds options for DrawImage.
@@ -713,6 +876,7 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 		return
 	}
 	img.flushAABufferIfNeeded()
+	img.invalidateCPUPixels()
 	if opts != nil {
 		for _, src := range opts.Images {
 			src.flushAABufferIfNeeded()
@@ -798,6 +962,7 @@ func (img *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shade
 		return
 	}
 	img.flushAABufferIfNeeded()
+	img.invalidateCPUPixels()
 	if opts != nil {
 		for _, src := range opts.Images {
 			src.flushAABufferIfNeeded()

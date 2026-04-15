@@ -49,16 +49,33 @@ type renderer struct {
 	deferredDispose []*Image
 }
 
-// disposeDeferred drains the pending-disposal list. The engine calls this
-// once per frame, AFTER the sprite pass's Execute has flushed and
-// submitted its command buffer.
+// deferDispose queues an Image for GPU-resource teardown at the end of
+// the current frame, once the sprite pass has submitted its command
+// buffer. Called from Image.Dispose() so that callers can Dispose()
+// temporary images mid-frame without triggering "Destroyed texture
+// used in a submit" WebGPU validation errors — the batcher may still
+// hold draw commands referencing the image's texture at the time of
+// the Dispose() call.
+func (r *renderer) deferDispose(img *Image) {
+	if r == nil || img == nil {
+		return
+	}
+	r.deferredDispose = append(r.deferredDispose, img)
+}
+
+// disposeDeferred drains the pending-disposal list, invoking the
+// GPU-resource teardown (disposeNow) on each queued image. The engine
+// calls this once per frame, AFTER the sprite pass's Execute has
+// flushed and submitted its command buffer — at which point the GPU
+// queue owns the commands and destroying their referenced textures is
+// safe per the WebGPU spec.
 func (r *renderer) disposeDeferred() {
 	if r == nil {
 		return
 	}
 	for _, img := range r.deferredDispose {
 		if img != nil {
-			img.Dispose()
+			img.disposeNow()
 		}
 	}
 	r.deferredDispose = r.deferredDispose[:0]

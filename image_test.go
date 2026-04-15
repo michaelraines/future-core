@@ -205,6 +205,7 @@ func TestNewImageFromImageNonRGBA(t *testing.T) {
 
 func TestDisposeReleasesTexture(t *testing.T) {
 	dev, _ := withMockRenderer(t)
+	rend := getRenderer()
 
 	img := NewImage(32, 32)
 	require.NotNil(t, img.texture, "texture should be allocated")
@@ -215,11 +216,18 @@ func TestDisposeReleasesTexture(t *testing.T) {
 	mt := rt.colorTex
 	require.False(t, mt.disposed, "texture should not be disposed yet")
 
+	// Dispose marks the image as disposed immediately but defers the
+	// GPU-resource teardown until renderer.disposeDeferred() runs after
+	// the frame's submit. This avoids "Destroyed texture used in a
+	// submit" WebGPU validation errors from mid-frame disposals.
 	img.Dispose()
 	require.True(t, img.disposed, "image should be disposed")
-	// The render target dispose cascades to its color texture.
-	require.True(t, rt.disposed, "render target should be disposed when image is disposed")
-	require.Nil(t, img.texture, "texture reference should be nil after dispose")
+	require.False(t, rt.disposed, "render target should remain live until the deferred drain runs")
+	require.NotNil(t, img.texture, "texture reference should remain until the deferred drain runs")
+
+	rend.disposeDeferred()
+	require.True(t, rt.disposed, "render target should be disposed after the deferred drain")
+	require.Nil(t, img.texture, "texture reference should be nil after the deferred drain")
 }
 
 func TestDisposeIdempotent(t *testing.T) {
@@ -976,12 +984,19 @@ func TestNewImageCreatesRenderTarget(t *testing.T) {
 
 func TestDisposeReleasesRenderTarget(t *testing.T) {
 	dev, _ := withMockRenderer(t)
+	rend := getRenderer()
 
 	img := NewImage(32, 32)
 	require.NotNil(t, img.renderTarget)
 	rt := dev.renderTargets[0]
 
 	img.Dispose()
+	// Dispose is deferred — render target stays live until the
+	// renderer drains its deferred-dispose list after submit.
+	require.False(t, rt.disposed)
+	require.NotNil(t, img.renderTarget)
+
+	rend.disposeDeferred()
 	require.True(t, rt.disposed)
 	require.Nil(t, img.renderTarget)
 }
@@ -1849,6 +1864,7 @@ func TestAABufferNeedsClearOnParentClear(t *testing.T) {
 
 func TestAABufferDisposedOnImageDispose(t *testing.T) {
 	withMockRenderer(t)
+	rend := getRenderer()
 
 	img := NewImage(128, 128)
 	verts, idx := aaTriangle(10, 10, 50, 50)
@@ -1856,8 +1872,17 @@ func TestAABufferDisposedOnImageDispose(t *testing.T) {
 	require.NotNil(t, img.aaBuffer)
 
 	img.Dispose()
+	// Image.Dispose() marks the image as disposed immediately but
+	// defers the GPU-resource teardown to the end-of-frame drain
+	// (renderer.disposeDeferred) so in-flight draw commands don't
+	// reference destroyed textures. The image is unusable
+	// (disposed=true) but aaBuffer stays live until the deferred
+	// drain runs.
 	require.True(t, img.disposed)
-	require.Nil(t, img.aaBuffer, "img.Dispose() must release the AA buffer")
+	require.NotNil(t, img.aaBuffer, "AA buffer must still be alive until the deferred drain runs")
+
+	rend.disposeDeferred()
+	require.Nil(t, img.aaBuffer, "disposeDeferred must release the AA buffer")
 }
 
 func TestClearDisposedIsNoop(t *testing.T) {

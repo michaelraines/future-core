@@ -159,9 +159,18 @@ func (p *Path) AppendVerticesAndIndicesForStroke(
 		}
 
 		n := len(pts)
-		base := uint16(len(vertices))
 
-		// Generate 2 vertices per point.
+		// Track the actual vertex index of each point's first main
+		// vertex (the +nx vertex). joinOffset can append fan vertices
+		// for round joins BEFORE the main vertices for that point, so
+		// the main pair isn't at a fixed `base + i*2` offset — the
+		// quad-index loop must look up where each point's vertices
+		// actually landed. The previous code assumed 2 vertices per
+		// point and broke for any path with LineJoinRound, producing
+		// dashed/discontinuous strokes (each quad pointed at fan
+		// vertices instead of the main ones).
+		pointVertex := make([]uint16, n)
+
 		for i := 0; i < n; i++ {
 			var nx, ny float32
 
@@ -178,13 +187,15 @@ func (p *Path) AppendVerticesAndIndicesForStroke(
 				nx, ny = joinOffset(pts[i-1], pts[i], pts[i+1], half, lineJoin, miterLimit, &vertices, &indices)
 			}
 
+			pointVertex[i] = uint16(len(vertices)) //nolint:gosec // bounded by max vertex count
 			vertices = append(vertices,
 				futurerender.Vertex{DstX: pts[i].x + nx, DstY: pts[i].y + ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 				futurerender.Vertex{DstX: pts[i].x - nx, DstY: pts[i].y - ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 			)
 		}
 
-		// Generate quad indices for each segment.
+		// Generate quad indices for each segment, using the recorded
+		// vertex offsets rather than assuming a regular i*2 stride.
 		segCount := n - 1
 		if sp.closed {
 			segCount = n
@@ -194,10 +205,10 @@ func (p *Path) AppendVerticesAndIndicesForStroke(
 			if sp.closed {
 				j %= n
 			}
-			v0 := base + uint16(i*2)
-			v1 := base + uint16(i*2+1)
-			v2 := base + uint16(j*2)
-			v3 := base + uint16(j*2+1)
+			v0 := pointVertex[i]
+			v1 := pointVertex[i] + 1
+			v2 := pointVertex[j]
+			v3 := pointVertex[j] + 1
 			indices = append(indices, v0, v1, v2, v1, v3, v2)
 		}
 

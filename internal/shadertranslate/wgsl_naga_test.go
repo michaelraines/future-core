@@ -46,6 +46,36 @@ func TestNagaValidateDefaultSpriteShader(t *testing.T) {
 	validateWGSL(t, fResult.Source, "sprite_fragment")
 }
 
+// TestNagaValidateEngineSpriteShader validates the ACTUAL engine sprite
+// shader (from engine_js.go / engine_desktop.go / engine_android.go)
+// including the min(rgb, a) clamp. Regression test for a broken
+// translation where `c.rgb = min(c.rgb, vec3(c.a))` compiled fine in
+// GLSL but WGSL rejected it with "cannot assign to swizzle" because
+// WGSL swizzles are read-only. The engine shader now reconstructs the
+// vec4 in one expression: `c = vec4(min(c.rgb, vec3(c.a)), c.a)`.
+func TestNagaValidateEngineSpriteShader(t *testing.T) {
+	const engineFrag = `#version 330 core
+
+in vec2 vTexCoord;
+in vec4 vColor;
+
+uniform sampler2D uTexture;
+uniform mat4 uColorBody;
+uniform vec4 uColorTranslation;
+
+out vec4 fragColor;
+
+void main() {
+    vec4 c = texture(uTexture, vTexCoord) * vColor;
+    c = vec4(min(c.rgb, vec3(c.a)), c.a);
+    fragColor = uColorBody * c + uColorTranslation;
+}
+`
+	result, err := GLSLToWGSLFragment(engineFrag)
+	require.NoError(t, err)
+	validateWGSL(t, result.Source, "engine_sprite_fragment")
+}
+
 // TestNagaValidateKageShaders validates the full Kage → GLSL → WGSL
 // pipeline for real shader patterns used by the framework. Each test
 // compiles Kage source, translates to WGSL, and validates with naga.
@@ -162,6 +192,27 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
 	b := vec4(1.0, 0.0, 0.0, 1.0)
 	t := clamp(Blend, 0.0, 1.0)
 	return mix(a, b, t)
+}
+`,
+		},
+		{
+			// Regression: vector-showcase's color_adjust.kage uses
+			// clamp(vec3, 0, 1) with *integer* literals, which Kage and
+			// GLSL both auto-broadcast to the vector type. WGSL rejects
+			// this with "no matching call to clamp(vec3<f32>,
+			// abstract-int, abstract-int)" — the translator rewrites
+			// the saturate pattern to `saturate(x)` (works for scalars
+			// and vectors alike) so the shader compiles.
+			name: "clamp_vec3_int_literals_saturate",
+			kage: `//kage:unit pixels
+package main
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	clr := imageSrc0At(srcPos)
+	rgb := clr.rgb / clr.a
+	scanline := 0.7 + 0.3*step(0.5, fract(dstPos.y/4.0))
+	rgb = clamp(rgb*scanline, 0, 1) * clr.a
+	return vec4(rgb, clr.a)
 }
 `,
 		},

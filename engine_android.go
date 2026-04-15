@@ -66,6 +66,11 @@ out vec4 fragColor;
 
 void main() {
     vec4 c = texture(uTexture, vTexCoord) * vColor;
+    // Clamp RGB to alpha so (1,1,1,<1) vertex colors stay correctly
+    // premultiplied. Reconstruct vec4 in one expression because WGSL
+    // (other future-core backends) rejects swizzle assignment. See
+    // engine_js.go for the full explanation.
+    c = vec4(min(c.rgb, vec3(c.a)), c.a);
     fragColor = uColorBody * c + uColorTranslation;
 }
 `
