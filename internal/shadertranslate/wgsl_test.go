@@ -310,9 +310,9 @@ void main() {
 
 func TestWGSLUninitializedVarDecl(t *testing.T) {
 	tests := []struct {
-		name  string
-		glsl  string
-		want  string
+		name string
+		glsl string
+		want string
 	}{
 		{"float", "    float attenuation;", "    var attenuation: f32;"},
 		{"vec2", "    vec2 offset;", "    var offset: vec2<f32>;"},

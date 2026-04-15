@@ -294,7 +294,7 @@ func (b *Batcher) Flush() []Batch {
 				ColorBody:        cmd.ColorBody,
 				ColorTranslation: cmd.ColorTranslation,
 				ExtraTextureIDs:  cmd.ExtraTextureIDs,
-				Uniforms:      cmd.Uniforms,
+				Uniforms:         cmd.Uniforms,
 			})
 			current = &batches[len(batches)-1]
 			copy(current.Vertices, cmd.Vertices)

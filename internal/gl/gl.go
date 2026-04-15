@@ -247,12 +247,12 @@ func BlendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha uint32) {
 func BlendEquationSeparate(modeRGB, modeAlpha uint32) {
 	fnBlendEquationSeparate(modeRGB, modeAlpha)
 }
-func ClearColor(r, g, b, a float32)     { fnClearColor(r, g, b, a) }
-func ClearDepthf(d float32)             { fnClearDepth(float64(d)) }
-func Clear(mask uint32)                 { fnClear(mask) }
-func Viewport(x, y, w, h int32)         { fnViewport(x, y, w, h) }
-func Scissor(x, y, w, h int32)          { fnScissor(x, y, w, h) }
-func DepthFunc(fn uint32)               { fnDepthFunc(fn) }
+func ClearColor(r, g, b, a float32) { fnClearColor(r, g, b, a) }
+func ClearDepthf(d float32)         { fnClearDepth(float64(d)) }
+func Clear(mask uint32)             { fnClear(mask) }
+func Viewport(x, y, w, h int32)     { fnViewport(x, y, w, h) }
+func Scissor(x, y, w, h int32)      { fnScissor(x, y, w, h) }
+func DepthFunc(fn uint32)           { fnDepthFunc(fn) }
 
 func DepthMask(flag bool) {
 	v := uint8(0)

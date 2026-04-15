@@ -347,7 +347,7 @@ func (s *shader) SetUniformBlock(_ string, _ []byte) {
 }
 
 func (s *shader) PackCurrentUniforms() []byte { return nil }
-func (s *shader) Dispose() { gl.DeleteProgram(s.program) }
+func (s *shader) Dispose()                    { gl.DeleteProgram(s.program) }
 
 type renderTarget struct {
 	fbo      uint32

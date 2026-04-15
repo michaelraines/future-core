@@ -156,7 +156,7 @@ func (e *mockEncoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 	e.record("DrawIndexed", indexCount, instanceCount, firstIndex)
 }
 func (e *mockEncoder) SetBlendMode(_ backend.BlendMode) {}
-func (e *mockEncoder) Flush() { e.record("Flush") }
+func (e *mockEncoder) Flush()                           { e.record("Flush") }
 
 // callsByMethod returns all calls with the given method name.
 func (e *mockEncoder) callsByMethod(method string) []encoderCall {

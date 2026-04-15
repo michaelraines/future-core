@@ -49,16 +49,16 @@ type BlendFactor uint8
 // BlendFactor constants. The set mirrors the GLSL/GPU vocabulary used by
 // every target API (WebGPU, Metal, Vulkan, OpenGL, WebGL2, DX12).
 const (
-	BlendFactorZero                BlendFactor = iota // 0
-	BlendFactorOne                                    // 1
-	BlendFactorSrcAlpha                               // srcA
-	BlendFactorOneMinusSrcAlpha                       // 1 - srcA
-	BlendFactorDstAlpha                               // dstA
-	BlendFactorOneMinusDstAlpha                       // 1 - dstA
-	BlendFactorSrcColor                               // srcRGB
-	BlendFactorOneMinusSrcColor                       // 1 - srcRGB
-	BlendFactorDstColor                               // dstRGB
-	BlendFactorOneMinusDstColor                       // 1 - dstRGB
+	BlendFactorZero             BlendFactor = iota // 0
+	BlendFactorOne                                 // 1
+	BlendFactorSrcAlpha                            // srcA
+	BlendFactorOneMinusSrcAlpha                    // 1 - srcA
+	BlendFactorDstAlpha                            // dstA
+	BlendFactorOneMinusDstAlpha                    // 1 - dstA
+	BlendFactorSrcColor                            // srcRGB
+	BlendFactorOneMinusSrcColor                    // 1 - srcRGB
+	BlendFactorDstColor                            // dstRGB
+	BlendFactorOneMinusDstColor                    // 1 - dstRGB
 )
 
 // BlendOperation specifies how the weighted source and destination components

@@ -102,6 +102,7 @@ jobs:
           key: cargo-naga-${{ runner.os }}
 
       - name: Install naga-cli
+        shell: bash
         run: |
           if ! command -v naga &> /dev/null; then
             cargo install naga-cli
