@@ -121,6 +121,12 @@ type TextureDescriptor struct {
 	RenderTarget  bool        // can this texture be used as a render target attachment?
 	Data          []byte      // optional initial data
 	Image         *image.RGBA // optional initial image
+	// Label is a human-readable name shown in WebGPU/Vulkan validation
+	// errors and debugger captures (e.g. "sprite-atlas-page-0",
+	// "aa-buffer-for-frame-bg"). Optional — empty means unlabeled.
+	// Costs nothing at runtime since backends that don't expose a
+	// labeling facility just ignore it.
+	Label string
 }
 
 // Buffer represents a GPU buffer (vertex or index data).
@@ -144,6 +150,10 @@ type BufferDescriptor struct {
 	Usage   BufferUsage
 	Dynamic bool   // hint: buffer will be updated frequently
 	Data    []byte // optional initial data
+	// Label is a human-readable name shown in WebGPU/Vulkan validation
+	// errors and debugger captures (e.g. "sprite-pass-vertex",
+	// "uniform-ring"). Optional — empty means unlabeled.
+	Label string
 }
 
 // BufferUsage specifies how a buffer will be used.
@@ -228,6 +238,10 @@ type RenderTargetDescriptor struct {
 	HasDepth      bool
 	DepthFormat   TextureFormat
 	SampleCount   int
+	// Label is a human-readable name shown in WebGPU/Vulkan validation
+	// errors and debugger captures (e.g. "image-rt-<textureID>",
+	// "aa-buffer-rt"). Optional — empty means unlabeled.
+	Label string
 }
 
 // Pipeline represents a configured render pipeline state.

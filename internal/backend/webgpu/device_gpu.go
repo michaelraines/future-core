@@ -540,8 +540,13 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 		MipLevelCount: 1,
 		SampleCount:   1,
 	}
+	var labelBuf []byte
+	if desc.Label != "" {
+		texDesc.Label, labelBuf = wgpu.MakeStringView(desc.Label)
+	}
 
 	handle := wgpu.DeviceCreateTexture(d.device, &texDesc)
+	runtime.KeepAlive(labelBuf)
 	if handle == 0 {
 		return nil, fmt.Errorf("webgpu: failed to create texture")
 	}
@@ -583,8 +588,13 @@ func (d *Device) NewBuffer(desc backend.BufferDescriptor) (backend.Buffer, error
 		Usage: usage,
 		Size:  alignedSize,
 	}
+	var labelBuf []byte
+	if desc.Label != "" {
+		bufDesc.Label, labelBuf = wgpu.MakeStringView(desc.Label)
+	}
 
 	handle := wgpu.DeviceCreateBuffer(d.device, &bufDesc)
+	runtime.KeepAlive(labelBuf)
 	if handle == 0 {
 		return nil, fmt.Errorf("webgpu: failed to create buffer")
 	}

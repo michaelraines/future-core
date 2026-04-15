@@ -1,6 +1,7 @@
 package futurerender
 
 import (
+	"fmt"
 	goimage "image"
 	"image/color"
 	"image/draw"
@@ -131,6 +132,7 @@ func NewImage(width, height int) *Image {
 			Width:       width,
 			Height:      height,
 			ColorFormat: backend.TextureFormatRGBA8,
+			Label:       fmt.Sprintf("image-rt-%d-%dx%d", img.textureID, width, height),
 		})
 		if rtErr == nil {
 			img.renderTarget = rt
@@ -243,6 +245,7 @@ func NewImageFromImage(src goimage.Image) *Image {
 			WrapU:  backend.WrapClamp,
 			WrapV:  backend.WrapClamp,
 			Data:   padded,
+			Label:  fmt.Sprintf("image-tex-%dx%d", w, h),
 		})
 		if err == nil {
 			img.texture = tex

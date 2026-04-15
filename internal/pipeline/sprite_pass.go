@@ -130,6 +130,7 @@ func NewSpritePass(cfg SpritePassConfig) (*SpritePass, error) {
 		Size:    cfg.MaxVertices * batch.Vertex2DSize,
 		Usage:   backend.BufferUsageVertex,
 		Dynamic: true,
+		Label:   "sprite-pass-vertex",
 	})
 	if err != nil {
 		return nil, err
@@ -139,6 +140,7 @@ func NewSpritePass(cfg SpritePassConfig) (*SpritePass, error) {
 		Size:    cfg.MaxIndices * 4, // uint32 indices (4 bytes each)
 		Usage:   backend.BufferUsageIndex,
 		Dynamic: true,
+		Label:   "sprite-pass-index",
 	})
 	if err != nil {
 		vbuf.Dispose()
@@ -171,6 +173,7 @@ func (sp *SpritePass) growVertexBufferIfNeeded(needed int) error {
 		Size:    newCap * batch.Vertex2DSize,
 		Usage:   backend.BufferUsageVertex,
 		Dynamic: true,
+		Label:   "sprite-pass-vertex-grown",
 	})
 	if err != nil {
 		return err
@@ -192,6 +195,7 @@ func (sp *SpritePass) growIndexBufferIfNeeded(needed int) error {
 		Size:    newCap * 4,
 		Usage:   backend.BufferUsageIndex,
 		Dynamic: true,
+		Label:   "sprite-pass-index-grown",
 	})
 	if err != nil {
 		return err
