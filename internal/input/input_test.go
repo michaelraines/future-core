@@ -448,7 +448,7 @@ func TestKeyPressDurationCountsTicksHeld(t *testing.T) {
 func TestKeyPressDurationOutOfBoundsReturnsZero(t *testing.T) {
 	s := New()
 	require.Equal(t, 0, s.KeyPressDuration(platform.Key(-1)))
-	require.Equal(t, 0, s.KeyPressDuration(platform.Key(platform.KeyCount+10)))
+	require.Equal(t, 0, s.KeyPressDuration(platform.KeyCount+10))
 }
 
 func TestMouseButtonPressDurationCountsTicksHeld(t *testing.T) {
