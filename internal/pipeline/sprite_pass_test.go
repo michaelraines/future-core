@@ -15,12 +15,13 @@ import (
 type mockBuffer struct {
 	size     int
 	uploaded []byte
+	disposed bool
 }
 
 func (b *mockBuffer) Upload(data []byte)           { b.uploaded = data }
 func (b *mockBuffer) UploadRegion(_ []byte, _ int) {}
 func (b *mockBuffer) Size() int                    { return b.size }
-func (b *mockBuffer) Dispose()                     {}
+func (b *mockBuffer) Dispose()                     { b.disposed = true }
 
 type mockTexture struct {
 	w, h int
@@ -803,6 +804,139 @@ func TestSpritePassFilterChange(t *testing.T) {
 	// that a change was observed.
 	filterCalls := enc.callsByMethod("SetTextureFilter")
 	require.NotEmpty(t, filterCalls)
+}
+
+// --- Dynamic buffer growth ---
+//
+// The sprite pass starts with fixed-size vertex/index GPU buffers and
+// grows them when a frame's accumulated geometry exceeds capacity.
+// Without this, WebGPU rejects oversize uploads with "Write range
+// does not fit in Buffer size" and the whole frame renders empty —
+// see particle-garden, which routinely pushes >65k vertices.
+
+func TestSpritePassGrowVertexBufferNoOpWhenUnderCapacity(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+
+	oldBuf := sp.vertexBuf
+	require.NoError(t, sp.growVertexBufferIfNeeded(sp.vertexBufVerts))
+	require.Same(t, oldBuf, sp.vertexBuf, "buffer should not be replaced when cap is sufficient")
+	require.NoError(t, sp.growVertexBufferIfNeeded(sp.vertexBufVerts-10))
+	require.Same(t, oldBuf, sp.vertexBuf)
+}
+
+func TestSpritePassGrowVertexBufferDoublesCapacity(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b) // MaxVertices = 1024
+
+	oldBuf := sp.vertexBuf.(*mockBuffer)
+	require.NoError(t, sp.growVertexBufferIfNeeded(1025))
+
+	require.True(t, oldBuf.disposed, "old vertex buffer should be disposed on grow")
+	require.NotSame(t, backend.Buffer(oldBuf), sp.vertexBuf)
+	require.Equal(t, 2048, sp.vertexBufVerts, "should double when 2×current >= needed")
+	require.Equal(t, 2048*batch.Vertex2DSize, sp.vertexBuf.(*mockBuffer).size)
+}
+
+func TestSpritePassGrowVertexBufferSnapsToNeededWhenDoubleIsSmaller(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b) // cap = 1024
+
+	// needed > 2×cap → use needed exactly, don't leave us still short.
+	require.NoError(t, sp.growVertexBufferIfNeeded(5000))
+	require.Equal(t, 5000, sp.vertexBufVerts)
+}
+
+func TestSpritePassGrowIndexBufferDoublesCapacity(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+
+	oldBuf := sp.indexBuf.(*mockBuffer)
+	require.NoError(t, sp.growIndexBufferIfNeeded(1025))
+
+	require.True(t, oldBuf.disposed)
+	require.NotSame(t, backend.Buffer(oldBuf), sp.indexBuf)
+	require.Equal(t, 2048, sp.indexBufIndices)
+	require.Equal(t, 2048*4, sp.indexBuf.(*mockBuffer).size)
+}
+
+func TestSpritePassGrowVertexBufferAllocFailureLeavesOldBufferIntact(t *testing.T) {
+	// failingDevice fails on the Nth NewBuffer call. The initial
+	// SpritePass allocation uses calls 1 and 2 (vertex + index), so we
+	// fail on call 3 — the grow attempt.
+	callCount := 0
+	dev := &failingDevice{failOn: 3, callCount: &callCount}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     batch.NewBatcher(1024, 1024),
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
+
+	oldBuf := sp.vertexBuf.(*mockBuffer)
+	require.Error(t, sp.growVertexBufferIfNeeded(2048),
+		"grow must surface the backend's allocation failure")
+	require.Same(t, backend.Buffer(oldBuf), sp.vertexBuf,
+		"old buffer must stay bound when allocation fails so the pass can still render")
+	require.False(t, oldBuf.disposed,
+		"old buffer must NOT be disposed when allocation fails — we still need it")
+	require.Equal(t, 1024, sp.vertexBufVerts, "capacity stays unchanged on failure")
+}
+
+func TestSpritePassGrowWithNilDeviceIsNoOp(t *testing.T) {
+	// Some construction paths (tests, certain soft fallbacks) may not
+	// wire a device. The grow path must tolerate that rather than
+	// panicking — it just won't grow.
+	sp := &SpritePass{
+		vertexBufVerts:  100,
+		indexBufIndices: 100,
+	}
+	require.NoError(t, sp.growVertexBufferIfNeeded(1000))
+	require.NoError(t, sp.growIndexBufferIfNeeded(1000))
+	require.Equal(t, 100, sp.vertexBufVerts, "capacity unchanged when device is nil")
+	require.Equal(t, 100, sp.indexBufIndices)
+}
+
+func TestSpritePassExecuteGrowsBuffersOnOverflow(t *testing.T) {
+	// Starting capacity: 4 vertices, 6 indices. Three quads would need
+	// 12 verts / 18 indices — forces both buffers to grow during Execute.
+	dev := &mockDevice{}
+	b := batch.NewBatcher(1024, 1024)
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 4,
+		MaxIndices:  6,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
+
+	origVertexBuf := sp.vertexBuf
+	origIndexBuf := sp.indexBuf
+
+	// Three quads.
+	for range 3 {
+		b.Add(batch.DrawCommand{
+			Vertices: []batch.Vertex2D{{}, {}, {}, {}},
+			Indices:  []uint16{0, 1, 2, 0, 2, 3},
+		})
+	}
+
+	enc := &mockEncoder{}
+	require.NotPanics(t, func() {
+		sp.Execute(enc, NewPassContext(800, 600))
+	})
+
+	require.NotSame(t, origVertexBuf, sp.vertexBuf, "Execute must grow the vertex buffer when overflow is detected")
+	require.NotSame(t, origIndexBuf, sp.indexBuf, "Execute must grow the index buffer when overflow is detected")
+	require.GreaterOrEqual(t, sp.vertexBufVerts, 12)
+	require.GreaterOrEqual(t, sp.indexBufIndices, 18)
 }
 
 func TestIndexSliceToBytesU32(t *testing.T) {

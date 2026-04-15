@@ -31,9 +31,17 @@ type SpritePass struct {
 	pipeline backend.Pipeline
 	shader   backend.Shader
 
-	// Dynamic GPU buffers for per-frame vertex/index uploads.
-	vertexBuf backend.Buffer
-	indexBuf  backend.Buffer
+	// Dynamic GPU buffers for per-frame vertex/index uploads. The
+	// buffers start at the initial capacity requested via
+	// SpritePassConfig and grow on demand when a frame's cumulative
+	// vertex or index data exceeds the current allocation — see
+	// growVertexBufferIfNeeded / growIndexBufferIfNeeded. Growing uses
+	// dispose+re-allocate because WebGPU GPUBuffer is not resizable.
+	device          backend.Device
+	vertexBuf       backend.Buffer
+	indexBuf        backend.Buffer
+	vertexBufVerts  int // capacity of vertexBuf in Vertex2D units
+	indexBufIndices int // capacity of indexBuf in uint32 index slots
 
 	// screenCleared tracks whether the screen (target=0) has already been
 	// cleared this frame. When batches force the sprite pass to leave the
@@ -138,12 +146,60 @@ func NewSpritePass(cfg SpritePassConfig) (*SpritePass, error) {
 	}
 
 	return &SpritePass{
-		batcher:   cfg.Batcher,
-		pipeline:  cfg.Pipeline,
-		shader:    cfg.Shader,
-		vertexBuf: vbuf,
-		indexBuf:  ibuf,
+		batcher:         cfg.Batcher,
+		pipeline:        cfg.Pipeline,
+		shader:          cfg.Shader,
+		device:          cfg.Device,
+		vertexBuf:       vbuf,
+		indexBuf:        ibuf,
+		vertexBufVerts:  cfg.MaxVertices,
+		indexBufIndices: cfg.MaxIndices,
 	}, nil
+}
+
+// growVertexBufferIfNeeded ensures sp.vertexBuf can hold at least
+// needed vertices. If the current buffer is too small, it is disposed
+// and replaced with one sized to max(needed, 2×current) — amortized
+// O(1) growth over a run. Returns an error if the backend refuses the
+// new allocation.
+func (sp *SpritePass) growVertexBufferIfNeeded(needed int) error {
+	if needed <= sp.vertexBufVerts || sp.device == nil {
+		return nil
+	}
+	newCap := max(sp.vertexBufVerts*2, needed)
+	newBuf, err := sp.device.NewBuffer(backend.BufferDescriptor{
+		Size:    newCap * batch.Vertex2DSize,
+		Usage:   backend.BufferUsageVertex,
+		Dynamic: true,
+	})
+	if err != nil {
+		return err
+	}
+	sp.vertexBuf.Dispose()
+	sp.vertexBuf = newBuf
+	sp.vertexBufVerts = newCap
+	return nil
+}
+
+// growIndexBufferIfNeeded mirrors growVertexBufferIfNeeded for the
+// index buffer. Indices are uint32 (4 bytes each).
+func (sp *SpritePass) growIndexBufferIfNeeded(needed int) error {
+	if needed <= sp.indexBufIndices || sp.device == nil {
+		return nil
+	}
+	newCap := max(sp.indexBufIndices*2, needed)
+	newBuf, err := sp.device.NewBuffer(backend.BufferDescriptor{
+		Size:    newCap * 4,
+		Usage:   backend.BufferUsageIndex,
+		Dynamic: true,
+	})
+	if err != nil {
+		return err
+	}
+	sp.indexBuf.Dispose()
+	sp.indexBuf = newBuf
+	sp.indexBufIndices = newCap
+	return nil
 }
 
 // Name returns the pass name.
@@ -221,6 +277,20 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		for _, idx := range b.Indices {
 			sp.tmpIndices = append(sp.tmpIndices, uint32(idx)+baseVertex)
 		}
+	}
+
+	// Grow the GPU buffers if this frame's geometry exceeds the
+	// current allocation. Particle-heavy scenes (e.g. particle-garden)
+	// routinely exceed the 65k-vertex initial buffer; without this,
+	// WebGPU rejects the upload with "Write range does not fit in
+	// Buffer size" and the frame renders empty.
+	if err := sp.growVertexBufferIfNeeded(len(sp.tmpVertices)); err != nil {
+		tracef("sprite pass: grow vertex buffer failed: %v\n", err)
+		return
+	}
+	if err := sp.growIndexBufferIfNeeded(len(sp.tmpIndices)); err != nil {
+		tracef("sprite pass: grow index buffer failed: %v\n", err)
+		return
 	}
 
 	// Upload all vertex/index data at once. uint32 indices are
