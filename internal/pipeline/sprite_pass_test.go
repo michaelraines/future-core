@@ -827,7 +827,8 @@ func TestSpritePassGrowVertexBufferNoOpWhenUnderCapacity(t *testing.T) {
 
 func TestSpritePassGrowVertexBufferDoublesCapacity(t *testing.T) {
 	b := batch.NewBatcher(1024, 1024)
-	sp := newTestSpritePass(t, b) // MaxVertices = 1024
+	// newTestSpritePass starts the vertex buffer at 1024 capacity.
+	sp := newTestSpritePass(t, b)
 
 	oldBuf := sp.vertexBuf.(*mockBuffer)
 	require.NoError(t, sp.growVertexBufferIfNeeded(1025))
@@ -840,7 +841,8 @@ func TestSpritePassGrowVertexBufferDoublesCapacity(t *testing.T) {
 
 func TestSpritePassGrowVertexBufferSnapsToNeededWhenDoubleIsSmaller(t *testing.T) {
 	b := batch.NewBatcher(1024, 1024)
-	sp := newTestSpritePass(t, b) // cap = 1024
+	// newTestSpritePass starts the vertex buffer at 1024 capacity.
+	sp := newTestSpritePass(t, b)
 
 	// needed > 2×cap → use needed exactly, don't leave us still short.
 	require.NoError(t, sp.growVertexBufferIfNeeded(5000))
