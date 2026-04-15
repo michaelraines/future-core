@@ -75,6 +75,13 @@ func uniformSize(glslType string) int {
 	case "vec2":
 		return 8
 	case "vec3":
+		// WGSL/std140 `SizeOf(vec3<f32>)` is 12 (three tightly packed
+		// floats). The alignment is 16, but that only requires padding
+		// BEFORE the vec3 if the preceding offset isn't already 16-aligned.
+		// A following scalar (f32) packs at offset+12 with no extra pad.
+		// Returning 16 here made every field after a vec3 land 4 bytes
+		// past the WGSL layout position, which is why `Intensity` in
+		// the lighting shader read 0.0.
 		return 12
 	case "vec4":
 		return 16

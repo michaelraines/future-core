@@ -164,6 +164,13 @@ type Shader interface {
 	// SetUniformVec2 sets a vec2 uniform.
 	SetUniformVec2(name string, v [2]float32)
 
+	// SetUniformVec3 sets a vec3 uniform. The three floats occupy the
+	// declared 12 bytes of the vec3 slot in the uniform struct; callers
+	// that historically padded to vec4 and used SetUniformVec4 would
+	// corrupt the following struct member (because WGSL packs a scalar
+	// after a vec3 at offset+12, not offset+16).
+	SetUniformVec3(name string, v [3]float32)
+
 	// SetUniformVec4 sets a vec4 uniform.
 	SetUniformVec4(name string, v [4]float32)
 
@@ -175,6 +182,13 @@ type Shader interface {
 
 	// SetUniformBlock sets a uniform block's data.
 	SetUniformBlock(name string, data []byte)
+
+	// PackCurrentUniforms returns a byte snapshot of the shader's current
+	// uniform values, packed according to the backend's uniform layout.
+	// Returns nil if the shader has no uniforms. Used by DrawRectShader/
+	// DrawTrianglesShader to snapshot per-draw uniforms before the sprite
+	// pass runs (preventing later draws from overwriting earlier ones).
+	PackCurrentUniforms() []byte
 
 	// Dispose releases the shader's GPU resources.
 	Dispose()
@@ -248,6 +262,12 @@ type CommandEncoder interface {
 
 	// SetPipeline binds a render pipeline.
 	SetPipeline(pipeline Pipeline)
+
+	// SetBlendMode sets the blend mode for subsequent draws. On backends
+	// where blend is baked into the pipeline (WebGPU), this triggers a
+	// pipeline recreation if the mode differs from the pipeline's current
+	// blend. No-op for backends that handle blend as mutable state.
+	SetBlendMode(mode BlendMode)
 
 	// SetVertexBuffer binds a vertex buffer at the given slot.
 	SetVertexBuffer(buf Buffer, slot int)

@@ -66,6 +66,11 @@ out vec4 fragColor;
 
 void main() {
     vec4 c = texture(uTexture, vTexCoord) * vColor;
+    // Clamp RGB to alpha so (1,1,1,<1) vertex colors stay correctly
+    // premultiplied. Reconstruct vec4 in one expression because WGSL
+    // (other future-core backends) rejects swizzle assignment. See
+    // engine_js.go for the full explanation.
+    c = vec4(min(c.rgb, vec3(c.a)), c.a);
     fragColor = uColorBody * c + uColorTranslation;
 }
 `
@@ -219,11 +224,12 @@ func (e *engine) initRenderResources() error {
 		return e.renderTargets[targetID]
 	}
 	sp.ConsumePendingClear = func(targetID uint32) bool {
-		if e.rend.pendingClears[targetID] {
-			delete(e.rend.pendingClears, targetID)
-			return true
+		return e.rend.pendingClears.Consume(targetID)
+	}
+	sp.ApplyUniforms = func(shader backend.Shader, uniforms map[string]any) {
+		for name, val := range uniforms {
+			applyUniformValue(shader, name, val)
 		}
-		return false
 	}
 
 	// Build render pipeline.
@@ -484,7 +490,7 @@ func (e *engine) initDevice(win platform.Window) error {
 		registerRenderTarget: func(id uint32, rt backend.RenderTarget) {
 			e.renderTargets[id] = rt
 		},
-		pendingClears: make(map[uint32]bool),
+		pendingClears: newPendingClearTracker(),
 	}
 	e.rend = rend
 	setRenderer(rend)

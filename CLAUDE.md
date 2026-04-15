@@ -80,14 +80,23 @@ soft mode works with fewer frames. The script defaults to 60.
 
 When a rendering regression is hard to reproduce with visual testing alone
 (e.g. "some draws are missing on WebGPU but the same code works on soft"),
-two env-gated tracers in `internal/pipeline/trace.go` can dump per-frame
-metadata to stderr. Both tracers cap themselves at the first N frames so
-logs stay small.
+env-gated tracers and a shader-dump test can dump per-frame metadata to
+stderr. All tracers cap themselves at the first N frames so logs stay
+small, and the hot-path cost when disabled is a single atomic-int
+comparison.
 
-| Env var | Dumps |
-|---|---|
-| `FUTURE_CORE_TRACE_BATCHES=N` | The batcher's per-frame batch list after `Flush()`: target ID, texture ID, shader, filter, blend, vertex and index counts for each batch. Useful for confirming what the batcher actually handed to the sprite pass. |
-| `FUTURE_CORE_TRACE_PASSES=N` | Every `BeginRenderPass` call the sprite pass makes, with target ID, load action, viewport, and clear color. Useful for catching "the same target is entered twice per frame" and "the load action is wrong" bugs. |
+**Diagnostic tools**
+
+| Env var / command | Source | Dumps |
+|---|---|---|
+| `FUTURE_CORE_TRACE_BATCHES=N` | `internal/pipeline/trace.go` | The batcher's per-frame batch list after `Flush()`: target ID, texture ID, shader, filter, blend, vertex and index counts for each batch. Useful for confirming what the batcher actually handed to the sprite pass. |
+| `FUTURE_CORE_TRACE_PASSES=N` | `internal/pipeline/trace.go` | Every `BeginRenderPass` call the sprite pass makes, with target ID, load action, viewport, and clear color. Useful for catching "the same target is entered twice per frame" and "the load action is wrong" bugs. |
+| `FUTURE_CORE_TRACE_WEBGPU=N` | `internal/backend/webgpu/trace_js.go` | Every browser-WebGPU encoder call for the first N frames: `BeginRenderPass`, `SetPipeline` (with blend + format), `bindUniforms` (with dynamic offset and first 8 bytes of payload), `SetTexture`, `DrawIndexed`, `Flush`. WASM-only. Use when the batch/pass traces show the right sequence but pixels still look wrong — this dumps the actual WebGPU calls leaving the encoder, so you can diff against a hand-written baseline (e.g. `parity-tests/wgsl-lighting-demo/`). |
+| `go test -v -run TestDumpPointLightWGSL ./internal/shadertranslate/` | `internal/shadertranslate/tooling_dump_wgsl_test.go` | Prints every stage of the Kage → GLSL → WGSL translation for the lighting point-light shader, plus the combined uniform layout and the final post-merge WGSL actually sent to `createShaderModule`. Use when you suspect the translator is emitting something different from what you think it is. |
+| `FUTURE_CORE_TRACE_TEXT=1` | (text package) | Logs glyph creation, draw positions, target sizes, and color scale values. Diagnoses invisible text by confirming glyphs are rasterized and DrawImage is called. |
+| `FUTURE_CORE_NO_AA=1` | (image.go) | Bypasses `drawTrianglesAA` entirely, routing all `AntiAlias=true` draws through the aliased path. Useful for confirming whether a visual bug is caused by the AA buffer lifecycle. |
+| `FUTURE_CORE_AA_SCALE=1` | (image.go) | Uses 1x AA buffers instead of 2x. Keeps the AA pipeline active but eliminates supersample quality. Isolates buffer-size-related issues. |
+| `FUTURE_CORE_NO_ATLAS=1` | (sprite_atlas.go) | Disables sprite atlas packing. Each `NewImageFromImage` gets its own texture. Isolates atlas-related UV or texture-sharing bugs. |
 
 Typical debugging session — capture both traces for one frame of the
 `rttest` repro program:
@@ -517,8 +526,19 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   browser path creates per-draw temporary buffers (JS GC handles cleanup).
 - **WebGPU shader translation** — GLSL→WGSL via `internal/shadertranslate/wgsl.go`.
   Most GLSL built-ins pass through unchanged (WGSL has identical names).
-  `mod(x, y)` needs active translation to `(x % y)`. The translator does not
-  support array uniforms or custom function definitions.
+  `mod(x, y)` needs active translation to `(x % y)`. Kage image builtins
+  (`imageSrc0At`, etc.) are emitted as WGSL helper functions with
+  `textureSampleLevel`. The translator does not support array uniforms or
+  custom function definitions. WGSL output is validated by `naga-cli` in
+  CI (see `wgsl_naga_test.go`).
+  **2D assumptions in the translator** (must be revisited for 3D):
+  - `textureSampleLevel(..., 0.0)` hardcodes LOD=0 everywhere. For 3D
+    mipmapped textures, use `textureSample` (automatic LOD from
+    derivatives) or compute LOD explicitly.
+  - All textures are assumed `texture_2d<f32>`. 3D will need
+    `texture_3d`, `texture_cube`, and `texture_depth_2d`.
+  - Vertex format is hardcoded to `Vertex2D` (pos, uv, color). 3D
+    will need normals, tangents, bone weights.
 - **Known test requirement**: WebGPU native GPU tests require `libwgpu_native`
   at runtime. See `internal/backend/webgpu/GPU_TESTING.md` for the 7-tier
   validation checklist.
@@ -581,16 +601,31 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   the full image and persistent across frames (matching Ebitengine's
   `bigOffscreenBuffer`). Flushed back via a linear-filtered downsample
   quad at sync points (any public method that reads/writes the target's
-  texture). After each flush, a `pendingClear` is registered so the next
-  AA draw starts clean. A blend change triggers a flush. `Clear()` on the
-  parent sets `aaBufferNeedsClear` so the buffer is cleared before the
-  next AA draw. Sub-images can't own a buffer and fall back to aliased
-  rendering.
+  texture). After each flush, `pendingClearTracker.Request()` registers
+  a clear so the next AA draw starts clean — this is a **counter**, not
+  a boolean, because the AA buffer can be flushed and re-entered 17+
+  times per frame. `Clear()` uses `RequestOnce()` (idempotent) to avoid
+  double-clearing when called multiple times per frame (e.g.,
+  `imageClearWrapper` + `Frame.Draw`). A blend change triggers a flush.
+  `Clear()` on the parent sets `aaBufferNeedsClear` so the buffer is
+  cleared before the next AA draw. Sub-images can't own a buffer and
+  fall back to aliased rendering.
 - **`DrawTriangles` with `src=nil` uses `whiteTextureID`** — untextured
   draws (e.g., vector fills/strokes with vertex colors) must bind the
   white texture so vertex colors pass through unmodified. Using `texID=0`
   causes the sprite pass to skip texture binding (since `lastTextureID`
   starts at 0), leaving whatever texture was previously bound.
+- **Sprite pass sets filter BEFORE texture** — `SetTextureFilter` must be
+  called before `SetTexture` because the WebGPU encoder reads the current
+  filter when creating the texture bind group. If reversed, the bind group
+  uses the stale filter value (e.g., AA downsample gets nearest instead
+  of linear).
+- **`pendingClearTracker` uses Request vs RequestOnce** — `Request()`
+  accumulates (each AA flush needs its own clear). `RequestOnce()` is
+  idempotent (multiple `Clear()` calls per frame should produce one
+  clear, not N). Using the wrong method causes either stale AA content
+  (boolean collapse) or over-clearing (background wipe). Both bugs are
+  covered by `renderer_test.go`.
 
 ## Test Coverage Requirements
 

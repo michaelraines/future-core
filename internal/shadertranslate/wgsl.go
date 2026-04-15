@@ -241,6 +241,12 @@ func GLSLToWGSLFragment(glsl string) (WGSLResult, error) {
 		b.WriteString("\n")
 	}
 
+	// Emit Kage image helper functions. The Kage→GLSL compiler generates
+	// helper functions (imageSrc0At, imageSrc0UnsafeAt, etc.) outside
+	// void main(). Scan the GLSL source for calls to these functions and
+	// emit WGSL equivalents that use textureSample.
+	emitWGSLImageHelpers(&b, glsl, samplerUniforms)
+
 	// Fragment function.
 	b.WriteString("@fragment\nfn fs_main(in: FragmentInput) -> @location(0) vec4<f32> {\n")
 
@@ -266,6 +272,7 @@ func translateWGSLVertexLine(line string, attrs []attribute, uniforms []uniform,
 
 	// GLSL built-in translations.
 	s = replaceWGSLModCall(s)
+	s = replaceWGSLClampSaturate(s)
 
 	// gl_Position → out.position
 	s = strings.ReplaceAll(s, "gl_Position", "out.position")
@@ -302,6 +309,7 @@ func translateWGSLFragmentLine(line string, uniforms []uniform, varyings []varyi
 
 	// GLSL built-in translations.
 	s = replaceWGSLModCall(s)
+	s = replaceWGSLClampSaturate(s)
 
 	// texture(sampler, uv) → textureSample(sampler, sampler_sampler, uv)
 	for _, samp := range samplers {
@@ -326,25 +334,50 @@ func translateWGSLFragmentLine(line string, uniforms []uniform, varyings []varyi
 		s = strings.Replace(s, fragOutName+"=", "return", 1)
 	}
 
+	// Bare "return;" in GLSL fragment shaders is always redundant after
+	// the fragColor→return translation: either it follows a fragColor
+	// assignment (already translated to "return value;") or it's an
+	// early exit where fragColor was set earlier. Skip it to avoid
+	// WGSL "unreachable code" warnings.
+	if strings.TrimSpace(s) == "return;" {
+		return ""
+	}
+
 	return s
 }
 
 // reLocalVar matches GLSL local variable declarations: type name = expr;
 var reLocalVar = regexp.MustCompile(`^(\s*)(vec[234]|mat[34]|float|int|ivec[234]|bool)\s+(\w+)\s*=`)
 
-// replaceWGSLLocalVarDecl converts "type name = expr" to "var name: type = expr".
+// reLocalVarNoInit matches GLSL declarations without initializers: type name;
+var reLocalVarNoInit = regexp.MustCompile(`^(\s*)(vec[234]|mat[34]|float|int|ivec[234]|bool)\s+(\w+)\s*;`)
+
+// replaceWGSLLocalVarDecl converts "type name = expr" to "var name: type = expr"
+// and "type name;" to "var name: type;" (uninitialized).
 func replaceWGSLLocalVarDecl(s string) string {
+	// Try initialized declaration first.
 	m := reLocalVar.FindStringSubmatch(s)
-	if m == nil {
-		return s
+	if m != nil {
+		prefix := m[1]
+		glslT := m[2]
+		varName := m[3]
+		wT := wgslType(glslT)
+		old := m[0]
+		return strings.Replace(s, old, prefix+"var "+varName+": "+wT+" =", 1)
 	}
-	prefix := m[1]
-	glslT := m[2]
-	varName := m[3]
-	wT := wgslType(glslT)
-	// Replace the matched "type name =" portion.
-	old := m[0]
-	return strings.Replace(s, old, prefix+"var "+varName+": "+wT+" =", 1)
+
+	// Try uninitialized declaration.
+	m = reLocalVarNoInit.FindStringSubmatch(s)
+	if m != nil {
+		prefix := m[1]
+		glslT := m[2]
+		varName := m[3]
+		wT := wgslType(glslT)
+		old := m[0]
+		return strings.Replace(s, old, prefix+"var "+varName+": "+wT+";", 1)
+	}
+
+	return s
 }
 
 // reModCall matches GLSL mod(a, b) calls.
@@ -355,6 +388,108 @@ var reModCall = regexp.MustCompile(`\bmod\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)`)
 // behavior for float operands.
 func replaceWGSLModCall(s string) string {
 	return reModCall.ReplaceAllString(s, "($1 % $2)")
+}
+
+// replaceWGSLClampSaturate rewrites `clamp(X, 0, 1)` / `clamp(X, 0.0, 1.0)`
+// as `saturate(X)`. Motivation: GLSL (and Kage) auto-broadcast scalar
+// min/max args to match a vector first arg — `clamp(vec3, 0, 1)` is
+// valid and means per-channel clamp to [0,1]. WGSL is strictly typed
+// and rejects `clamp(vec3<f32>, abstract-int, abstract-int)` with
+// "no matching call". The WGSL `saturate(e)` built-in is defined for
+// scalars AND vectors of any float type and is semantically identical
+// to `clamp(e, 0.0, 1.0)`, so it threads through without needing full
+// type analysis of the first argument.
+//
+// Uses lexical scanning with paren-depth tracking rather than a single
+// regex because the first argument can itself contain commas and nested
+// parens (e.g. `clamp(mix(a, b, t) * scale, 0, 1)`).
+func replaceWGSLClampSaturate(s string) string {
+	var out strings.Builder
+	i := 0
+	for i < len(s) {
+		// Find the next `clamp(` that isn't part of a longer identifier.
+		idx := strings.Index(s[i:], "clamp(")
+		if idx < 0 {
+			out.WriteString(s[i:])
+			break
+		}
+		absIdx := i + idx
+		if absIdx > 0 && isIdentRune(s[absIdx-1]) {
+			// Something like `myClamp(` — skip past this match.
+			out.WriteString(s[i : absIdx+len("clamp(")])
+			i = absIdx + len("clamp(")
+			continue
+		}
+		// Emit everything up to and including `clamp(`.
+		out.WriteString(s[i:absIdx])
+		argStart := absIdx + len("clamp(")
+		// Walk forward to find the matching `)`, tracking paren depth.
+		depth := 1
+		end := argStart
+		for end < len(s) && depth > 0 {
+			switch s[end] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					goto foundEnd
+				}
+			}
+			end++
+		}
+	foundEnd:
+		if depth != 0 {
+			// Malformed — emit the rest unchanged and stop.
+			out.WriteString(s[absIdx:])
+			return out.String()
+		}
+		args := splitTopLevelCommas(s[argStart:end])
+		if len(args) == 3 &&
+			isZeroLiteral(strings.TrimSpace(args[1])) &&
+			isOneLiteral(strings.TrimSpace(args[2])) {
+			out.WriteString("saturate(")
+			out.WriteString(strings.TrimSpace(args[0]))
+			out.WriteString(")")
+		} else {
+			// Not the saturate pattern — preserve the original call.
+			out.WriteString("clamp(")
+			out.WriteString(s[argStart:end])
+			out.WriteString(")")
+		}
+		i = end + 1
+	}
+	return out.String()
+}
+
+// splitTopLevelCommas splits a string on commas that are not nested
+// inside parentheses, matching how a function-argument list is parsed.
+func splitTopLevelCommas(s string) []string {
+	var parts []string
+	depth := 0
+	last := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[last:i])
+				last = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[last:])
+	return parts
+}
+
+func isZeroLiteral(s string) bool { return s == "0" || s == "0.0" || s == "0." || s == ".0" }
+func isOneLiteral(s string) bool  { return s == "1" || s == "1.0" || s == "1." }
+
+func isIdentRune(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
 }
 
 // stripLineComment removes trailing // comments from a line.
@@ -394,15 +529,31 @@ func replaceWGSLTypes(s string) string {
 	return s
 }
 
-// replaceWGSLTextureCall replaces texture(sampler, uv) with textureSample(sampler, sampler_sampler, uv).
+// replaceWGSLTextureCall replaces texture(samplerName, uv) with
+// textureSampleLevel(samplerName, samplerName_sampler, uv, 0.0).
+// Uses textureSampleLevel instead of textureSample because
+// textureSample requires uniform control flow, which fails in any
+// fragment shader that has non-uniform if-branches (common in lighting).
+//
+// 2D ASSUMPTION: LOD is hardcoded to 0.0 because Phase 1 only uses
+// non-mipmapped 2D textures. For 3D with mipmapped textures, this
+// should either use textureSample (automatic mip from derivatives,
+// but requires uniform control flow) or compute the LOD explicitly.
+// See FUTURE_3D.md.
 func replaceWGSLTextureCall(s, samplerName string) string {
 	re := reTextureCall(samplerName)
-	return re.ReplaceAllString(s, "textureSample("+samplerName+", "+samplerName+"_sampler, ")
+	return re.ReplaceAllStringFunc(s, func(match string) string {
+		// match is "texture(samplerName, uv)" — extract the UV argument.
+		inner := match[strings.Index(match, ",")+1 : len(match)-1]
+		inner = strings.TrimSpace(inner)
+		return fmt.Sprintf("textureSampleLevel(%s, %s_sampler, %s, 0.0)", samplerName, samplerName, inner)
+	})
 }
 
-// reTextureCall builds a regex for texture(samplerName, ...).
+// reTextureCall builds a regex for texture(samplerName, uv).
+// Captures the full call including the closing paren.
 func reTextureCall(samplerName string) *regexp.Regexp {
-	return regexp.MustCompile(`texture\s*\(\s*` + regexp.QuoteMeta(samplerName) + `\s*,\s*`)
+	return regexp.MustCompile(`texture\s*\(\s*` + regexp.QuoteMeta(samplerName) + `\s*,\s*[^)]+\)`)
 }
 
 // buildWGSLUniformLayout computes byte offsets for uniform fields using WGSL/std140 rules.
@@ -414,10 +565,16 @@ func buildWGSLUniformLayout(uniforms []uniform) []UniformField {
 	offset := 0
 	for i, u := range uniforms {
 		size := uniformSize(u.typ)
+		// WGSL std140 alignment rules:
+		// f32, i32: align 4
+		// vec2<f32>: align 8
+		// vec3<f32>, vec4<f32>: align 16
+		// mat3x3, mat4x4: align 16
 		align := 4
-		if size >= 16 {
+		switch u.typ {
+		case "vec3", "vec4", "mat3", "mat4":
 			align = 16
-		} else if size == 8 {
+		case "vec2":
 			align = 8
 		}
 		if offset%align != 0 {
@@ -432,4 +589,110 @@ func buildWGSLUniformLayout(uniforms []uniform) []UniformField {
 		offset += size
 	}
 	return fields
+}
+
+// reImageSrcFunc detects Kage-generated imageSrcNAt/UnsafeAt function calls
+// in GLSL source to determine which image indices need WGSL helpers.
+var reImageSrcFunc = regexp.MustCompile(`imageSrc(\d)(At|UnsafeAt|Origin|Size)\b`)
+
+// reImageDstFunc detects Kage-generated imageDst helper calls.
+var reImageDstFunc = regexp.MustCompile(`imageDst(Origin|Size)\b`)
+
+// emitWGSLImageHelpers scans the GLSL source for Kage-generated image
+// helper function calls and emits equivalent WGSL function definitions.
+// The Kage→GLSL compiler (shaderir/kage.go) emits these as GLSL functions
+// outside void main(), which the WGSL translator otherwise skips.
+func emitWGSLImageHelpers(b *strings.Builder, glsl string, samplers []uniform) {
+	// Find which image indices are used.
+	usedImages := map[int]bool{}
+	for _, m := range reImageSrcFunc.FindAllStringSubmatch(glsl, -1) {
+		idx := int(m[1][0] - '0')
+		usedImages[idx] = true
+	}
+
+	useDst := reImageDstFunc.MatchString(glsl)
+
+	if len(usedImages) == 0 && !useDst {
+		return
+	}
+
+	// Build a sampler name lookup by index (uTexture0, uTexture1, etc.)
+	samplerByIndex := map[int]string{}
+	for _, s := range samplers {
+		// The Kage compiler names them uTexture0, uTexture1, etc.
+		for i := 0; i < 4; i++ {
+			name := fmt.Sprintf("uTexture%d", i)
+			if s.name == name {
+				samplerByIndex[i] = name
+			}
+		}
+		// Also handle the default uTexture (index 0).
+		if s.name == "uTexture" {
+			samplerByIndex[0] = "uTexture"
+		}
+	}
+
+	for i := 0; i < 4; i++ {
+		if !usedImages[i] {
+			continue
+		}
+		texName, ok := samplerByIndex[i]
+		if !ok {
+			continue // no matching texture uniform
+		}
+
+		// imageSrcNAt — bounds-checked texture sample.
+		// Uses textureSampleLevel (explicit LOD=0) instead of textureSample
+		// because textureSample requires uniform control flow. Shaders that
+		// have ANY non-uniform if-branch before the call site would fail
+		// validation even if the call is outside the branch.
+		//
+		// Kage's `kage:unit pixels` directive (the common case for 2D effects
+		// like lighting) passes pixel coordinates to imageSrcNAt. WGSL
+		// textureSampleLevel expects normalized UVs, so we divide by the
+		// texture dimensions before sampling.
+		//
+		// 2D ASSUMPTION: LOD 0.0 is correct for non-mipmapped 2D textures.
+		// For 3D, mipmapped textures need automatic LOD (textureSample) or
+		// explicit LOD computation. See FUTURE_3D.md.
+		fmt.Fprintf(b, "fn imageSrc%dAt(pos: vec2<f32>) -> vec4<f32> {\n", i)
+		fmt.Fprintf(b, "    let texDim = vec2<f32>(textureDimensions(%s));\n", texName)
+		fmt.Fprintf(b, "    let uv = pos / texDim;\n")
+		fmt.Fprintf(b, "    let sampled = textureSampleLevel(%s, %s_sampler, uv, 0.0);\n", texName, texName)
+		// Bounds check uses the texture's actual dimensions rather than the
+		// uImageSrcNOrigin/Size uniforms: those uniforms describe sub-image
+		// regions within an atlas and aren't populated by the CPU-side
+		// draw path today, so relying on them would make imageSrcNAt
+		// always return vec4(0) (lit up the lighting demo bug where every
+		// shader that sampled a source image wrote zero).
+		b.WriteString("    let inBounds = pos.x >= 0.0 && pos.y >= 0.0 && pos.x < texDim.x && pos.y < texDim.y;\n")
+		b.WriteString("    return select(vec4<f32>(0.0), sampled, inBounds);\n")
+		b.WriteString("}\n\n")
+
+		// imageSrcNUnsafeAt — unchecked texture sample.
+		fmt.Fprintf(b, "fn imageSrc%dUnsafeAt(pos: vec2<f32>) -> vec4<f32> {\n", i)
+		fmt.Fprintf(b, "    let texDim = vec2<f32>(textureDimensions(%s));\n", texName)
+		fmt.Fprintf(b, "    return textureSampleLevel(%s, %s_sampler, pos / texDim, 0.0);\n", texName, texName)
+		b.WriteString("}\n\n")
+
+		// imageSrcNOrigin — returns origin uniform.
+		fmt.Fprintf(b, "fn imageSrc%dOrigin() -> vec2<f32> {\n", i)
+		fmt.Fprintf(b, "    return uniforms.uImageSrc%dOrigin;\n", i)
+		b.WriteString("}\n\n")
+
+		// imageSrcNSize — returns size uniform.
+		fmt.Fprintf(b, "fn imageSrc%dSize() -> vec2<f32> {\n", i)
+		fmt.Fprintf(b, "    return uniforms.uImageSrc%dSize;\n", i)
+		b.WriteString("}\n\n")
+	}
+
+	if useDst {
+		b.WriteString("fn imageDstOrigin() -> vec2<f32> {\n")
+		b.WriteString("    return uniforms.uImageDstOrigin;\n")
+		b.WriteString("}\n\n")
+
+		b.WriteString("fn imageDstSize() -> vec2<f32> {\n")
+		b.WriteString("    return uniforms.uImageDstSize;\n")
+		b.WriteString("}\n\n")
+	}
 }

@@ -172,6 +172,24 @@ func (s *Shader) applyUniforms(uniforms map[string]any) {
 	}
 }
 
+// applyUniformValue sets a single uniform value on a backend shader,
+// handling type dispatch. Exported for use by the sprite pass's
+// ApplyUniforms callback.
+func applyUniformValue(sh backend.Shader, name string, val any) {
+	switch v := val.(type) {
+	case float32:
+		sh.SetUniformFloat(name, v)
+	case float64:
+		sh.SetUniformFloat(name, float32(v))
+	case int:
+		sh.SetUniformInt(name, int32(v))
+	case int32:
+		sh.SetUniformInt(name, v)
+	case []float32:
+		applyFloatSliceUniform(sh, name, v)
+	}
+}
+
 // applyFloatSliceUniform sets a uniform from a float32 slice, inferring the
 // type from the slice length.
 func applyFloatSliceUniform(sh backend.Shader, name string, v []float32) {
@@ -180,6 +198,15 @@ func applyFloatSliceUniform(sh backend.Shader, name string, v []float32) {
 		sh.SetUniformFloat(name, v[0])
 	case 2:
 		sh.SetUniformVec2(name, [2]float32{v[0], v[1]})
+	case 3:
+		// vec3<f32> has SizeOf=12 and AlignOf=16 in WGSL. The 16-byte
+		// alignment is handled by the struct-layout logic (pads offsets
+		// before the vec3) — the value itself must occupy exactly 12
+		// bytes, because when a scalar follows the vec3 it packs at
+		// offset+12, NOT offset+16. Writing 16 bytes here would clobber
+		// the following field (e.g. overwrite `Intensity` with 0 and
+		// make every light invisible in the lighting demo).
+		sh.SetUniformVec3(name, [3]float32{v[0], v[1], v[2]})
 	case 4:
 		sh.SetUniformVec4(name, [4]float32{v[0], v[1], v[2], v[3]})
 	case 16:

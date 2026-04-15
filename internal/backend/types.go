@@ -43,16 +43,104 @@ func AttributeFormatSize(f AttributeFormat) int {
 	}
 }
 
-// BlendMode specifies how source and destination colors are combined.
-type BlendMode int
+// BlendFactor specifies a per-channel source or destination blend factor.
+type BlendFactor uint8
 
-// BlendMode constants.
+// BlendFactor constants. The set mirrors the GLSL/GPU vocabulary used by
+// every target API (WebGPU, Metal, Vulkan, OpenGL, WebGL2, DX12).
 const (
-	BlendNone           BlendMode = iota // No blending (opaque)
-	BlendSourceOver                      // Standard alpha: src*srcA + dst*(1-srcA)
-	BlendAdditive                        // Additive: src + dst
-	BlendMultiplicative                  // Multiply: src * dst
-	BlendPremultiplied                   // Premultiplied alpha
+	BlendFactorZero             BlendFactor = iota // 0
+	BlendFactorOne                                 // 1
+	BlendFactorSrcAlpha                            // srcA
+	BlendFactorOneMinusSrcAlpha                    // 1 - srcA
+	BlendFactorDstAlpha                            // dstA
+	BlendFactorOneMinusDstAlpha                    // 1 - dstA
+	BlendFactorSrcColor                            // srcRGB
+	BlendFactorOneMinusSrcColor                    // 1 - srcRGB
+	BlendFactorDstColor                            // dstRGB
+	BlendFactorOneMinusDstColor                    // 1 - dstRGB
+)
+
+// BlendOperation specifies how the weighted source and destination components
+// are combined to produce the final pixel value.
+type BlendOperation uint8
+
+// BlendOperation constants.
+const (
+	BlendOpAdd             BlendOperation = iota // src*srcF + dst*dstF
+	BlendOpSubtract                              // src*srcF - dst*dstF
+	BlendOpReverseSubtract                       // dst*dstF - src*srcF
+	BlendOpMin                                   // min(src, dst) (factors ignored)
+	BlendOpMax                                   // max(src, dst) (factors ignored)
+)
+
+// BlendMode specifies how source and destination colors are combined.
+//
+// A BlendMode is a value type. Zero value == BlendNone (no blending, opaque
+// write). Preset values (BlendSourceOver, BlendAdditive, BlendMultiplicative,
+// BlendPremultiplied) are defined below, and any custom combination of
+// factors/operations is permitted — no information is lost between the
+// public Blend struct and the pipeline builder.
+type BlendMode struct {
+	// Enabled is false for BlendNone. A pipeline with Enabled=false
+	// writes source pixels directly to the framebuffer, ignoring all
+	// factor/operation fields.
+	Enabled bool
+
+	SrcFactorRGB   BlendFactor
+	SrcFactorAlpha BlendFactor
+	DstFactorRGB   BlendFactor
+	DstFactorAlpha BlendFactor
+
+	OpRGB   BlendOperation
+	OpAlpha BlendOperation
+}
+
+// Preset BlendMode values. These remain usable as named constants and as
+// comparable values in switch statements (structs of comparable fields are
+// comparable in Go).
+var (
+	// BlendNone disables blending entirely. Source pixels overwrite dst.
+	BlendNone = BlendMode{Enabled: false}
+
+	// BlendSourceOver is standard alpha blending with premultiplied source:
+	//   result = src + dst*(1 - srcA)
+	BlendSourceOver = BlendMode{
+		Enabled:        true,
+		SrcFactorRGB:   BlendFactorOne,
+		SrcFactorAlpha: BlendFactorOne,
+		DstFactorRGB:   BlendFactorOneMinusSrcAlpha,
+		DstFactorAlpha: BlendFactorOneMinusSrcAlpha,
+		OpRGB:          BlendOpAdd,
+		OpAlpha:        BlendOpAdd,
+	}
+
+	// BlendAdditive adds source to destination: result = src + dst.
+	BlendAdditive = BlendMode{
+		Enabled:        true,
+		SrcFactorRGB:   BlendFactorOne,
+		SrcFactorAlpha: BlendFactorOne,
+		DstFactorRGB:   BlendFactorOne,
+		DstFactorAlpha: BlendFactorOne,
+		OpRGB:          BlendOpAdd,
+		OpAlpha:        BlendOpAdd,
+	}
+
+	// BlendMultiplicative multiplies source by destination: result = src*dst.
+	BlendMultiplicative = BlendMode{
+		Enabled:        true,
+		SrcFactorRGB:   BlendFactorDstColor,
+		SrcFactorAlpha: BlendFactorDstAlpha,
+		DstFactorRGB:   BlendFactorZero,
+		DstFactorAlpha: BlendFactorZero,
+		OpRGB:          BlendOpAdd,
+		OpAlpha:        BlendOpAdd,
+	}
+
+	// BlendPremultiplied is the same factors as BlendSourceOver — kept
+	// as a named alias for legibility in call sites that explicitly
+	// want to signal they are working in premultiplied color space.
+	BlendPremultiplied = BlendSourceOver
 )
 
 // CompareFunc specifies a depth/stencil comparison function.

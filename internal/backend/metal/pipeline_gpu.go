@@ -37,7 +37,7 @@ func (p *Pipeline) createPipelineState() error {
 		return nil
 	}
 
-	blendEnabled, srcRGB, dstRGB, srcAlpha, dstAlpha := mtlBlendConfig(p.desc.BlendMode)
+	blendEnabled, srcRGB, dstRGB, srcAlpha, dstAlpha, opRGB, opAlpha := mtlBlendConfig(p.desc.BlendMode)
 
 	// Build vertex descriptor from pipeline's vertex format.
 	var vertexAttrs []mtl.VertexAttr
@@ -59,6 +59,7 @@ func (p *Pipeline) createPipelineState() error {
 		mtl.PixelFormatRGBA8Unorm,
 		blendEnabled,
 		srcRGB, dstRGB, srcAlpha, dstAlpha,
+		opRGB, opAlpha,
 		vertexAttrs, stride,
 	)
 	if err != nil {
@@ -69,26 +70,61 @@ func (p *Pipeline) createPipelineState() error {
 }
 
 // mtlBlendConfig returns Metal blend parameters for a backend blend mode.
-func mtlBlendConfig(mode backend.BlendMode) (enabled bool, srcRGB, dstRGB, srcAlpha, dstAlpha int) {
-	switch mode {
-	case backend.BlendSourceOver:
-		return true,
-			mtl.BlendFactorSourceAlpha, mtl.BlendFactorOneMinusSourceAlpha,
-			mtl.BlendFactorOne, mtl.BlendFactorOneMinusSourceAlpha
-	case backend.BlendAdditive:
-		return true,
-			mtl.BlendFactorSourceAlpha, mtl.BlendFactorOne,
-			mtl.BlendFactorOne, mtl.BlendFactorOne
-	case backend.BlendMultiplicative:
-		return true,
-			mtl.BlendFactorDestinationColor, mtl.BlendFactorZero,
-			mtl.BlendFactorDestinationAlpha, mtl.BlendFactorZero
-	case backend.BlendPremultiplied:
-		return true,
-			mtl.BlendFactorOne, mtl.BlendFactorOneMinusSourceAlpha,
-			mtl.BlendFactorOne, mtl.BlendFactorOneMinusSourceAlpha
+// Honours arbitrary factor/operation combinations by mapping each struct
+// field to the corresponding MTLBlendFactor / MTLBlendOperation constant.
+func mtlBlendConfig(mode backend.BlendMode) (enabled bool, srcRGB, dstRGB, srcAlpha, dstAlpha, opRGB, opAlpha int) {
+	if !mode.Enabled {
+		return false, 0, 0, 0, 0, 0, 0
+	}
+	return true,
+		mtlBlendFactor(mode.SrcFactorRGB), mtlBlendFactor(mode.DstFactorRGB),
+		mtlBlendFactor(mode.SrcFactorAlpha), mtlBlendFactor(mode.DstFactorAlpha),
+		mtlBlendOp(mode.OpRGB), mtlBlendOp(mode.OpAlpha)
+}
+
+// mtlBlendFactor maps a backend BlendFactor to the MTLBlendFactor constant.
+func mtlBlendFactor(f backend.BlendFactor) int {
+	switch f {
+	case backend.BlendFactorZero:
+		return mtl.BlendFactorZero
+	case backend.BlendFactorOne:
+		return mtl.BlendFactorOne
+	case backend.BlendFactorSrcAlpha:
+		return mtl.BlendFactorSourceAlpha
+	case backend.BlendFactorOneMinusSrcAlpha:
+		return mtl.BlendFactorOneMinusSourceAlpha
+	case backend.BlendFactorDstAlpha:
+		return mtl.BlendFactorDestinationAlpha
+	case backend.BlendFactorOneMinusDstAlpha:
+		return mtl.BlendFactorOneMinusDestinationAlpha
+	case backend.BlendFactorSrcColor:
+		return mtl.BlendFactorSourceColor
+	case backend.BlendFactorOneMinusSrcColor:
+		return mtl.BlendFactorOneMinusSourceColor
+	case backend.BlendFactorDstColor:
+		return mtl.BlendFactorDestinationColor
+	case backend.BlendFactorOneMinusDstColor:
+		return mtl.BlendFactorOneMinusDestinationColor
 	default:
-		return false, 0, 0, 0, 0
+		return mtl.BlendFactorOne
+	}
+}
+
+// mtlBlendOp maps a backend BlendOperation to the MTLBlendOperation constant.
+func mtlBlendOp(op backend.BlendOperation) int {
+	switch op {
+	case backend.BlendOpAdd:
+		return mtl.BlendOperationAdd
+	case backend.BlendOpSubtract:
+		return mtl.BlendOperationSubtract
+	case backend.BlendOpReverseSubtract:
+		return mtl.BlendOperationReverseSubtract
+	case backend.BlendOpMin:
+		return mtl.BlendOperationMin
+	case backend.BlendOpMax:
+		return mtl.BlendOperationMax
+	default:
+		return mtl.BlendOperationAdd
 	}
 }
 

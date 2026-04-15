@@ -27,6 +27,7 @@ func Compile(src []byte) (*CompileResult, error) {
 		fset:          fset,
 		uniforms:      nil,
 		usesPixelUnit: false,
+		localTypes:    make(map[string]string),
 	}
 
 	// Process directives from comments.
@@ -103,6 +104,9 @@ type compiler struct {
 	fragDstPos string
 	fragSrcPos string
 	fragColor  string
+	// localTypes tracks inferred types for local variables (name → GLSL type).
+	// Populated during compilation for use by inferType.
+	localTypes map[string]string
 }
 
 func (c *compiler) validateFragmentSig(fn *ast.FuncDecl) error {
@@ -148,7 +152,13 @@ func (c *compiler) emitVertexShader() string {
 	b.WriteString("    vTexCoord = aTexCoord;\n")
 	b.WriteString("    vColor = aColor;\n")
 	b.WriteString("    gl_Position = uProjection * vec4(aPosition, 0.0, 1.0);\n")
-	b.WriteString("    vDstPos = gl_Position;\n")
+	// Kage's `dstPos` fragment input is documented to be the destination
+	// pixel coordinates (matching the `kage:unit pixels` directive). Pass
+	// through the raw input position — NOT gl_Position, which is already
+	// in clip space and would make light shaders' pixel-space distance
+	// comparisons (e.g. `distance(dstPos.xy, uniforms.Center)` where
+	// Center is in pixels) return huge values, triggering early returns.
+	b.WriteString("    vDstPos = vec4(aPosition, 0.0, 1.0);\n")
 	b.WriteString("}\n")
 	return b.String()
 }
@@ -202,6 +212,11 @@ func (c *compiler) emitFragmentShader(fn *ast.FuncDecl) string {
 	b.WriteString("    vec4 ")
 	b.WriteString(c.fragColor)
 	b.WriteString(" = vColor;\n")
+
+	// Register fragment parameter types for type inference.
+	c.localTypes[c.fragDstPos] = "vec4"
+	c.localTypes[c.fragSrcPos] = "vec2"
+	c.localTypes[c.fragColor] = "vec4"
 
 	// Transpile the function body.
 	c.emitBlock(&b, fn.Body, 1)
@@ -276,6 +291,7 @@ func (c *compiler) emitStmt(b *strings.Builder, stmt ast.Stmt, indent int) {
 				}
 				typeName := c.typeString(vs.Type)
 				for i, name := range vs.Names {
+					c.localTypes[name.Name] = typeName
 					if i < len(vs.Values) {
 						fmt.Fprintf(b, "%s%s %s = %s;\n", prefix, typeName, name.Name, c.exprString(vs.Values[i]))
 					} else {
@@ -311,12 +327,14 @@ func (c *compiler) emitAssign(b *strings.Builder, s *ast.AssignStmt, prefix stri
 	if s.Tok == token.DEFINE {
 		// Short variable declaration: x := expr
 		for i, lhs := range s.Lhs {
-			if i < len(s.Rhs) {
-				rhsStr := c.exprString(s.Rhs[i])
-				// Infer type from RHS. For simplicity, use auto-typed declaration.
-				typeName := c.inferType(s.Rhs[i])
-				fmt.Fprintf(b, "%s%s %s = %s;\n", prefix, typeName, c.exprString(lhs), rhsStr)
+			if i >= len(s.Rhs) {
+				continue
 			}
+			rhsStr := c.exprString(s.Rhs[i])
+			typeName := c.inferType(s.Rhs[i])
+			varName := c.exprString(lhs)
+			c.localTypes[varName] = typeName
+			fmt.Fprintf(b, "%s%s %s = %s;\n", prefix, typeName, varName, rhsStr)
 		}
 	} else {
 		// Regular assignment.
@@ -504,28 +522,103 @@ func (c *compiler) inferType(expr ast.Expr) string {
 		if IsImageBuiltin(funcName) {
 			return "vec2"
 		}
-		// For built-in functions, default to float.
+		// Built-in functions that always return scalar.
+		switch funcName {
+		case "dot", "length", "distance":
+			return "float"
+		}
+		// Most GLSL built-in functions (normalize, clamp, mix, abs, min,
+		// max, reflect, etc.) preserve their first argument's type.
+		if len(e.Args) > 0 {
+			return c.inferType(e.Args[0])
+		}
 		return "float"
-	case *ast.BinaryExpr:
+	case *ast.ParenExpr:
 		return c.inferType(e.X)
+	case *ast.BinaryExpr:
+		// Scalar-vector broadcasting: `float - vec3` yields vec3.
+		// Matrix-vector / matrix-matrix multiplies follow GLSL rules.
+		return widenBinaryType(c.inferType(e.X), c.inferType(e.Y), e.Op.String())
 	case *ast.UnaryExpr:
 		return c.inferType(e.X)
 	case *ast.SelectorExpr:
-		// x.y — could be swizzle; infer from number of components.
 		sel := e.Sel.Name
-		switch len(sel) {
-		case 1:
-			return "float"
-		case 2:
-			return "vec2"
-		case 3:
-			return "vec3"
-		case 4:
-			return "vec4"
-		default:
-			return "float"
+		// Swizzles use characters from xyzwrgba and are 1-4 chars.
+		if len(sel) >= 1 && len(sel) <= 4 && isSwizzle(sel) {
+			switch len(sel) {
+			case 1:
+				return "float"
+			case 2:
+				return "vec2"
+			case 3:
+				return "vec3"
+			case 4:
+				return "vec4"
+			}
 		}
+		// Struct field access (e.g., uniforms.LightDir) — check if the
+		// field is a known uniform and use its declared type.
+		fieldName := sel
+		for _, u := range c.uniforms {
+			if u.Name == fieldName {
+				return u.Type.GLSLName()
+			}
+		}
+		// Fall back to inferring from the parent expression context.
+		return "float"
+	case *ast.Ident:
+		// Check uniforms.
+		for _, u := range c.uniforms {
+			if u.Name == e.Name {
+				return u.Type.GLSLName()
+			}
+		}
+		// Check local variables.
+		if t, ok := c.localTypes[e.Name]; ok {
+			return t
+		}
+		return "float"
+
 	default:
 		return "float"
 	}
+}
+
+// widenBinaryType returns the GLSL type of a binary operation on two operands.
+// GLSL rules: scalar-vector broadcasts to the vector; matrix*vector yields
+// the vector; matrix*matrix yields the matrix; matrix*scalar yields the
+// matrix. Same-category same-size operands preserve their type.
+func widenBinaryType(a, b, op string) string {
+	isScalar := func(t string) bool { return t == "float" || t == "int" || t == "bool" }
+	isVec := func(t string) bool { return strings.HasPrefix(t, "vec") }
+	isMat := func(t string) bool { return strings.HasPrefix(t, "mat") }
+
+	if op == "*" {
+		switch {
+		case isMat(a) && isVec(b):
+			return b
+		case isVec(a) && isMat(b):
+			return a
+		}
+	}
+	switch {
+	case isScalar(a) && (isVec(b) || isMat(b)):
+		return b
+	case (isVec(a) || isMat(a)) && isScalar(b):
+		return a
+	}
+	return a
+}
+
+// isSwizzle returns true if s consists only of swizzle characters (xyzwrgba).
+func isSwizzle(s string) bool {
+	for _, c := range s {
+		switch c {
+		case 'x', 'y', 'z', 'w', 'r', 'g', 'b', 'a':
+			continue
+		default:
+			return false
+		}
+	}
+	return s != ""
 }

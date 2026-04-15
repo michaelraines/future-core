@@ -87,9 +87,20 @@ const (
 
 	ZERO                = 0
 	ONE                 = 1
+	SRC_COLOR           = 0x0300
+	ONE_MINUS_SRC_COLOR = 0x0301
 	SRC_ALPHA           = 0x0302
 	ONE_MINUS_SRC_ALPHA = 0x0303
+	DST_ALPHA           = 0x0304
+	ONE_MINUS_DST_ALPHA = 0x0305
 	DST_COLOR           = 0x0306
+	ONE_MINUS_DST_COLOR = 0x0307
+
+	FUNC_ADD              = 0x8006
+	MIN                   = 0x8007
+	MAX                   = 0x8008
+	FUNC_SUBTRACT         = 0x800A
+	FUNC_REVERSE_SUBTRACT = 0x800B
 
 	FRONT = 0x0404
 	BACK  = 0x0405
@@ -132,7 +143,9 @@ var (
 	fnEnable  func(cap uint32)
 	fnDisable func(cap uint32)
 
-	fnBlendFunc func(sfactor, dfactor uint32)
+	fnBlendFunc             func(sfactor, dfactor uint32)
+	fnBlendFuncSeparate     func(srcRGB, dstRGB, srcAlpha, dstAlpha uint32)
+	fnBlendEquationSeparate func(modeRGB, modeAlpha uint32)
 
 	fnClearColor func(r, g, b, a float32)
 	fnClearDepth func(d float64) // GL 1.0: glClearDepth takes GLdouble
@@ -178,6 +191,7 @@ var (
 	fnProgramUniform1f        func(program uint32, location int32, v0 float32)
 	fnProgramUniform1i        func(program uint32, location int32, v0 int32)
 	fnProgramUniform2fv       func(program uint32, location, count int32, value *float32)
+	fnProgramUniform3fv       func(program uint32, location, count int32, value *float32)
 	fnProgramUniform4fv       func(program uint32, location, count int32, value *float32)
 	fnProgramUniformMatrix4fv func(program uint32, location, count int32, transpose uint8, value *float32)
 
@@ -227,12 +241,18 @@ var (
 func Enable(cap uint32)                 { fnEnable(cap) }
 func Disable(cap uint32)                { fnDisable(cap) }
 func BlendFunc(sfactor, dfactor uint32) { fnBlendFunc(sfactor, dfactor) }
-func ClearColor(r, g, b, a float32)     { fnClearColor(r, g, b, a) }
-func ClearDepthf(d float32)             { fnClearDepth(float64(d)) }
-func Clear(mask uint32)                 { fnClear(mask) }
-func Viewport(x, y, w, h int32)         { fnViewport(x, y, w, h) }
-func Scissor(x, y, w, h int32)          { fnScissor(x, y, w, h) }
-func DepthFunc(fn uint32)               { fnDepthFunc(fn) }
+func BlendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha uint32) {
+	fnBlendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha)
+}
+func BlendEquationSeparate(modeRGB, modeAlpha uint32) {
+	fnBlendEquationSeparate(modeRGB, modeAlpha)
+}
+func ClearColor(r, g, b, a float32) { fnClearColor(r, g, b, a) }
+func ClearDepthf(d float32)         { fnClearDepth(float64(d)) }
+func Clear(mask uint32)             { fnClear(mask) }
+func Viewport(x, y, w, h int32)     { fnViewport(x, y, w, h) }
+func Scissor(x, y, w, h int32)      { fnScissor(x, y, w, h) }
+func DepthFunc(fn uint32)           { fnDepthFunc(fn) }
 
 func DepthMask(flag bool) {
 	v := uint8(0)
@@ -328,6 +348,10 @@ func ProgramUniform1i(program uint32, location int32, v0 int32) {
 
 func ProgramUniform2fv(program uint32, location, count int32, value *float32) {
 	fnProgramUniform2fv(program, location, count, value)
+}
+
+func ProgramUniform3fv(program uint32, location, count int32, value *float32) {
+	fnProgramUniform3fv(program, location, count, value)
 }
 
 func ProgramUniform4fv(program uint32, location, count int32, value *float32) {
@@ -511,6 +535,8 @@ func Init() error {
 		{&fnEnable, "glEnable"},
 		{&fnDisable, "glDisable"},
 		{&fnBlendFunc, "glBlendFunc"},
+		{&fnBlendFuncSeparate, "glBlendFuncSeparate"},
+		{&fnBlendEquationSeparate, "glBlendEquationSeparate"},
 		{&fnClearColor, "glClearColor"},
 		{&fnClearDepth, "glClearDepth"},
 		{&fnClear, "glClear"},
@@ -633,6 +659,7 @@ func Init() error {
 		{&fnProgramUniform1f, "glProgramUniform1f"},
 		{&fnProgramUniform1i, "glProgramUniform1i"},
 		{&fnProgramUniform2fv, "glProgramUniform2fv"},
+		{&fnProgramUniform3fv, "glProgramUniform3fv"},
 		{&fnProgramUniform4fv, "glProgramUniform4fv"},
 		{&fnProgramUniformMatrix4fv, "glProgramUniformMatrix4fv"},
 	} {

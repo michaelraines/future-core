@@ -40,10 +40,12 @@ type mockShader struct {
 
 func (s *mockShader) SetUniformFloat(name string, v float32)    { s.uniforms[name] = v }
 func (s *mockShader) SetUniformVec2(name string, v [2]float32)  { s.uniforms[name] = v }
+func (s *mockShader) SetUniformVec3(name string, v [3]float32)  { s.uniforms[name] = v }
 func (s *mockShader) SetUniformVec4(name string, v [4]float32)  { s.uniforms[name] = v }
 func (s *mockShader) SetUniformMat4(name string, v [16]float32) { s.uniforms[name] = v }
 func (s *mockShader) SetUniformInt(name string, v int32)        { s.uniforms[name] = v }
 func (s *mockShader) SetUniformBlock(_ string, _ []byte)        {}
+func (s *mockShader) PackCurrentUniforms() []byte               { return nil }
 func (s *mockShader) Dispose()                                  {}
 
 type mockPipeline struct{}
@@ -153,7 +155,8 @@ func (e *mockEncoder) Draw(vertexCount, instanceCount, firstVertex int) {
 func (e *mockEncoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 	e.record("DrawIndexed", indexCount, instanceCount, firstIndex)
 }
-func (e *mockEncoder) Flush() { e.record("Flush") }
+func (e *mockEncoder) SetBlendMode(_ backend.BlendMode) {}
+func (e *mockEncoder) Flush()                           { e.record("Flush") }
 
 // callsByMethod returns all calls with the given method name.
 func (e *mockEncoder) callsByMethod(method string) []encoderCall {
@@ -548,6 +551,266 @@ func (rt *mockRenderTarget) DepthTexture() backend.Texture { return nil }
 func (rt *mockRenderTarget) Width() int                    { return rt.w }
 func (rt *mockRenderTarget) Height() int                   { return rt.h }
 func (rt *mockRenderTarget) Dispose()                      {}
+
+func TestSpritePassTargetDims(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+
+	// Screen target with no resolver: derives from sp.Projection.
+	// sp.Projection = ortho(800, 600) → [0]=2/800, [5]=-2/600.
+	sp.Projection = [16]float32{
+		2.0 / 800, 0, 0, 0,
+		0, -2.0 / 600, 0, 0,
+		0, 0, -1, 0,
+		-1, 1, 0, 1,
+	}
+	w, h := sp.targetDims(0)
+	require.InDelta(t, 800.0, w, 1e-3)
+	require.InDelta(t, 600.0, h, 1e-3)
+
+	// Offscreen target with resolver: returns RT dimensions.
+	sp.ResolveRenderTarget = func(id uint32) backend.RenderTarget {
+		if id == 7 {
+			return &mockRenderTarget{w: 320, h: 240}
+		}
+		return nil
+	}
+	w, h = sp.targetDims(7)
+	require.InDelta(t, 320.0, w, 1e-3)
+	require.InDelta(t, 240.0, h, 1e-3)
+
+	// Unknown offscreen target: falls back to projection-derived screen dims.
+	w, h = sp.targetDims(99)
+	require.InDelta(t, 800.0, w, 1e-3)
+	require.InDelta(t, 600.0, h, 1e-3)
+
+	// No resolver and zero projection: returns zero.
+	sp.ResolveRenderTarget = nil
+	sp.Projection = [16]float32{}
+	w, h = sp.targetDims(0)
+	require.Equal(t, float32(0), w)
+	require.Equal(t, float32(0), h)
+}
+
+func TestSpritePassBindKageImageUniforms(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+	sp.Projection = [16]float32{
+		2.0 / 1024, 0, 0, 0,
+		0, -2.0 / 768, 0, 0,
+		0, 0, -1, 0,
+		-1, 1, 0, 1,
+	}
+	sp.ResolveTexture = func(id uint32) backend.Texture {
+		switch id {
+		case 1:
+			return &mockTexture{w: 64, h: 32}
+		case 2:
+			return &mockTexture{w: 128, h: 256}
+		}
+		return nil
+	}
+	sp.ResolveRenderTarget = func(id uint32) backend.RenderTarget {
+		if id == 5 {
+			return &mockRenderTarget{w: 400, h: 300}
+		}
+		return nil
+	}
+
+	shader := &mockShader{uniforms: make(map[string]interface{})}
+	batchObj := &batch.Batch{
+		TextureID:       1,
+		ExtraTextureIDs: [3]uint32{2, 0, 0},
+	}
+
+	// Offscreen target — uImageDstSize comes from RT, primary tex from
+	// ResolveTexture(1), extra slot 1 from ResolveTexture(2).
+	sp.bindKageImageUniforms(shader, 5, batchObj)
+	require.Equal(t, [2]float32{0, 0}, shader.uniforms["uImageDstOrigin"])
+	require.Equal(t, [2]float32{400, 300}, shader.uniforms["uImageDstSize"])
+	require.Equal(t, [2]float32{0, 0}, shader.uniforms["uImageSrc0Origin"])
+	require.Equal(t, [2]float32{64, 32}, shader.uniforms["uImageSrc0Size"])
+	require.Equal(t, [2]float32{0, 0}, shader.uniforms["uImageSrc1Origin"])
+	require.Equal(t, [2]float32{128, 256}, shader.uniforms["uImageSrc1Size"])
+	// Unbound extra slots get zero size to keep the uniform layout
+	// fully populated (Kage shaders that only use src0 still declare
+	// src1/2/3 via the translator).
+	require.Equal(t, [2]float32{0, 0}, shader.uniforms["uImageSrc2Size"])
+	require.Equal(t, [2]float32{0, 0}, shader.uniforms["uImageSrc3Size"])
+
+	// Screen target — uImageDstSize derives from sp.Projection.
+	shader2 := &mockShader{uniforms: make(map[string]interface{})}
+	sp.bindKageImageUniforms(shader2, 0, batchObj)
+	require.Equal(t, [2]float32{1024, 768}, shader2.uniforms["uImageDstSize"])
+
+	// Nil ResolveTexture is tolerated — only dst uniforms set.
+	sp.ResolveTexture = nil
+	shader3 := &mockShader{uniforms: make(map[string]interface{})}
+	sp.bindKageImageUniforms(shader3, 5, batchObj)
+	require.Equal(t, [2]float32{400, 300}, shader3.uniforms["uImageDstSize"])
+	_, hasSrc0 := shader3.uniforms["uImageSrc0Size"]
+	require.False(t, hasSrc0, "src uniforms must not be set when ResolveTexture is nil")
+}
+
+func TestSpritePassProjectionForTargetFallbacks(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+	screen := [16]float32{1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4}
+	sp.Projection = screen
+
+	// Screen target always returns sp.Projection.
+	require.Equal(t, screen, sp.projectionForTarget(0))
+
+	// Offscreen target with no resolver falls back to screen projection.
+	require.Equal(t, screen, sp.projectionForTarget(5))
+
+	// Offscreen target whose resolver returns nil also falls back.
+	sp.ResolveRenderTarget = func(uint32) backend.RenderTarget { return nil }
+	require.Equal(t, screen, sp.projectionForTarget(7))
+
+	// Offscreen target with real RT: returns per-RT ortho.
+	sp.ResolveRenderTarget = func(uint32) backend.RenderTarget {
+		return &mockRenderTarget{w: 200, h: 100}
+	}
+	got := sp.projectionForTarget(9)
+	require.InDelta(t, 2.0/200, got[0], 1e-6)
+	require.InDelta(t, -2.0/100, got[5], 1e-6)
+}
+
+func TestSpritePassConsumePendingClear(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+	sp.ResolveRenderTarget = func(uint32) backend.RenderTarget {
+		return &mockRenderTarget{w: 128, h: 128}
+	}
+	sp.ResolveTexture = func(uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	var cleared uint32
+	sp.ConsumePendingClear = func(id uint32) bool {
+		if cleared != id {
+			cleared = id
+			return true
+		}
+		return false
+	}
+
+	b.Add(batch.DrawCommand{
+		Vertices: []batch.Vertex2D{{}, {}, {}},
+		Indices:  []uint16{0, 1, 2}, TextureID: 1, TargetID: 4,
+	})
+
+	enc := &mockEncoder{}
+	sp.Execute(enc, NewPassContext(800, 600))
+
+	begins := enc.callsByMethod("BeginRenderPass")
+	require.Len(t, begins, 1)
+	require.Equal(t, backend.LoadActionClear, begins[0].Args[1])
+	require.Equal(t, uint32(4), cleared)
+}
+
+func TestSpritePassCustomShaderBatch(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+
+	customShader := &mockShader{uniforms: make(map[string]interface{})}
+	customPipe := &mockPipeline{}
+	sp.ResolveShader = func(id uint32) *ShaderInfo {
+		if id == 99 {
+			return &ShaderInfo{Shader: customShader, Pipeline: customPipe}
+		}
+		return nil
+	}
+	sp.ResolveTexture = func(id uint32) backend.Texture {
+		switch id {
+		case 1, 2:
+			return &mockTexture{w: 32, h: 32}
+		}
+		return nil
+	}
+
+	applied := false
+	sp.ApplyUniforms = func(_ backend.Shader, u map[string]any) {
+		applied = true
+		require.Equal(t, float32(3.14), u["k"])
+	}
+
+	// Custom shader batch with extra texture + per-draw uniforms + non-default blend.
+	b.Add(batch.DrawCommand{
+		Vertices:        []batch.Vertex2D{{}, {}, {}},
+		Indices:         []uint16{0, 1, 2},
+		TextureID:       1,
+		ExtraTextureIDs: [3]uint32{2, 0, 0},
+		ShaderID:        99,
+		BlendMode:       backend.BlendAdditive,
+		Uniforms:        map[string]any{"k": float32(3.14)},
+	})
+
+	enc := &mockEncoder{}
+	sp.Execute(enc, NewPassContext(800, 600))
+
+	require.True(t, applied, "ApplyUniforms should be called for custom-shader batch")
+	// Both primary (slot 0) and extra (slot 1) textures must be bound.
+	texCalls := enc.callsByMethod("SetTexture")
+	require.GreaterOrEqual(t, len(texCalls), 2)
+	// Extra texture should bind at slot 1.
+	slots := make(map[int]bool)
+	for _, c := range texCalls {
+		slots[c.Args[0].(int)] = true
+	}
+	require.True(t, slots[0], "primary texture must bind at slot 0")
+	require.True(t, slots[1], "extra texture must bind at slot 1")
+}
+
+func TestSpritePassUnknownShaderFallsBackToDefault(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+	sp.ResolveTexture = func(uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+	// Resolver returns nil for every ID — the batch's non-zero ShaderID
+	// should fall through to the default pipeline, not crash.
+	sp.ResolveShader = func(uint32) *ShaderInfo { return nil }
+
+	b.Add(batch.DrawCommand{
+		Vertices: []batch.Vertex2D{{}, {}, {}},
+		Indices:  []uint16{0, 1, 2}, TextureID: 1, ShaderID: 42,
+		BlendMode: backend.BlendAdditive,
+	})
+	enc := &mockEncoder{}
+	sp.Execute(enc, NewPassContext(800, 600))
+
+	draws := enc.callsByMethod("DrawIndexed")
+	require.Len(t, draws, 1)
+}
+
+func TestSpritePassFilterChange(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	sp := newTestSpritePass(t, b)
+	sp.ResolveTexture = func(uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	b.Add(batch.DrawCommand{
+		Vertices: []batch.Vertex2D{{}, {}, {}},
+		Indices:  []uint16{0, 1, 2}, TextureID: 1, Filter: backend.FilterNearest,
+	})
+	b.Add(batch.DrawCommand{
+		Vertices: []batch.Vertex2D{{}, {}, {}},
+		Indices:  []uint16{0, 1, 2}, TextureID: 1, Filter: backend.FilterLinear,
+	})
+
+	enc := &mockEncoder{}
+	sp.Execute(enc, NewPassContext(800, 600))
+
+	// Filter changes once (Nearest → Linear). The first batch may or may
+	// not emit SetTextureFilter depending on the default, so only require
+	// that a change was observed.
+	filterCalls := enc.callsByMethod("SetTextureFilter")
+	require.NotEmpty(t, filterCalls)
+}
+
+func TestIndexSliceToBytesU32(t *testing.T) {
+	require.Nil(t, indexSliceToBytesU32(nil))
+	require.Nil(t, indexSliceToBytesU32([]uint32{}))
+	got := indexSliceToBytesU32([]uint32{1, 2})
+	require.Len(t, got, 8)
+}
 
 // --- Pipeline struct tests ---
 

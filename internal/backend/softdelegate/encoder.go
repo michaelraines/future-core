@@ -120,6 +120,9 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 }
 
 // Flush submits all recorded commands.
+// SetBlendMode is a no-op for this backend.
+func (e *Encoder) SetBlendMode(_ backend.BlendMode) {}
+
 func (e *Encoder) Flush() {
 	e.Inner.Flush()
 }

@@ -307,46 +307,68 @@ func vkCompareOp(c backend.CompareFunc) uint32 {
 	}
 }
 
-// vkBlendAttachment creates a VkPipelineColorBlendAttachmentState from a backend blend mode.
+// vkBlendAttachment creates a VkPipelineColorBlendAttachmentState from a
+// backend BlendMode struct. Honours arbitrary factor/operation combinations
+// by mapping each struct field to the corresponding VkBlendFactor / VkBlendOp.
 func vkBlendAttachment(mode backend.BlendMode) vk.PipelineColorBlendAttachmentState {
 	base := vk.PipelineColorBlendAttachmentState{
 		ColorWriteMask: vk.ColorComponentAll,
 	}
-	switch mode {
-	case backend.BlendSourceOver:
-		base.BlendEnable = 1
-		base.SrcColorBlendFactor = vk.BlendFactorSrcAlpha
-		base.DstColorBlendFactor = vk.BlendFactorOneMinusSrcAlpha
-		base.ColorBlendOp = vk.BlendOpAdd
-		base.SrcAlphaBlendFactor = vk.BlendFactorOne
-		base.DstAlphaBlendFactor = vk.BlendFactorOneMinusSrcAlpha
-		base.AlphaBlendOp = vk.BlendOpAdd
-	case backend.BlendAdditive:
-		base.BlendEnable = 1
-		base.SrcColorBlendFactor = vk.BlendFactorSrcAlpha
-		base.DstColorBlendFactor = vk.BlendFactorOne
-		base.ColorBlendOp = vk.BlendOpAdd
-		base.SrcAlphaBlendFactor = vk.BlendFactorOne
-		base.DstAlphaBlendFactor = vk.BlendFactorOne
-		base.AlphaBlendOp = vk.BlendOpAdd
-	case backend.BlendMultiplicative:
-		base.BlendEnable = 1
-		base.SrcColorBlendFactor = vk.BlendFactorDstColor
-		base.DstColorBlendFactor = vk.BlendFactorZero
-		base.ColorBlendOp = vk.BlendOpAdd
-		base.SrcAlphaBlendFactor = vk.BlendFactorDstAlpha
-		base.DstAlphaBlendFactor = vk.BlendFactorZero
-		base.AlphaBlendOp = vk.BlendOpAdd
-	case backend.BlendPremultiplied:
-		base.BlendEnable = 1
-		base.SrcColorBlendFactor = vk.BlendFactorOne
-		base.DstColorBlendFactor = vk.BlendFactorOneMinusSrcAlpha
-		base.ColorBlendOp = vk.BlendOpAdd
-		base.SrcAlphaBlendFactor = vk.BlendFactorOne
-		base.DstAlphaBlendFactor = vk.BlendFactorOneMinusSrcAlpha
-		base.AlphaBlendOp = vk.BlendOpAdd
-	default:
-		// BlendNone — no blending.
+	if !mode.Enabled {
+		return base
 	}
+	base.BlendEnable = 1
+	base.SrcColorBlendFactor = uint32(vkBlendFactor(mode.SrcFactorRGB))
+	base.DstColorBlendFactor = uint32(vkBlendFactor(mode.DstFactorRGB))
+	base.SrcAlphaBlendFactor = uint32(vkBlendFactor(mode.SrcFactorAlpha))
+	base.DstAlphaBlendFactor = uint32(vkBlendFactor(mode.DstFactorAlpha))
+	base.ColorBlendOp = uint32(vkBlendOp(mode.OpRGB))
+	base.AlphaBlendOp = uint32(vkBlendOp(mode.OpAlpha))
 	return base
+}
+
+// vkBlendFactor maps a backend BlendFactor to the Vulkan enum value.
+func vkBlendFactor(f backend.BlendFactor) int {
+	switch f {
+	case backend.BlendFactorZero:
+		return vk.BlendFactorZero
+	case backend.BlendFactorOne:
+		return vk.BlendFactorOne
+	case backend.BlendFactorSrcAlpha:
+		return vk.BlendFactorSrcAlpha
+	case backend.BlendFactorOneMinusSrcAlpha:
+		return vk.BlendFactorOneMinusSrcAlpha
+	case backend.BlendFactorDstAlpha:
+		return vk.BlendFactorDstAlpha
+	case backend.BlendFactorOneMinusDstAlpha:
+		return vk.BlendFactorOneMinusDstAlpha
+	case backend.BlendFactorSrcColor:
+		return vk.BlendFactorSrcColor
+	case backend.BlendFactorOneMinusSrcColor:
+		return vk.BlendFactorOneMinusSrcColor
+	case backend.BlendFactorDstColor:
+		return vk.BlendFactorDstColor
+	case backend.BlendFactorOneMinusDstColor:
+		return vk.BlendFactorOneMinusDstColor
+	default:
+		return vk.BlendFactorOne
+	}
+}
+
+// vkBlendOp maps a backend BlendOperation to the Vulkan enum value.
+func vkBlendOp(op backend.BlendOperation) int {
+	switch op {
+	case backend.BlendOpAdd:
+		return vk.BlendOpAdd
+	case backend.BlendOpSubtract:
+		return vk.BlendOpSubtract
+	case backend.BlendOpReverseSubtract:
+		return vk.BlendOpReverseSubtract
+	case backend.BlendOpMin:
+		return vk.BlendOpMin
+	case backend.BlendOpMax:
+		return vk.BlendOpMax
+	default:
+		return vk.BlendOpAdd
+	}
 }

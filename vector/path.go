@@ -137,8 +137,18 @@ func (p *Path) AppendVerticesAndIndicesForStroke(
 	op *StrokeOptions,
 ) (vs []futurerender.Vertex, is []uint16) {
 	width := float32(1)
-	if op != nil && op.Width > 0 {
-		width = op.Width
+	lineCap := LineCapButt
+	lineJoin := LineJoinMiter
+	miterLimit := float32(4) // default miter limit matching SVG/CSS
+	if op != nil {
+		if op.Width > 0 {
+			width = op.Width
+		}
+		lineCap = op.LineCap
+		lineJoin = op.LineJoin
+		if op.MiterLimit > 0 {
+			miterLimit = op.MiterLimit
+		}
 	}
 	half := width / 2
 
@@ -149,9 +159,18 @@ func (p *Path) AppendVerticesAndIndicesForStroke(
 		}
 
 		n := len(pts)
-		base := uint16(len(vertices))
 
-		// Generate 2 vertices per point with miter-adjusted offsets at corners.
+		// Track the actual vertex index of each point's first main
+		// vertex (the +nx vertex). joinOffset can append fan vertices
+		// for round joins BEFORE the main vertices for that point, so
+		// the main pair isn't at a fixed `base + i*2` offset — the
+		// quad-index loop must look up where each point's vertices
+		// actually landed. The previous code assumed 2 vertices per
+		// point and broke for any path with LineJoinRound, producing
+		// dashed/discontinuous strokes (each quad pointed at fan
+		// vertices instead of the main ones).
+		pointVertex := make([]uint16, n)
+
 		for i := 0; i < n; i++ {
 			var nx, ny float32
 
@@ -159,22 +178,24 @@ func (p *Path) AppendVerticesAndIndicesForStroke(
 			case sp.closed:
 				prev := (i - 1 + n) % n
 				next := (i + 1) % n
-				nx, ny = miterOffset(pts[prev], pts[i], pts[next], half)
+				nx, ny = joinOffset(pts[prev], pts[i], pts[next], half, lineJoin, miterLimit, &vertices, &indices)
 			case i == 0:
 				nx, ny = segmentNormal(pts[0], pts[1], half)
 			case i == n-1:
 				nx, ny = segmentNormal(pts[n-2], pts[n-1], half)
 			default:
-				nx, ny = miterOffset(pts[i-1], pts[i], pts[i+1], half)
+				nx, ny = joinOffset(pts[i-1], pts[i], pts[i+1], half, lineJoin, miterLimit, &vertices, &indices)
 			}
 
+			pointVertex[i] = uint16(len(vertices)) //nolint:gosec // bounded by max vertex count
 			vertices = append(vertices,
 				futurerender.Vertex{DstX: pts[i].x + nx, DstY: pts[i].y + ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 				futurerender.Vertex{DstX: pts[i].x - nx, DstY: pts[i].y - ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
 			)
 		}
 
-		// Generate quad indices for each segment.
+		// Generate quad indices for each segment, using the recorded
+		// vertex offsets rather than assuming a regular i*2 stride.
 		segCount := n - 1
 		if sp.closed {
 			segCount = n
@@ -184,11 +205,17 @@ func (p *Path) AppendVerticesAndIndicesForStroke(
 			if sp.closed {
 				j %= n
 			}
-			v0 := base + uint16(i*2)
-			v1 := base + uint16(i*2+1)
-			v2 := base + uint16(j*2)
-			v3 := base + uint16(j*2+1)
+			v0 := pointVertex[i]
+			v1 := pointVertex[i] + 1
+			v2 := pointVertex[j]
+			v3 := pointVertex[j] + 1
 			indices = append(indices, v0, v1, v2, v1, v3, v2)
+		}
+
+		// Line caps for open paths.
+		if !sp.closed && lineCap != LineCapButt {
+			appendLineCap(&vertices, &indices, pts[0], pts[1], half, lineCap)
+			appendLineCap(&vertices, &indices, pts[n-1], pts[n-2], half, lineCap)
 		}
 	}
 	return vertices, indices
@@ -206,10 +233,11 @@ func segmentNormal(a, b point, half float32) (nx, ny float32) {
 	return -dy / l * half, dx / l * half
 }
 
-// miterOffset computes the miter join offset at point curr, where prev→curr
-// and curr→next are adjacent segments. Returns the offset vector to
-// add/subtract from curr to get the two stroke vertices.
-func miterOffset(prev, curr, next point, half float32) (nx, ny float32) {
+// joinOffset computes the join offset at point curr, where prev→curr and
+// curr→next are adjacent segments. For miter and bevel joins, it returns
+// the offset vector to add/subtract from curr for the two stroke vertices.
+// For round joins, it emits additional fan triangles into vertices/indices.
+func joinOffset(prev, curr, next point, half float32, join LineJoin, miterLimit float32, vertices *[]futurerender.Vertex, indices *[]uint16) (nx, ny float32) {
 	// Unit normals for each segment.
 	n1x, n1y := segmentNormal(prev, curr, 1)
 	n2x, n2y := segmentNormal(curr, next, 1)
@@ -227,13 +255,153 @@ func miterOffset(prev, curr, next point, half float32) (nx, ny float32) {
 
 	// Miter length = half / cos(θ/2), where cos(θ/2) = dot(miter, normal).
 	dot := mx*n1x + my*n1y
-	if dot < 0.25 {
-		// Very acute angle: limit miter to prevent long spikes.
-		dot = 0.25
+	if dot < 1e-6 {
+		dot = 1e-6
 	}
 	miterLen := half / dot
 
-	return mx * miterLen, my * miterLen
+	// Check if miter exceeds the limit. miterLimit is the ratio of
+	// miter length to half-width (matching SVG/CSS definition).
+	miterExceeded := miterLen/half > miterLimit
+
+	switch join {
+	case LineJoinBevel:
+		// Bevel: use the first segment's normal. The bevel triangle is
+		// implicitly formed by the adjacent quad vertices (no extra geometry).
+		return n1x * half, n1y * half
+
+	case LineJoinRound:
+		// Round: emit a fan of triangles between the two segment normals.
+		appendRoundJoin(vertices, indices, curr, n1x, n1y, n2x, n2y, half)
+		// Use the first segment's normal for the main stroke vertices.
+		return n1x * half, n1y * half
+
+	default: // LineJoinMiter
+		if miterExceeded {
+			// Fall back to bevel when miter limit is exceeded.
+			return n1x * half, n1y * half
+		}
+		return mx * miterLen, my * miterLen
+	}
+}
+
+// miterOffset is a convenience wrapper for the default miter join.
+// Used by tests and any code that needs the simple miter computation.
+func miterOffset(prev, curr, next point, half float32) (nx, ny float32) {
+	return joinOffset(prev, curr, next, half, LineJoinMiter, 4, nil, nil)
+}
+
+// appendLineCap adds cap geometry at the endpoint of an open path.
+// endpoint is the path endpoint, interior is the adjacent point.
+// isStart is true for the first point, false for the last.
+func appendLineCap(vertices *[]futurerender.Vertex, indices *[]uint16, endpoint, interior point, half float32, lineCap LineCap) {
+	nx, ny := segmentNormal(interior, endpoint, half)
+	// Direction along the segment, pointing outward from the path.
+	dx := endpoint.x - interior.x
+	dy := endpoint.y - interior.y
+	dl := float32(gomath.Sqrt(float64(dx*dx + dy*dy)))
+	if dl == 0 {
+		return
+	}
+	dx /= dl
+	dy /= dl
+
+	switch lineCap {
+	case LineCapButt:
+		// Nothing to append — butt cap is the default stroke endpoint.
+	case LineCapSquare:
+		// Extend the endpoint by half-width away from the path.
+		// dx already points from interior toward endpoint (away from path).
+		ext := half
+		base := uint16(len(*vertices))
+		*vertices = append(*vertices,
+			futurerender.Vertex{DstX: endpoint.x + nx + dx*ext, DstY: endpoint.y + ny + dy*ext, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+			futurerender.Vertex{DstX: endpoint.x - nx + dx*ext, DstY: endpoint.y - ny + dy*ext, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+			futurerender.Vertex{DstX: endpoint.x + nx, DstY: endpoint.y + ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+			futurerender.Vertex{DstX: endpoint.x - nx, DstY: endpoint.y - ny, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+		)
+		*indices = append(*indices, base, base+1, base+2, base+1, base+3, base+2)
+
+	case LineCapRound:
+		// Semicircle fan at the endpoint, opening away from the path.
+		// The outward direction is (dx, dy). The semicircle sweeps from
+		// outwardAngle - π/2 to outwardAngle + π/2.
+		cx, cy := endpoint.x, endpoint.y
+		outwardAngle := float32(gomath.Atan2(float64(dy), float64(dx)))
+		steps := circleCapSteps(half)
+
+		center := uint16(len(*vertices))
+		*vertices = append(*vertices,
+			futurerender.Vertex{DstX: cx, DstY: cy, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+		)
+
+		for i := 0; i <= steps; i++ {
+			t := float32(i) / float32(steps)
+			angle := (outwardAngle - gomath.Pi/2) + t*gomath.Pi
+			px := cx + half*float32(gomath.Cos(float64(angle)))
+			py := cy + half*float32(gomath.Sin(float64(angle)))
+			*vertices = append(*vertices,
+				futurerender.Vertex{DstX: px, DstY: py, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+			)
+			if i > 0 {
+				*indices = append(*indices, center, center+uint16(i), center+uint16(i+1))
+			}
+		}
+	}
+}
+
+// appendRoundJoin emits a triangle fan between two segment normals at a
+// join point, producing a smooth arc.
+func appendRoundJoin(vertices *[]futurerender.Vertex, indices *[]uint16, curr point, n1x, n1y, n2x, n2y, half float32) {
+	if vertices == nil || indices == nil {
+		return
+	}
+
+	angle1 := float32(gomath.Atan2(float64(n1y), float64(n1x)))
+	angle2 := float32(gomath.Atan2(float64(n2y), float64(n2x)))
+
+	// Ensure we sweep the shorter arc.
+	diff := angle2 - angle1
+	if diff > gomath.Pi {
+		diff -= 2 * gomath.Pi
+	} else if diff < -gomath.Pi {
+		diff += 2 * gomath.Pi
+	}
+
+	steps := int(gomath.Abs(float64(diff)) / (gomath.Pi / 8))
+	if steps < 2 {
+		steps = 2
+	}
+
+	center := uint16(len(*vertices))
+	*vertices = append(*vertices,
+		futurerender.Vertex{DstX: curr.x, DstY: curr.y, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+	)
+
+	for i := 0; i <= steps; i++ {
+		t := float32(i) / float32(steps)
+		angle := angle1 + t*diff
+		px := curr.x + half*float32(gomath.Cos(float64(angle)))
+		py := curr.y + half*float32(gomath.Sin(float64(angle)))
+		*vertices = append(*vertices,
+			futurerender.Vertex{DstX: px, DstY: py, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+		)
+		if i > 0 {
+			*indices = append(*indices, center, center+uint16(i), center+uint16(i+1))
+		}
+	}
+}
+
+// circleCapSteps returns the number of segments for a round cap semicircle.
+func circleCapSteps(radius float32) int {
+	n := int(gomath.Ceil(float64(radius) * gomath.Pi / 4))
+	if n < 4 {
+		return 4
+	}
+	if n > 32 {
+		return 32
+	}
+	return n
 }
 
 // LineCap defines how the ends of a stroked path are rendered.

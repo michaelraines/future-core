@@ -3,6 +3,7 @@
 package webgpu
 
 import (
+	"fmt"
 	"syscall/js"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -38,6 +39,10 @@ type Encoder struct {
 	// command buffer. Without this, the Go GC may release JS references
 	// before the GPU executes the draws.
 	tempRefs []js.Value
+
+	// Pending blend mode set by SetBlendMode, applied on next SetPipeline.
+	pendingBlend    backend.BlendMode
+	pendingBlendSet bool
 }
 
 // BeginRenderPass begins a WebGPU render pass.
@@ -112,6 +117,16 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 
 	// Set default viewport.
 	e.passEncoder.Call("setViewport", 0, 0, float64(w), float64(h), 0, 1)
+
+	if traceWebGPUActive() {
+		rtTag := "screen"
+		if rt, ok := desc.Target.(*RenderTarget); ok && rt != nil {
+			rtTag = fmt.Sprintf("rt@%p(%dx%d)", rt, rt.w, rt.h)
+		}
+		traceWebGPUf("[wgpu frame %d] BeginRenderPass target=%s format=%s load=%s viewport=%dx%d clear=[%.2f %.2f %.2f %.2f]\n",
+			traceWebGPUFrame.Load()+1, rtTag, e.targetFormat, loadOp, w, h,
+			desc.ClearColor[0], desc.ClearColor[1], desc.ClearColor[2], desc.ClearColor[3])
+	}
 }
 
 // EndRenderPass ends the current render pass but does NOT submit the
@@ -124,6 +139,9 @@ func (e *Encoder) EndRenderPass() {
 		e.passEncoder = js.Undefined()
 		e.inRenderPass = false
 		e.uniformBGPipeline = nil
+		if traceWebGPUActive() {
+			traceWebGPUf("[wgpu frame %d] EndRenderPass\n", traceWebGPUFrame.Load()+1)
+		}
 	}
 }
 
@@ -135,12 +153,23 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 	e.currentPipeline = p
 
-	// Lazily create (or recreate) the pipeline for the current target format.
-	p.ensurePipelineForFormat(e.targetFormat)
+	// Lazily create (or recreate) the pipeline for the current target
+	// format and blend mode. Custom shader draws use SetBlendMode to
+	// request per-draw blend (e.g., additive for lights).
+	if e.pendingBlendSet {
+		p.ensurePipeline(e.targetFormat, e.pendingBlend)
+		e.pendingBlendSet = false
+	} else {
+		p.ensurePipelineForFormat(e.targetFormat)
+	}
 
 	pipelineOK := !p.handle.IsUndefined() && !p.handle.IsNull()
 	if pipelineOK && e.inRenderPass {
 		e.passEncoder.Call("setPipeline", p.handle)
+	}
+	if traceWebGPUActive() {
+		traceWebGPUf("[wgpu frame %d] SetPipeline p@%p format=%s blend=%+v pipelineOK=%v\n",
+			traceWebGPUFrame.Load()+1, p, p.createdFormat, p.createdBlend, pipelineOK)
 	}
 
 	e.bindUniforms()
@@ -168,6 +197,9 @@ func (e *Encoder) bindUniforms() {
 	// bindUniforms, the ring buffer already has the right data and the
 	// bind group is still bound. Skip everything.
 	if !shader.uniformsDirty {
+		if traceWebGPUActive() {
+			traceWebGPUf("[wgpu frame %d]   bindUniforms SKIP (not dirty)\n", traceWebGPUFrame.Load()+1)
+		}
 		return
 	}
 
@@ -216,6 +248,17 @@ func (e *Encoder) bindUniforms() {
 	e.dynOffsets.SetIndex(0, offset)
 	e.passEncoder.Call("setBindGroup", 0, e.uniformBG, e.dynOffsets)
 
+	if traceWebGPUActive() {
+		// First 8 bytes of the payload — enough to distinguish per-light
+		// Center values when correlating with DrawIndexed below.
+		summary := ""
+		if len(data) >= 8 {
+			summary = fmt.Sprintf("first8bytes=[%02x %02x %02x %02x %02x %02x %02x %02x]",
+				data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7])
+		}
+		traceWebGPUf("[wgpu frame %d]   bindUniforms offset=%d size=%d aligned=%d %s\n",
+			traceWebGPUFrame.Load()+1, offset, len(data), alignedSize, summary)
+	}
 	shader.uniformsDirty = false
 }
 
@@ -282,6 +325,10 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 	key := texBindGroupKey{texID: t.id, filter: filter}
 	if bg, ok := e.dev.textureBindGroups[key]; ok {
 		e.passEncoder.Call("setBindGroup", 1, bg)
+		if traceWebGPUActive() {
+			traceWebGPUf("[wgpu frame %d]   SetTexture slot=%d texID=%d filter=%s (cached)\n",
+				traceWebGPUFrame.Load()+1, slot, t.id, filter)
+		}
 		return
 	}
 
@@ -303,6 +350,10 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 
 	e.dev.textureBindGroups[key] = bg
 	e.passEncoder.Call("setBindGroup", 1, bg)
+	if traceWebGPUActive() {
+		traceWebGPUf("[wgpu frame %d]   SetTexture slot=%d texID=%d filter=%s (NEW bind group)\n",
+			traceWebGPUFrame.Load()+1, slot, t.id, filter)
+	}
 }
 
 // SetTextureFilter overrides the texture filter for a slot.
@@ -321,6 +372,13 @@ func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
 func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {}
 
 // SetColorWrite enables or disables color writing (baked into pipeline in WebGPU).
+// SetBlendMode records the desired blend mode. On the next SetPipeline
+// call, the pipeline will be recreated if the blend differs.
+func (e *Encoder) SetBlendMode(mode backend.BlendMode) {
+	e.pendingBlend = mode
+	e.pendingBlendSet = true
+}
+
 func (e *Encoder) SetColorWrite(_ bool) {}
 
 // SetViewport sets the rendering viewport.
@@ -358,6 +416,10 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 	if e.inRenderPass {
 		e.bindUniforms()
 		e.passEncoder.Call("drawIndexed", indexCount, instanceCount, firstIndex, 0, 0)
+		if traceWebGPUActive() {
+			traceWebGPUf("[wgpu frame %d]   DrawIndexed indexCount=%d firstIndex=%d\n",
+				traceWebGPUFrame.Load()+1, indexCount, firstIndex)
+		}
 	}
 }
 
@@ -377,4 +439,9 @@ func (e *Encoder) Flush() {
 
 	// Release temporary references now that the GPU has the commands.
 	e.tempRefs = e.tempRefs[:0]
+	if traceWebGPUActive() {
+		frame := traceWebGPUFrame.Load() + 1
+		traceWebGPUf("[wgpu frame %d] Flush (queue.submit) ==== END FRAME ====\n", frame)
+		traceWebGPUAdvanceFrame()
+	}
 }

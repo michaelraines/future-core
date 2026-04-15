@@ -130,6 +130,12 @@ func writeUniformValueJS(dst []byte, v interface{}) {
 	case [2]float32:
 		binary.LittleEndian.PutUint32(dst[0:], math.Float32bits(val[0]))
 		binary.LittleEndian.PutUint32(dst[4:], math.Float32bits(val[1]))
+	case [3]float32:
+		// 12 bytes — WGSL vec3<f32>. Writing a 4th float here would clobber
+		// the following struct member.
+		binary.LittleEndian.PutUint32(dst[0:], math.Float32bits(val[0]))
+		binary.LittleEndian.PutUint32(dst[4:], math.Float32bits(val[1]))
+		binary.LittleEndian.PutUint32(dst[8:], math.Float32bits(val[2]))
 	case [4]float32:
 		for i := 0; i < 4; i++ {
 			binary.LittleEndian.PutUint32(dst[i*4:], math.Float32bits(val[i]))
@@ -151,6 +157,12 @@ func (s *Shader) SetUniformFloat(name string, v float32) {
 
 // SetUniformVec2 records a vec2 uniform.
 func (s *Shader) SetUniformVec2(name string, v [2]float32) {
+	s.uniforms[name] = v
+	s.uniformsDirty = true
+}
+
+// SetUniformVec3 records a vec3 uniform (12 bytes, stored as [3]float32).
+func (s *Shader) SetUniformVec3(name string, v [3]float32) {
 	s.uniforms[name] = v
 	s.uniformsDirty = true
 }
@@ -177,6 +189,21 @@ func (s *Shader) SetUniformInt(name string, v int32) {
 func (s *Shader) SetUniformBlock(name string, data []byte) {
 	s.uniforms[name] = data
 	s.uniformsDirty = true
+}
+
+// PackCurrentUniforms returns a byte snapshot of the current uniform values.
+func (s *Shader) PackCurrentUniforms() []byte {
+	if len(s.combinedUniformLayout) == 0 {
+		return nil
+	}
+	data := s.packUniforms(s.combinedUniformLayout)
+	if len(data) == 0 {
+		return nil
+	}
+	// Return a copy so the caller owns the snapshot.
+	snapshot := make([]byte, len(data))
+	copy(snapshot, data)
+	return snapshot
 }
 
 // Dispose releases shader resources.

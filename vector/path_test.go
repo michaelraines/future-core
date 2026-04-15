@@ -2,6 +2,7 @@ package vector
 
 import (
 	"image/color"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -187,6 +188,20 @@ func TestColorToFloatTransparent(t *testing.T) {
 	require.InDelta(t, float32(0), a, 1e-6)
 }
 
+// TestColorToFloatPremultiplied verifies that colorToFloat returns
+// premultiplied RGBA values. Regression test for a glow/gradient bug
+// where semi-transparent vertex colors were divided by alpha
+// (converted to straight alpha), producing blown-out white halos
+// instead of soft edges when drawn through SourceOver.
+func TestColorToFloatPremultiplied(t *testing.T) {
+	// NRGBA white at 50% alpha → premultiplied RGBA ~= (128, 128, 128, 128).
+	r, g, b, a := colorToFloat(color.NRGBA{R: 255, G: 255, B: 255, A: 128})
+	require.InDelta(t, float32(128.0/255.0), r, 0.01)
+	require.InDelta(t, float32(128.0/255.0), g, 0.01)
+	require.InDelta(t, float32(128.0/255.0), b, 0.01)
+	require.InDelta(t, float32(128.0/255.0), a, 0.01)
+}
+
 func TestCircleSegments(t *testing.T) {
 	// Small radius.
 	n := circleSegments(5)
@@ -316,4 +331,172 @@ func TestMiterOffset(t *testing.T) {
 	// Normal of first segment (0,0)→(10,0) is (0, 1).
 	require.InDelta(t, float32(0), nx, 0.01)
 	require.InDelta(t, float32(1), ny, 0.01)
+}
+
+func TestStrokeLineCapSquare(t *testing.T) {
+	var p Path
+	p.MoveTo(10, 50)
+	p.LineTo(90, 50)
+
+	var verts []futurerender.Vertex
+	var idxs []uint16
+	verts, idxs = p.AppendVerticesAndIndicesForStroke(verts, idxs, &StrokeOptions{
+		Width:   4,
+		LineCap: LineCapSquare,
+	})
+
+	// 2 points × 2 verts = 4 (stroke body) + 2 caps × 4 verts = 8 cap verts.
+	require.Equal(t, 12, len(verts))
+	// 1 segment × 6 + 2 caps × 6 = 18.
+	require.Equal(t, 18, len(idxs))
+
+	// The square cap extends the stroke by half-width (2px) beyond each endpoint.
+	// Start cap: vertices should extend left of x=10 to x=8.
+	hasExtendedStart := false
+	hasExtendedEnd := false
+	for _, v := range verts {
+		if v.DstX < 10 {
+			hasExtendedStart = true
+		}
+		if v.DstX > 90 {
+			hasExtendedEnd = true
+		}
+	}
+	require.True(t, hasExtendedStart, "square cap should extend before start point")
+	require.True(t, hasExtendedEnd, "square cap should extend after end point")
+}
+
+func TestStrokeLineCapRound(t *testing.T) {
+	var p Path
+	p.MoveTo(10, 50)
+	p.LineTo(90, 50)
+
+	var verts []futurerender.Vertex
+	var idxs []uint16
+	verts, idxs = p.AppendVerticesAndIndicesForStroke(verts, idxs, &StrokeOptions{
+		Width:   4,
+		LineCap: LineCapRound,
+	})
+
+	// Should have more vertices than butt cap (2 points × 2 = 4) due to
+	// semicircle fans at both endpoints.
+	require.Greater(t, len(verts), 4, "round cap should add fan vertices")
+	require.Greater(t, len(idxs), 6, "round cap should add fan indices")
+
+	// Semicircle vertices should extend beyond the endpoints.
+	hasExtendedStart := false
+	hasExtendedEnd := false
+	for _, v := range verts {
+		if v.DstX < 10 {
+			hasExtendedStart = true
+		}
+		if v.DstX > 90 {
+			hasExtendedEnd = true
+		}
+	}
+	require.True(t, hasExtendedStart, "round cap should extend before start point")
+	require.True(t, hasExtendedEnd, "round cap should extend after end point")
+}
+
+func TestStrokeLineJoinBevel(t *testing.T) {
+	// L-shape: two segments meeting at 90°.
+	var p Path
+	p.MoveTo(0, 0)
+	p.LineTo(50, 0)
+	p.LineTo(50, 50)
+
+	var verts []futurerender.Vertex
+	var idxs []uint16
+	verts, idxs = p.AppendVerticesAndIndicesForStroke(verts, idxs, &StrokeOptions{
+		Width:    4,
+		LineJoin: LineJoinBevel,
+	})
+
+	// 3 points × 2 vertices = 6, 2 segments × 6 = 12.
+	require.Equal(t, 6, len(verts))
+	require.Equal(t, 12, len(idxs))
+
+	// Bevel join at (50,0): the middle vertices use the first segment's
+	// normal, not the miter point. With miter, the outer vertex would be
+	// at (52, -2). With bevel, it should be at (50, -2) — just the
+	// segment normal applied to the point.
+	// Vertex at index 2 (outer of join): should NOT have the miter extension.
+	require.InDelta(t, float32(50), verts[2].DstX, 0.5,
+		"bevel join should not extend like miter")
+}
+
+func TestStrokeLineJoinRound(t *testing.T) {
+	var p Path
+	p.MoveTo(0, 0)
+	p.LineTo(50, 0)
+	p.LineTo(50, 50)
+
+	var verts []futurerender.Vertex
+	var idxs []uint16
+	verts, idxs = p.AppendVerticesAndIndicesForStroke(verts, idxs, &StrokeOptions{
+		Width:    4,
+		LineJoin: LineJoinRound,
+	})
+
+	// Should have more vertices than the base 6 (3 × 2) due to the
+	// round join fan at the corner.
+	require.Greater(t, len(verts), 6, "round join should add fan vertices")
+	require.Greater(t, len(idxs), 12, "round join should add fan indices")
+}
+
+func TestStrokeMiterLimitFallsToBevel(t *testing.T) {
+	// Very acute angle: miter would produce a very long spike.
+	var p Path
+	p.MoveTo(0, 0)
+	p.LineTo(100, 0)
+	p.LineTo(10, 5) // near-parallel, acute angle
+
+	half := float32(2)
+
+	// With default miter limit (4), the miter would be very long.
+	// Low miter limit forces bevel.
+	var verts []futurerender.Vertex
+	var idxs []uint16
+	verts, _ = p.AppendVerticesAndIndicesForStroke(verts, idxs, &StrokeOptions{
+		Width:      half * 2,
+		LineJoin:   LineJoinMiter,
+		MiterLimit: 1, // very restrictive
+	})
+
+	// The join vertices near (100,0) should NOT spike far from the path.
+	// Only check vertices within 20px of the join point (skip endpoints).
+	for _, v := range verts {
+		dx := v.DstX - 100
+		dy := v.DstY
+		if math.Abs(float64(dx)) > 20 {
+			continue // skip vertices far from the join (start/end points)
+		}
+		dist := float32(math.Sqrt(float64(dx*dx + dy*dy)))
+		require.Less(t, dist, float32(10),
+			"miter limit should prevent long spikes; vertex at (%.1f, %.1f)", v.DstX, v.DstY)
+	}
+}
+
+func TestStrokeLineCapButtIsDefault(t *testing.T) {
+	var p Path
+	p.MoveTo(10, 50)
+	p.LineTo(90, 50)
+
+	// Butt cap (default): no extension beyond endpoints.
+	var verts []futurerender.Vertex
+	var idxs []uint16
+	verts, idxs = p.AppendVerticesAndIndicesForStroke(verts, idxs, &StrokeOptions{
+		Width:   4,
+		LineCap: LineCapButt,
+	})
+
+	// Just the body: 2 points × 2 verts = 4, 1 segment × 6 = 6.
+	require.Equal(t, 4, len(verts))
+	require.Equal(t, 6, len(idxs))
+
+	// No vertices should extend beyond the endpoints.
+	for _, v := range verts {
+		require.GreaterOrEqual(t, v.DstX, float32(10))
+		require.LessOrEqual(t, v.DstX, float32(90))
+	}
 }

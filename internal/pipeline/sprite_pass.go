@@ -55,6 +55,7 @@ type SpritePass struct {
 	lastColorTrans [4]float32
 	lastTextureID  uint32
 	lastFilter     backend.TextureFilter
+	lastBlendMode  backend.BlendMode
 	colorBodySet   bool // false until the first batch sets it this frame
 
 	// ResolveTexture maps batch texture IDs to backend textures.
@@ -73,14 +74,32 @@ type SpritePass struct {
 	// when nil (no clear tracking) or when the target has no pending clear.
 	ConsumePendingClear func(targetID uint32) bool
 
+	// ApplyUniforms applies a snapshot of user-provided uniforms to a
+	// backend shader. Called per-draw for custom shader batches that have
+	// per-draw uniforms (e.g., each light has different LightPos/Color).
+	// The engine sets this to Shader.applyUniforms during initialization.
+	ApplyUniforms func(shader backend.Shader, uniforms map[string]any)
+
 	// Projection is the orthographic projection matrix, set each frame.
 	Projection [16]float32
 
 	// Reusable per-frame slices to avoid heap allocations each frame.
 	// In WASM, per-frame allocations accumulate faster than GC can
 	// collect them, eventually causing OOM.
+	//
+	// tmpIndices is uint32 even though per-batch indices are uint16:
+	// the sprite pass concatenates ALL frame batches into one giant
+	// vertex buffer and needs to offset each batch's indices by the
+	// cumulative vertex count, which routinely exceeds 65535 for
+	// scenes with many tessellated stroke paths (vector-showcase
+	// alone produces ~1300 stroke vertices per wave path; a few
+	// such paths cross the uint16 boundary). Using uint32 here
+	// prevents the offset arithmetic from wrapping and breaking
+	// triangle reconstruction — symptom was strokes rendering as
+	// dashed/dotted partial fragments because indices wrapped past
+	// 0 and pointed at unrelated vertices.
 	tmpVertices []batch.Vertex2D
-	tmpIndices  []uint16
+	tmpIndices  []uint32
 }
 
 // SpritePassConfig holds configuration for creating a SpritePass.
@@ -109,7 +128,7 @@ func NewSpritePass(cfg SpritePassConfig) (*SpritePass, error) {
 	}
 
 	ibuf, err := cfg.Device.NewBuffer(backend.BufferDescriptor{
-		Size:    cfg.MaxIndices * 2, // uint16 indices
+		Size:    cfg.MaxIndices * 4, // uint32 indices (4 bytes each)
 		Usage:   backend.BufferUsageIndex,
 		Dynamic: true,
 	})
@@ -150,7 +169,7 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		tracef("=== frame %d: %d batches ===\n", n, len(batches))
 		for i := range batches {
 			b := &batches[i]
-			tracef("  batch[%d] target=%d texture=%d shader=%d filter=%d blend=%d verts=%d indices=%d\n",
+			tracef("  batch[%d] target=%d texture=%d shader=%d filter=%d blend=%v verts=%d indices=%d\n",
 				i, b.TargetID, b.TextureID, b.ShaderID, b.Filter, b.BlendMode,
 				len(b.Vertices), len(b.Indices))
 		}
@@ -195,27 +214,22 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 	sp.tmpIndices = sp.tmpIndices[:0]
 	for i := range batches {
 		b := &batches[i]
-		baseVertex := uint16(len(sp.tmpVertices))
+		baseVertex := uint32(len(sp.tmpVertices))
 		regions[i].firstIndex = len(sp.tmpIndices)
 		regions[i].indexCount = len(b.Indices)
 		sp.tmpVertices = append(sp.tmpVertices, b.Vertices...)
 		for _, idx := range b.Indices {
-			sp.tmpIndices = append(sp.tmpIndices, idx+baseVertex)
+			sp.tmpIndices = append(sp.tmpIndices, uint32(idx)+baseVertex)
 		}
 	}
 
-	// Upload all vertex/index data at once. Pad the index buffer to a
-	// 4-byte boundary: WebGPU's writeBuffer requires the byte count to be
-	// a multiple of 4, and an odd number of uint16 indices produces a
-	// 2-byte-aligned but not 4-byte-aligned size.
+	// Upload all vertex/index data at once. uint32 indices are
+	// always 4-byte aligned so no padding needed.
 	if len(sp.tmpVertices) > 0 {
 		sp.vertexBuf.Upload(vertexSliceToBytes(sp.tmpVertices))
 	}
 	if len(sp.tmpIndices) > 0 {
-		if len(sp.tmpIndices)%2 != 0 {
-			sp.tmpIndices = append(sp.tmpIndices, 0) // pad to even count → 4-byte aligned
-		}
-		sp.indexBuf.Upload(indexSliceToBytes(sp.tmpIndices))
+		sp.indexBuf.Upload(indexSliceToBytesU32(sp.tmpIndices))
 	}
 
 	// Track current render target and shader to minimize state changes.
@@ -229,7 +243,7 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 
 	// Bind vertex/index buffers (must be within a render pass).
 	enc.SetVertexBuffer(sp.vertexBuf, 0)
-	enc.SetIndexBuffer(sp.indexBuf, backend.IndexUint16)
+	enc.SetIndexBuffer(sp.indexBuf, backend.IndexUint32)
 
 	for i := range batches {
 		b := &batches[i]
@@ -244,7 +258,7 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			sp.setProjectionForTarget(enc, ctx, currentTargetID)
 			// Re-bind buffers after render pass switch.
 			enc.SetVertexBuffer(sp.vertexBuf, 0)
-			enc.SetIndexBuffer(sp.indexBuf, backend.IndexUint16)
+			enc.SetIndexBuffer(sp.indexBuf, backend.IndexUint32)
 		}
 
 		// Switch shader if this batch uses a different one.
@@ -253,27 +267,67 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			resolvedInfo = sp.ResolveShader(b.ShaderID)
 		}
 
-		if b.ShaderID != currentShaderID {
+		switch {
+		case b.ShaderID != currentShaderID:
 			switch {
 			case b.ShaderID == 0:
+				// Default-shader batches can carry non-default blend
+				// modes too — e.g. the lighting system's
+				// blendSetAlpha / blendMaskAlpha shadow-stamp passes
+				// use DrawImage (ShaderID=0) with a custom blend.
+				// Apply the blend BEFORE SetPipeline so the encoder
+				// recreates the pipeline with the correct blend state.
+				enc.SetBlendMode(b.BlendMode)
 				sp.bindDefaultShader(enc)
 			case resolvedInfo != nil:
+				// Set blend mode before pipeline so WebGPU can
+				// recreate the pipeline if the blend differs.
+				enc.SetBlendMode(b.BlendMode)
 				enc.SetPipeline(resolvedInfo.Pipeline)
-				resolvedInfo.Shader.SetUniformMat4("uProjection", sp.Projection)
+				// Custom shaders read uProjection too. Use the
+				// per-target ortho — sp.Projection is screen-space
+				// only; a lightmap RT with a different size (or even
+				// the same size with a different orientation) would
+				// produce off-screen quads otherwise.
+				resolvedInfo.Shader.SetUniformMat4("uProjection", sp.projectionForTarget(currentTargetID))
 			default:
+				enc.SetBlendMode(b.BlendMode)
 				sp.bindDefaultShader(enc)
 			}
 			currentShaderID = b.ShaderID
+			sp.lastBlendMode = b.BlendMode
+		case b.ShaderID != 0 && resolvedInfo != nil:
+			// Same shader but potentially different blend mode.
+			enc.SetBlendMode(b.BlendMode)
+			enc.SetPipeline(resolvedInfo.Pipeline)
+			sp.lastBlendMode = b.BlendMode
+		case b.ShaderID == 0 && b.BlendMode != sp.lastBlendMode:
+			// Same default shader, but the blend differs from the
+			// previous default-shader batch. This fires between the
+			// lighting system's shadow-stamp passes (SourceOver →
+			// blendSetAlpha → blendMaskAlpha → SourceOver) and must
+			// recreate the default pipeline for the new blend.
+			enc.SetBlendMode(b.BlendMode)
+			enc.SetPipeline(sp.pipeline)
+			sp.lastBlendMode = b.BlendMode
+		}
+
+		// For custom shader batches, re-apply the per-draw user uniforms
+		// before drawing. Each light (or other custom draw) has its own
+		// uniform values that were snapshotted at draw time.
+		activeShader := sp.shader
+		if resolvedInfo != nil {
+			activeShader = resolvedInfo.Shader
+			sp.bindKageImageUniforms(resolvedInfo.Shader, currentTargetID, b)
+			if sp.ApplyUniforms != nil && len(b.Uniforms) > 0 {
+				sp.ApplyUniforms(resolvedInfo.Shader, b.Uniforms)
+			}
 		}
 
 		// Set color matrix uniforms only when they differ from the
 		// previous batch. Most batches use the identity matrix, so this
 		// skips the SetUniform* → dirty-flag → pack → upload → bind
 		// chain for the majority of draws.
-		activeShader := sp.shader
-		if resolvedInfo != nil {
-			activeShader = resolvedInfo.Shader
-		}
 		if !sp.colorBodySet || b.ColorBody != sp.lastColorBody || b.ColorTranslation != sp.lastColorTrans {
 			activeShader.SetUniformMat4("uColorBody", b.ColorBody)
 			activeShader.SetUniformVec4("uColorTranslation", b.ColorTranslation)
@@ -282,8 +336,13 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			sp.colorBodySet = true
 		}
 
-		// Bind texture and filter only when they differ from the previous
-		// batch, avoiding redundant Go→JS (or Go→wgpu) round-trips.
+		// Set filter BEFORE texture: the WebGPU encoder reads the current
+		// filter when creating the texture bind group in SetTexture. If
+		// filter is set after, the bind group uses the stale filter value.
+		if b.Filter != sp.lastFilter {
+			enc.SetTextureFilter(0, b.Filter)
+			sp.lastFilter = b.Filter
+		}
 		if sp.ResolveTexture != nil && b.TextureID != sp.lastTextureID {
 			tex := sp.ResolveTexture(b.TextureID)
 			if tex != nil {
@@ -291,9 +350,17 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			}
 			sp.lastTextureID = b.TextureID
 		}
-		if b.Filter != sp.lastFilter {
-			enc.SetTextureFilter(0, b.Filter)
-			sp.lastFilter = b.Filter
+
+		// Bind extra textures for custom shader draws (slots 1-3).
+		if b.ShaderID != 0 && sp.ResolveTexture != nil {
+			for slot, texID := range b.ExtraTextureIDs {
+				if texID != 0 {
+					tex := sp.ResolveTexture(texID)
+					if tex != nil {
+						enc.SetTexture(tex, slot+1)
+					}
+				}
+			}
 		}
 
 		// Draw using the pre-computed index region.
@@ -375,20 +442,93 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 // engine from Layout dimensions). Off-screen targets use a per-target
 // ortho projection so draws map 1:1 to the target's pixels.
 func (sp *SpritePass) setProjectionForTarget(_ backend.CommandEncoder, _ *PassContext, targetID uint32) {
+	sp.shader.SetUniformMat4("uProjection", sp.projectionForTarget(targetID))
+}
+
+// projectionForTarget returns the ortho projection matrix that maps the
+// target's pixel space to NDC. Screen targets reuse sp.Projection (set by
+// the engine); offscreen targets need their own ortho derived from RT size,
+// otherwise custom shaders that bind sp.Projection would draw quads at
+// wrong NDC coordinates whenever the offscreen RT differs from the screen
+// dimensions.
+func (sp *SpritePass) projectionForTarget(targetID uint32) [16]float32 {
 	if targetID == 0 {
-		// Screen: use the engine-provided projection (logical dimensions).
-		sp.shader.SetUniformMat4("uProjection", sp.Projection)
-	} else if sp.ResolveRenderTarget != nil {
-		if rt := sp.ResolveRenderTarget(targetID); rt != nil {
-			w, h := float32(rt.Width()), float32(rt.Height())
-			sp.shader.SetUniformMat4("uProjection", [16]float32{
-				2 / w, 0, 0, 0,
-				0, -2 / h, 0, 0,
-				0, 0, -1, 0,
-				-1, 1, 0, 1,
-			})
+		return sp.Projection
+	}
+	if sp.ResolveRenderTarget == nil {
+		return sp.Projection
+	}
+	rt := sp.ResolveRenderTarget(targetID)
+	if rt == nil {
+		return sp.Projection
+	}
+	w, h := float32(rt.Width()), float32(rt.Height())
+	return [16]float32{
+		2 / w, 0, 0, 0,
+		0, -2 / h, 0, 0,
+		0, 0, -1, 0,
+		-1, 1, 0, 1,
+	}
+}
+
+// bindKageImageUniforms populates the Kage-convention image built-ins
+// (uImageDstOrigin, uImageDstSize, uImageSrcNOrigin, uImageSrcNSize)
+// that the Kage→WGSL translator emits references to. Kage shaders use
+// `imageDstSize()` / `imageSrc0Size()` helpers that map to these
+// uniforms; without this binding they read zero and any downstream
+// math that divides by size (e.g. `dstPos.xy / imageDstSize()` to
+// compute normalized UV) silently produces NaN, causing the shader's
+// output to collapse to black.
+//
+// Ebitengine's runtime populates these built-ins automatically at draw
+// time. future-core's sprite pass has to do the equivalent explicitly.
+//
+// The sizes come from the batch's target render target and the bound
+// textures (primary TextureID + ExtraTextureIDs). Origins are always
+// (0, 0) — we don't support sub-image source regions here.
+func (sp *SpritePass) bindKageImageUniforms(shader backend.Shader, targetID uint32, b *batch.Batch) {
+	dstW, dstH := sp.targetDims(targetID)
+	shader.SetUniformVec2("uImageDstOrigin", [2]float32{0, 0})
+	shader.SetUniformVec2("uImageDstSize", [2]float32{dstW, dstH})
+
+	// Primary texture is slot 0 (TextureID). Extra textures are slots 1-3.
+	if sp.ResolveTexture != nil {
+		if tex := sp.ResolveTexture(b.TextureID); tex != nil {
+			shader.SetUniformVec2("uImageSrc0Origin", [2]float32{0, 0})
+			shader.SetUniformVec2("uImageSrc0Size", [2]float32{float32(tex.Width()), float32(tex.Height())})
+		}
+		for slot, texID := range b.ExtraTextureIDs {
+			name := "uImageSrc" + string(rune('1'+slot))
+			if texID == 0 {
+				shader.SetUniformVec2(name+"Origin", [2]float32{0, 0})
+				shader.SetUniformVec2(name+"Size", [2]float32{0, 0})
+				continue
+			}
+			tex := sp.ResolveTexture(texID)
+			if tex == nil {
+				continue
+			}
+			shader.SetUniformVec2(name+"Origin", [2]float32{0, 0})
+			shader.SetUniformVec2(name+"Size", [2]float32{float32(tex.Width()), float32(tex.Height())})
 		}
 	}
+}
+
+// targetDims returns the pixel dimensions of the current render target.
+// Screen (targetID=0) falls back to the framebuffer size captured in
+// sp.Projection. Offscreen targets query the RenderTarget directly.
+func (sp *SpritePass) targetDims(targetID uint32) (width, height float32) {
+	if targetID != 0 && sp.ResolveRenderTarget != nil {
+		if rt := sp.ResolveRenderTarget(targetID); rt != nil {
+			return float32(rt.Width()), float32(rt.Height())
+		}
+	}
+	// Derive screen dims from the ortho projection: sp.Projection[0] =
+	// 2/w, sp.Projection[5] = -2/h. Avoids threading ctx everywhere.
+	if sp.Projection[0] != 0 && sp.Projection[5] != 0 {
+		return 2.0 / sp.Projection[0], -2.0 / sp.Projection[5]
+	}
+	return 0, 0
 }
 
 // bindDefaultShader sets the default sprite pipeline and projection.
@@ -451,9 +591,21 @@ func vertexSliceToBytes(verts []batch.Vertex2D) []byte {
 }
 
 // indexSliceToBytes reinterprets a []uint16 as a []byte without copying.
+// Retained for callers (e.g. tests) that still produce uint16 indices.
 func indexSliceToBytes(indices []uint16) []byte {
 	if len(indices) == 0 {
 		return nil
 	}
 	return unsafe.Slice((*byte)(unsafe.Pointer(&indices[0])), len(indices)*2)
+}
+
+// indexSliceToBytesU32 reinterprets a []uint32 as a []byte without copying.
+// The sprite pass uses uint32 indices so the cumulative vertex offset
+// across all batched draws can exceed 65535 without wrapping (see the
+// tmpIndices field doc on SpritePass).
+func indexSliceToBytesU32(indices []uint32) []byte {
+	if len(indices) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&indices[0])), len(indices)*4)
 }

@@ -29,9 +29,10 @@ type renderer struct {
 	registerShader func(id uint32, shader *Shader)
 
 	// pendingClears tracks render targets that need GPU-native clearing on
-	// their next BeginRenderPass. Set by Image.Clear(), consumed by the
-	// sprite pass's ConsumePendingClear callback.
-	pendingClears map[uint32]bool
+	// their next BeginRenderPass. Supports multiple clear requests per
+	// target within a single frame (the AA buffer is flushed and
+	// re-entered many times per frame).
+	pendingClears pendingClearTracker
 
 	// registerRenderTarget is called when a new render target is created
 	// so the engine can resolve target IDs during rendering.
@@ -48,16 +49,33 @@ type renderer struct {
 	deferredDispose []*Image
 }
 
-// disposeDeferred drains the pending-disposal list. The engine calls this
-// once per frame, AFTER the sprite pass's Execute has flushed and
-// submitted its command buffer.
+// deferDispose queues an Image for GPU-resource teardown at the end of
+// the current frame, once the sprite pass has submitted its command
+// buffer. Called from Image.Dispose() so that callers can Dispose()
+// temporary images mid-frame without triggering "Destroyed texture
+// used in a submit" WebGPU validation errors — the batcher may still
+// hold draw commands referencing the image's texture at the time of
+// the Dispose() call.
+func (r *renderer) deferDispose(img *Image) {
+	if r == nil || img == nil {
+		return
+	}
+	r.deferredDispose = append(r.deferredDispose, img)
+}
+
+// disposeDeferred drains the pending-disposal list, invoking the
+// GPU-resource teardown (disposeNow) on each queued image. The engine
+// calls this once per frame, AFTER the sprite pass's Execute has
+// flushed and submitted its command buffer — at which point the GPU
+// queue owns the commands and destroying their referenced textures is
+// safe per the WebGPU spec.
 func (r *renderer) disposeDeferred() {
 	if r == nil {
 		return
 	}
 	for _, img := range r.deferredDispose {
 		if img != nil {
-			img.Dispose()
+			img.disposeNow()
 		}
 	}
 	r.deferredDispose = r.deferredDispose[:0]
@@ -74,4 +92,61 @@ func setRenderer(r *renderer) { globalRendererPtr.Store(r) }
 
 func (r *renderer) allocTextureID() uint32 {
 	return r.nextTextureID.Add(1)
+}
+
+// pendingClearTracker tracks render targets that need GPU-native clearing.
+// Each Request call increments a per-target counter; each Consume call
+// decrements and returns true while the count is positive. This supports
+// multiple clear requests per target within a single frame — the AA
+// buffer is flushed and re-entered many times per frame, and each
+// re-entry needs its own clear.
+type pendingClearTracker struct {
+	counts map[uint32]int
+}
+
+// newPendingClearTracker creates an initialized tracker.
+func newPendingClearTracker() pendingClearTracker {
+	return pendingClearTracker{counts: make(map[uint32]int)}
+}
+
+// Request registers a clear request for the given target. Multiple
+// requests accumulate — each will be consumed by a separate
+// BeginRenderPass. Used by flushAABuffer where each flush cycle
+// needs its own independent clear.
+func (t *pendingClearTracker) Request(targetID uint32) {
+	if t.counts == nil {
+		t.counts = make(map[uint32]int)
+	}
+	t.counts[targetID]++
+}
+
+// RequestOnce ensures at least one clear is pending for the target,
+// but does not accumulate. Multiple calls are idempotent. Used by
+// Image.Clear() where the caller wants the target cleared on its
+// next render pass regardless of how many times Clear() is called.
+func (t *pendingClearTracker) RequestOnce(targetID uint32) {
+	if t.counts == nil {
+		t.counts = make(map[uint32]int)
+	}
+	if t.counts[targetID] == 0 {
+		t.counts[targetID] = 1
+	}
+}
+
+// Consume returns true and decrements the counter if the target has
+// pending clears. Returns false when no clears remain.
+func (t *pendingClearTracker) Consume(targetID uint32) bool {
+	if t.counts == nil || t.counts[targetID] <= 0 {
+		return false
+	}
+	t.counts[targetID]--
+	if t.counts[targetID] == 0 {
+		delete(t.counts, targetID)
+	}
+	return true
+}
+
+// Has returns true if the target has any pending clear requests.
+func (t *pendingClearTracker) Has(targetID uint32) bool {
+	return t.counts != nil && t.counts[targetID] > 0
 }

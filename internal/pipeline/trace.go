@@ -7,10 +7,15 @@ import (
 	"sync/atomic"
 )
 
-// Per-frame rendering tracer, controlled by environment variables. Useful
-// for understanding what the sprite pass is doing on a given backend when
-// debugging visual regressions. Kept in a separate file to make it obvious
-// that this is instrumentation, not core logic.
+// DIAGNOSTIC TOOL — per-frame rendering tracer, controlled by environment
+// variables. Useful for understanding what the sprite pass is doing on a
+// given backend when debugging visual regressions. Kept in a separate
+// file to make it obvious that this is instrumentation, not core logic.
+//
+// Companion diagnostics (see those files for details):
+//
+//	internal/backend/webgpu/trace_js.go     — FUTURE_CORE_TRACE_WEBGPU
+//	internal/shadertranslate/tooling_dump_wgsl_test.go — TestDumpPointLightWGSL
 //
 // Environment variables (all cap frame count to keep logs small):
 //

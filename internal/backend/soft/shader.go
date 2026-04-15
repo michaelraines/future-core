@@ -23,6 +23,14 @@ func (s *Shader) SetUniformVec2(name string, v [2]float32) {
 	s.uniforms[name] = v
 }
 
+// SetUniformVec3 sets a vec3 uniform.
+func (s *Shader) SetUniformVec3(name string, v [3]float32) {
+	if s.uniforms == nil {
+		return
+	}
+	s.uniforms[name] = v
+}
+
 // SetUniformVec4 sets a vec4 uniform.
 func (s *Shader) SetUniformVec4(name string, v [4]float32) {
 	if s.uniforms == nil {
@@ -58,6 +66,9 @@ func (s *Shader) SetUniformBlock(name string, data []byte) {
 }
 
 // Dispose releases the shader.
+// PackCurrentUniforms returns nil (soft backend has no GPU uniform buffer).
+func (s *Shader) PackCurrentUniforms() []byte { return nil }
+
 func (s *Shader) Dispose() {
 	s.disposed = true
 	s.uniforms = nil

@@ -127,6 +127,11 @@ func writeUniformValue(dst []byte, v interface{}) {
 	case [2]float32:
 		binary.LittleEndian.PutUint32(dst[0:], math.Float32bits(val[0]))
 		binary.LittleEndian.PutUint32(dst[4:], math.Float32bits(val[1]))
+	case [3]float32:
+		// vec3<f32>: 12 bytes only; don't write a 4th float.
+		binary.LittleEndian.PutUint32(dst[0:], math.Float32bits(val[0]))
+		binary.LittleEndian.PutUint32(dst[4:], math.Float32bits(val[1]))
+		binary.LittleEndian.PutUint32(dst[8:], math.Float32bits(val[2]))
 	case [4]float32:
 		for i := 0; i < 4; i++ {
 			binary.LittleEndian.PutUint32(dst[i*4:], math.Float32bits(val[i]))
@@ -148,6 +153,12 @@ func (s *Shader) SetUniformFloat(name string, v float32) {
 
 // SetUniformVec2 records a vec2 uniform.
 func (s *Shader) SetUniformVec2(name string, v [2]float32) {
+	s.uniforms[name] = v
+	s.uniformsDirty = true
+}
+
+// SetUniformVec3 records a vec3 uniform (stored as [3]float32, 12 bytes).
+func (s *Shader) SetUniformVec3(name string, v [3]float32) {
 	s.uniforms[name] = v
 	s.uniformsDirty = true
 }
@@ -174,6 +185,9 @@ func (s *Shader) SetUniformInt(name string, v int32) {
 func (s *Shader) SetUniformBlock(name string, data []byte) { s.uniforms[name] = data }
 
 // Dispose releases shader resources.
+// PackCurrentUniforms returns nil (not yet implemented for this GPU backend).
+func (s *Shader) PackCurrentUniforms() []byte { return nil }
+
 func (s *Shader) Dispose() {
 	s.uniforms = nil
 	if s.vertexModule != 0 {

@@ -16,6 +16,7 @@ type mockShader struct {
 	disposed      bool
 	floatUniforms map[string]float32
 	vec2Uniforms  map[string][2]float32
+	vec3Uniforms  map[string][3]float32
 	vec4Uniforms  map[string][4]float32
 	mat4Uniforms  map[string][16]float32
 	intUniforms   map[string]int32
@@ -25,6 +26,7 @@ func newMockShader() *mockShader {
 	return &mockShader{
 		floatUniforms: make(map[string]float32),
 		vec2Uniforms:  make(map[string][2]float32),
+		vec3Uniforms:  make(map[string][3]float32),
 		vec4Uniforms:  make(map[string][4]float32),
 		mat4Uniforms:  make(map[string][16]float32),
 		intUniforms:   make(map[string]int32),
@@ -33,10 +35,12 @@ func newMockShader() *mockShader {
 
 func (s *mockShader) SetUniformFloat(name string, v float32)    { s.floatUniforms[name] = v }
 func (s *mockShader) SetUniformVec2(name string, v [2]float32)  { s.vec2Uniforms[name] = v }
+func (s *mockShader) SetUniformVec3(name string, v [3]float32)  { s.vec3Uniforms[name] = v }
 func (s *mockShader) SetUniformVec4(name string, v [4]float32)  { s.vec4Uniforms[name] = v }
 func (s *mockShader) SetUniformMat4(name string, v [16]float32) { s.mat4Uniforms[name] = v }
 func (s *mockShader) SetUniformInt(name string, v int32)        { s.intUniforms[name] = v }
 func (s *mockShader) SetUniformBlock(_ string, _ []byte)        {}
+func (s *mockShader) PackCurrentUniforms() []byte               { return nil }
 func (s *mockShader) Dispose()                                  { s.disposed = true }
 
 type mockPipeline struct {

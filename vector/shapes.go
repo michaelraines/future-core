@@ -122,14 +122,22 @@ func StrokeLine(dst *futurerender.Image, x0, y0, x1, y1, strokeWidth float32, cl
 	})
 }
 
-// colorToFloat converts a color.Color to float32 RGBA components.
+// colorToFloat converts a color.Color to premultiplied float32 RGBA
+// components in [0, 1]. color.Color.RGBA() is defined to return
+// premultiplied values in [0, 0xFFFF]; we just normalize by 0xFFFF.
+//
+// Vertex colors must stay premultiplied because the default sprite
+// shader does `texture(uTex, uv) * vColor` and the BlendSourceOver
+// preset uses (One, OneMinusSrcAlpha) — the premultiplied-alpha blend
+// equation. Dividing RGB by alpha here (to "straight" form) would make
+// a half-opaque white appear as fully-opaque white: SourceOver would
+// compute `1 + dst * 0.5` instead of the correct `0.5 + dst * 0.5`,
+// producing blown-out glows and ghosted halos. Matches what
+// libs/rendering/ebiten/vector.go's applyVertexColor does.
 func colorToFloat(clr color.Color) (r, g, b, a float32) {
 	cr, cg, cb, ca := clr.RGBA()
-	if ca == 0 {
-		return 0, 0, 0, 0
-	}
-	return float32(cr) / float32(ca), float32(cg) / float32(ca),
-		float32(cb) / float32(ca), float32(ca) / 0xffff
+	return float32(cr) / 0xffff, float32(cg) / 0xffff,
+		float32(cb) / 0xffff, float32(ca) / 0xffff
 }
 
 // circleSegments returns the number of segments for a circle approximation.
