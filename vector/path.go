@@ -294,7 +294,7 @@ func miterOffset(prev, curr, next point, half float32) (nx, ny float32) {
 // appendLineCap adds cap geometry at the endpoint of an open path.
 // endpoint is the path endpoint, interior is the adjacent point.
 // isStart is true for the first point, false for the last.
-func appendLineCap(vertices *[]futurerender.Vertex, indices *[]uint16, endpoint, interior point, half float32, cap LineCap) {
+func appendLineCap(vertices *[]futurerender.Vertex, indices *[]uint16, endpoint, interior point, half float32, lineCap LineCap) {
 	nx, ny := segmentNormal(interior, endpoint, half)
 	// Direction along the segment, pointing outward from the path.
 	dx := endpoint.x - interior.x
@@ -306,7 +306,9 @@ func appendLineCap(vertices *[]futurerender.Vertex, indices *[]uint16, endpoint,
 	dx /= dl
 	dy /= dl
 
-	switch cap {
+	switch lineCap {
+	case LineCapButt:
+		// Nothing to append — butt cap is the default stroke endpoint.
 	case LineCapSquare:
 		// Extend the endpoint by half-width away from the path.
 		// dx already points from interior toward endpoint (away from path).

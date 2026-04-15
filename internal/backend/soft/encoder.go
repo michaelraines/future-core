@@ -378,7 +378,7 @@ func (e *Encoder) textureSampler() func(u, v float32) (float32, float32, float32
 // Preset modes map to hand-tuned functions for clarity; any other factor/op
 // combination (e.g. alpha-masking or shadow-modulated additive blends used
 // by the lighting system) falls through to a generic factor-based blender
-// that honours the pipeline descriptor's BlendMode struct exactly.
+// that honors the pipeline descriptor's BlendMode struct exactly.
 func (e *Encoder) resolveBlendFunc() blendFunc {
 	if e.boundPipeline == nil {
 		return blendSourceOver

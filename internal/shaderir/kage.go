@@ -327,13 +327,14 @@ func (c *compiler) emitAssign(b *strings.Builder, s *ast.AssignStmt, prefix stri
 	if s.Tok == token.DEFINE {
 		// Short variable declaration: x := expr
 		for i, lhs := range s.Lhs {
-			if i < len(s.Rhs) {
-				rhsStr := c.exprString(s.Rhs[i])
-				typeName := c.inferType(s.Rhs[i])
-				varName := c.exprString(lhs)
-				c.localTypes[varName] = typeName
-				fmt.Fprintf(b, "%s%s %s = %s;\n", prefix, typeName, varName, rhsStr)
+			if i >= len(s.Rhs) {
+				continue
 			}
+			rhsStr := c.exprString(s.Rhs[i])
+			typeName := c.inferType(s.Rhs[i])
+			varName := c.exprString(lhs)
+			c.localTypes[varName] = typeName
+			fmt.Fprintf(b, "%s%s %s = %s;\n", prefix, typeName, varName, rhsStr)
 		}
 	} else {
 		// Regular assignment.
@@ -619,5 +620,5 @@ func isSwizzle(s string) bool {
 			return false
 		}
 	}
-	return len(s) > 0
+	return s != ""
 }

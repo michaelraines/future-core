@@ -224,10 +224,7 @@ func (e *engine) initRenderResources() error {
 		return e.renderTargets[targetID]
 	}
 	sp.ConsumePendingClear = func(targetID uint32) bool {
-		if e.rend.pendingClears.Consume(targetID) {
-			return true
-		}
-		return false
+		return e.rend.pendingClears.Consume(targetID)
 	}
 	sp.ApplyUniforms = func(shader backend.Shader, uniforms map[string]any) {
 		for name, val := range uniforms {

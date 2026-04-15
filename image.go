@@ -1353,7 +1353,7 @@ func colorMatrixToUniforms(cm fmath.ColorMatrix) (body [16]float32, translation 
 // blendToBackend converts the public Blend struct to the internal
 // backend.BlendMode struct by copying each factor and operation directly.
 // A zero-valued Blend produces a BlendMode that has Enabled=true with
-// src-over semantics, matching Ebitengine's behaviour where an uninitialised
+// src-over semantics, matching Ebitengine's behavior where an uninitialized
 // Blend value blends as source-over.
 func blendToBackend(b Blend) backend.BlendMode {
 	if (b == Blend{}) {

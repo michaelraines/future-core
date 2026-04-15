@@ -287,7 +287,7 @@ func TestNagaValidateFromKageFiles(t *testing.T) {
 		}
 		found++
 
-		name := strings.TrimSuffix(strings.Replace(path, "../", "", -1), ".kage")
+		name := strings.TrimSuffix(strings.ReplaceAll(path, "../", ""), ".kage")
 		name = strings.ReplaceAll(name, "/", "_")
 
 		t.Run(name, func(t *testing.T) {

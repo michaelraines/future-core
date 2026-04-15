@@ -267,7 +267,8 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			resolvedInfo = sp.ResolveShader(b.ShaderID)
 		}
 
-		if b.ShaderID != currentShaderID {
+		switch {
+		case b.ShaderID != currentShaderID:
 			switch {
 			case b.ShaderID == 0:
 				// Default-shader batches can carry non-default blend
@@ -295,12 +296,12 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			}
 			currentShaderID = b.ShaderID
 			sp.lastBlendMode = b.BlendMode
-		} else if b.ShaderID != 0 && resolvedInfo != nil {
+		case b.ShaderID != 0 && resolvedInfo != nil:
 			// Same shader but potentially different blend mode.
 			enc.SetBlendMode(b.BlendMode)
 			enc.SetPipeline(resolvedInfo.Pipeline)
 			sp.lastBlendMode = b.BlendMode
-		} else if b.ShaderID == 0 && b.BlendMode != sp.lastBlendMode {
+		case b.ShaderID == 0 && b.BlendMode != sp.lastBlendMode:
 			// Same default shader, but the blend differs from the
 			// previous default-shader batch. This fires between the
 			// lighting system's shadow-stamp passes (SourceOver →
@@ -516,7 +517,7 @@ func (sp *SpritePass) bindKageImageUniforms(shader backend.Shader, targetID uint
 // targetDims returns the pixel dimensions of the current render target.
 // Screen (targetID=0) falls back to the framebuffer size captured in
 // sp.Projection. Offscreen targets query the RenderTarget directly.
-func (sp *SpritePass) targetDims(targetID uint32) (float32, float32) {
+func (sp *SpritePass) targetDims(targetID uint32) (width, height float32) {
 	if targetID != 0 && sp.ResolveRenderTarget != nil {
 		if rt := sp.ResolveRenderTarget(targetID); rt != nil {
 			return float32(rt.Width()), float32(rt.Height())
