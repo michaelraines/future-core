@@ -387,33 +387,39 @@ func (e *engine) run() error {
 			tickDuration = time.Second / time.Duration(tps)
 		}
 
-		// Fixed-timestep update.
+		// Fixed-timestep update. Per-tick input ordering:
+		//   PollEvents   — events delivered synchronously into state
+		//   BeginTick    — increment per-key duration counters
+		//   game.Update  — game reads fresh state + durations
+		//   EndTick      — snapshot prev for next tick's edge detection,
+		//                  clear per-tick deltas (scroll, mouse, chars)
 		if tps > 0 {
 			accumulator += delta
 			for accumulator >= tickDuration {
-				inputState.Update()
 				win.PollEvents()
 				win.PollGamepads()
+				inputState.BeginTick()
 				if err := e.game.Update(); err != nil {
 					if errors.Is(err, ErrTermination) {
 						return nil
 					}
 					return err
 				}
+				inputState.EndTick()
 				tickCount++
 				accumulator -= tickDuration
 			}
 		} else {
-			// Uncapped: one update per frame.
-			inputState.Update()
 			win.PollEvents()
 			win.PollGamepads()
+			inputState.BeginTick()
 			if err := e.game.Update(); err != nil {
 				if errors.Is(err, ErrTermination) {
 					return nil
 				}
 				return err
 			}
+			inputState.EndTick()
 			tickCount++
 		}
 

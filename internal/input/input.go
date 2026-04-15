@@ -61,16 +61,17 @@ func New() *State {
 	}
 }
 
-// Update advances the input state to the next frame. Call at the beginning
-// of each update tick, AFTER all platform events for the previous tick
-// have been dispatched. It does three things:
-//   - snapshots the held state into prev* so edge-triggered queries
-//     (IsKeyJustPressed, AppendJustPressed/JustReleasedTouchIDs,
-//     IsGamepadButtonJustPressed) can compare against it next tick;
-//   - increments per-key / per-button duration counters for anything
-//     still held, and resets to 0 for anything released;
-//   - clears per-frame accumulators (mouse + scroll delta, chars).
-func (s *State) Update() {
+// BeginTick runs at the START of each game tick, AFTER any queued
+// platform events for this tick have been applied to the state and
+// BEFORE the game reads it. It increments per-key / per-button
+// duration counters for anything currently held (and resets to 0 for
+// anything released), so the game sees a 1-based duration on the
+// first tick it observes a press.
+//
+// BeginTick does NOT clear per-tick accumulators (scroll delta,
+// character buffer, mouse movement delta) — those must survive into
+// the game's read. EndTick does the clearing.
+func (s *State) BeginTick() {
 	for i := range s.keys {
 		if s.keys[i] {
 			s.keyDuration[i]++
@@ -78,8 +79,6 @@ func (s *State) Update() {
 			s.keyDuration[i] = 0
 		}
 	}
-	s.prevKeys = s.keys
-
 	for i := range s.mouseButtons {
 		if s.mouseButtons[i] {
 			s.mouseButtonDuration[i]++
@@ -87,17 +86,6 @@ func (s *State) Update() {
 			s.mouseButtonDuration[i] = 0
 		}
 	}
-	s.prevMouseButtons = s.mouseButtons
-
-	// Snapshot touches before next tick's events land. Build a fresh map
-	// so subsequent mutations of s.touches don't leak into s.prevTouches.
-	s.prevTouches = make(map[int]Touch, len(s.touches))
-	maps.Copy(s.prevTouches, s.touches)
-
-	// Snapshot gamepads and bump per-button duration counters for
-	// still-held buttons on each connected gamepad.
-	s.prevGamepads = make(map[int]Gamepad, len(s.gamepads))
-	maps.Copy(s.prevGamepads, s.gamepads)
 	for id, gp := range s.gamepads {
 		dur := s.gamepadButtonDuration[id]
 		if dur == nil {
@@ -118,12 +106,39 @@ func (s *State) Update() {
 			delete(s.gamepadButtonDuration, id)
 		}
 	}
+}
+
+// EndTick runs at the END of each game tick (after game.Update has
+// finished reading state). It snapshots the current held state into
+// prev* so the NEXT tick's edge-triggered queries (IsKeyJustPressed,
+// IsGamepadButtonJustPressed, AppendJustPressedTouchIDs) can compare
+// against it, and clears per-tick accumulators so the next tick
+// starts with a fresh scroll/mouse/character buffer.
+func (s *State) EndTick() {
+	s.prevKeys = s.keys
+	s.prevMouseButtons = s.mouseButtons
+
+	s.prevTouches = make(map[int]Touch, len(s.touches))
+	maps.Copy(s.prevTouches, s.touches)
+
+	s.prevGamepads = make(map[int]Gamepad, len(s.gamepads))
+	maps.Copy(s.prevGamepads, s.gamepads)
 
 	s.mouseDX = 0
 	s.mouseDY = 0
 	s.scrollDX = 0
 	s.scrollDY = 0
 	s.chars = s.chars[:0]
+}
+
+// Update is a convenience that runs BeginTick + EndTick back-to-back.
+// This matches the original pre-split behavior and is what tests use
+// to model "advance one whole tick". Engines should call BeginTick
+// and EndTick around game.Update instead — see engine_js.go /
+// engine_desktop.go for the reason why.
+func (s *State) Update() {
+	s.BeginTick()
+	s.EndTick()
 }
 
 // --- InputHandler interface implementation ---

@@ -369,13 +369,19 @@ func (e *engine) runAndroid(a app.App) {
 				tickDuration = time.Second / time.Duration(tps)
 			}
 
-			// Fixed-timestep update.
+			// Fixed-timestep update. See engine_desktop.go for the
+			// input-ordering rationale (Poll → BeginTick → game →
+			// EndTick). Android mirrors desktop: events arrive via
+			// app.Events and are already dispatched to inputState
+			// before PollEvents returns, so EndTick must happen
+			// AFTER game.Update — otherwise per-tick deltas (scroll,
+			// chars) would be cleared before the game consumes them.
 			if tps > 0 {
 				accumulator += delta
 				for accumulator >= tickDuration {
-					inputState.Update()
 					win.PollEvents()
 					win.PollGamepads()
+					inputState.BeginTick()
 					if err := e.game.Update(); err != nil {
 						if errors.Is(err, ErrTermination) {
 							return
@@ -383,14 +389,14 @@ func (e *engine) runAndroid(a app.App) {
 						fmt.Printf("android: game update: %v\n", err)
 						return
 					}
+					inputState.EndTick()
 					tickCount++
 					accumulator -= tickDuration
 				}
 			} else {
-				// Uncapped: one update per frame.
-				inputState.Update()
 				win.PollEvents()
 				win.PollGamepads()
+				inputState.BeginTick()
 				if err := e.game.Update(); err != nil {
 					if errors.Is(err, ErrTermination) {
 						return
@@ -398,6 +404,7 @@ func (e *engine) runAndroid(a app.App) {
 					fmt.Printf("android: game update: %v\n", err)
 					return
 				}
+				inputState.EndTick()
 				tickCount++
 			}
 

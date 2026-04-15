@@ -690,6 +690,137 @@ func TestGamepadButtonCountAndAxisCount(t *testing.T) {
 	require.Equal(t, 6, s.GamepadAxisCount(0))
 }
 
+// --- BeginTick / EndTick split ---
+//
+// The split exists because on the web backend, events arrive
+// asynchronously BEFORE the tick runs. Under the old unified Update()
+// the engine would clear the scroll accumulator (zero it) before the
+// game had a chance to read it. The split forces engines to structure
+// each tick as: BeginTick (read-prep) → game.Update (reads state) →
+// EndTick (snapshot-and-clear).
+
+func TestBeginTickDoesNotClearScrollDelta(t *testing.T) {
+	s := New()
+
+	// Simulate the web model: browser fires a wheel event asynchronously
+	// between ticks, which lands in s.scrollDX/DY. Then the engine
+	// begins the tick. The game must be able to read the delta.
+	s.OnMouseScrollEvent(platform.MouseScrollEvent{DX: 0, DY: 3})
+
+	s.BeginTick()
+
+	dx, dy := s.ScrollDelta()
+	require.InDelta(t, 0.0, dx, 1e-9)
+	require.InDelta(t, 3.0, dy, 1e-9)
+}
+
+func TestEndTickClearsScrollDelta(t *testing.T) {
+	s := New()
+
+	s.OnMouseScrollEvent(platform.MouseScrollEvent{DX: 1, DY: 2})
+	s.BeginTick()
+	// Game would read here.
+	s.EndTick()
+
+	dx, dy := s.ScrollDelta()
+	require.InDelta(t, 0.0, dx, 1e-9)
+	require.InDelta(t, 0.0, dy, 1e-9)
+}
+
+func TestBeginTickDoesNotClearInputChars(t *testing.T) {
+	s := New()
+
+	s.OnCharEvent('H')
+	s.OnCharEvent('i')
+
+	s.BeginTick()
+
+	require.Equal(t, []rune{'H', 'i'}, s.InputChars())
+}
+
+func TestEndTickClearsInputChars(t *testing.T) {
+	s := New()
+
+	s.OnCharEvent('X')
+	s.BeginTick()
+	s.EndTick()
+
+	require.Nil(t, s.InputChars())
+}
+
+func TestBeginTickDoesNotClearMouseDelta(t *testing.T) {
+	s := New()
+
+	s.OnMouseMoveEvent(platform.MouseMoveEvent{DX: 5, DY: 10})
+	s.BeginTick()
+
+	dx, dy := s.MouseDelta()
+	require.InDelta(t, 5.0, dx, 1e-9)
+	require.InDelta(t, 10.0, dy, 1e-9)
+}
+
+func TestEndTickSnapshotsKeysForEdgeDetection(t *testing.T) {
+	s := New()
+
+	// Tick 1: key pressed asynchronously before the tick runs.
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionPress})
+	s.BeginTick()
+	// Game reads during this window.
+	require.True(t, s.IsKeyJustPressed(platform.KeyA))
+	s.EndTick()
+
+	// Tick 2: key still held (no events). JustPressed must now be false.
+	s.BeginTick()
+	require.False(t, s.IsKeyJustPressed(platform.KeyA))
+	require.True(t, s.IsKeyPressed(platform.KeyA))
+	s.EndTick()
+}
+
+func TestBeginTickIncrementsDurationsForHeldKeys(t *testing.T) {
+	s := New()
+
+	// Press before the first tick runs.
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionPress})
+
+	s.BeginTick()
+	require.Equal(t, 1, s.KeyPressDuration(platform.KeyA))
+	s.EndTick()
+
+	s.BeginTick()
+	require.Equal(t, 2, s.KeyPressDuration(platform.KeyA))
+	s.EndTick()
+}
+
+func TestBeginTickResetsDurationWhenKeyReleased(t *testing.T) {
+	s := New()
+
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionPress})
+	s.BeginTick()
+	require.Equal(t, 1, s.KeyPressDuration(platform.KeyA))
+	s.EndTick()
+
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionRelease})
+	s.BeginTick()
+	require.Equal(t, 0, s.KeyPressDuration(platform.KeyA))
+	s.EndTick()
+}
+
+func TestEndTickSnapshotsTouchesForJustReleasedDetection(t *testing.T) {
+	s := New()
+
+	// Touch present for one full tick.
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 10, Y: 20, Action: platform.ActionPress})
+	s.BeginTick()
+	s.EndTick()
+
+	// Next tick: touch ends. Released detection compares against the
+	// EndTick snapshot.
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, Action: platform.ActionRelease})
+	s.BeginTick()
+	require.ElementsMatch(t, []int{1}, s.AppendJustReleasedTouchIDs(nil))
+	s.EndTick()
+}
+
 // --- Update frame advance ---
 
 func TestUpdateResetsDeltasAndCopiesState(t *testing.T) {
