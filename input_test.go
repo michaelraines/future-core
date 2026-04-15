@@ -403,6 +403,161 @@ func TestKeyToInternalOutOfBounds(t *testing.T) {
 
 // --- Empty collections return nil ---
 
+// --- New public API surface: durations + edge-triggered gamepad +
+// edge-triggered touch. Each has a nil-engine case and a wired case.
+
+func TestKeyPressDurationNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.Equal(t, 0, KeyPressDuration(KeyA))
+}
+
+func TestKeyPressDurationWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	s.OnKeyEvent(platform.KeyEvent{Key: platform.KeyA, Action: platform.ActionPress})
+	s.Update()
+	require.Equal(t, 1, KeyPressDuration(KeyA))
+
+	s.Update()
+	require.Equal(t, 2, KeyPressDuration(KeyA))
+}
+
+func TestMouseButtonPressDurationNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.Equal(t, 0, MouseButtonPressDuration(MouseButtonLeft))
+}
+
+func TestMouseButtonPressDurationWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	s.OnMouseButtonEvent(platform.MouseButtonEvent{Button: platform.MouseButtonLeft, Action: platform.ActionPress})
+	s.Update()
+	require.Equal(t, 1, MouseButtonPressDuration(MouseButtonLeft))
+}
+
+func TestIsGamepadButtonJustPressedNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.False(t, IsGamepadButtonJustPressed(0, 0))
+}
+
+func TestIsGamepadButtonJustPressedWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	buttons := [16]bool{}
+	buttons[0] = true
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	require.True(t, IsGamepadButtonJustPressed(GamepadID(0), GamepadButton(0)))
+
+	s.Update()
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	require.False(t, IsGamepadButtonJustPressed(GamepadID(0), GamepadButton(0)))
+}
+
+func TestIsGamepadButtonJustReleasedNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.False(t, IsGamepadButtonJustReleased(0, 0))
+}
+
+func TestIsGamepadButtonJustReleasedWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	buttons := [16]bool{}
+	buttons[0] = true
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	s.Update()
+	buttons[0] = false
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	require.True(t, IsGamepadButtonJustReleased(GamepadID(0), GamepadButton(0)))
+}
+
+func TestGamepadButtonPressDurationNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.Equal(t, 0, GamepadButtonPressDuration(0, 0))
+}
+
+func TestGamepadButtonPressDurationWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	buttons := [16]bool{}
+	buttons[2] = true
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0, Buttons: buttons})
+	s.Update()
+	require.Equal(t, 1, GamepadButtonPressDuration(GamepadID(0), GamepadButton(2)))
+}
+
+func TestGamepadButtonCountNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.Equal(t, 0, GamepadButtonCount(0))
+}
+
+func TestGamepadButtonCountWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	// Unknown: 0.
+	require.Equal(t, 0, GamepadButtonCount(GamepadID(0)))
+
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0})
+	require.Equal(t, 16, GamepadButtonCount(GamepadID(0)))
+}
+
+func TestGamepadAxisCountNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.Equal(t, 0, GamepadAxisCount(0))
+}
+
+func TestGamepadAxisCountWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	require.Equal(t, 0, GamepadAxisCount(GamepadID(0)))
+
+	s.OnGamepadEvent(platform.GamepadEvent{ID: 0})
+	require.Equal(t, 6, GamepadAxisCount(GamepadID(0)))
+}
+
+func TestAppendJustPressedTouchIDsNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.Empty(t, AppendJustPressedTouchIDs(nil))
+	// Non-nil slice is preserved even when no engine is attached.
+	existing := []TouchID{99}
+	require.Equal(t, existing, AppendJustPressedTouchIDs(existing))
+}
+
+func TestAppendJustPressedTouchIDsWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 10, Y: 20, Action: platform.ActionPress})
+	s.OnTouchEvent(platform.TouchEvent{ID: 2, X: 30, Y: 40, Action: platform.ActionPress})
+	ids := AppendJustPressedTouchIDs(nil)
+	require.ElementsMatch(t, []TouchID{1, 2}, ids)
+
+	// After Update, nothing is just-pressed even though both touches are still held.
+	s.Update()
+	require.Empty(t, AppendJustPressedTouchIDs(nil))
+}
+
+func TestAppendJustReleasedTouchIDsNilEngine(t *testing.T) {
+	withNilEngine(t)
+	require.Empty(t, AppendJustReleasedTouchIDs(nil))
+
+	existing := []TouchID{77}
+	require.Equal(t, existing, AppendJustReleasedTouchIDs(existing))
+}
+
+func TestAppendJustReleasedTouchIDsWired(t *testing.T) {
+	s := withInputEngine(t)
+
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 10, Y: 20, Action: platform.ActionPress})
+	s.Update()
+
+	require.Empty(t, AppendJustReleasedTouchIDs(nil))
+
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, Action: platform.ActionRelease})
+	require.ElementsMatch(t, []TouchID{1}, AppendJustReleasedTouchIDs(nil))
+
+	s.Update()
+	require.Empty(t, AppendJustReleasedTouchIDs(nil))
+}
+
 func TestTouchIDsEmptyReturnsNil(t *testing.T) {
 	_ = withInputEngine(t)
 	require.Nil(t, TouchIDs())

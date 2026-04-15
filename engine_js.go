@@ -365,10 +365,19 @@ func (e *engine) frame() {
 	}
 
 	// Fixed-timestep update.
+	//
+	// Async JS events accumulate into e.inputState between rAF
+	// callbacks (scrollDX, chars, key-down edges). BeginTick must
+	// happen BEFORE game.Update so per-key duration counters are
+	// bumped and the game reads a non-zero duration on the first
+	// tick of a new press. EndTick must happen AFTER game.Update so
+	// scroll / character / mouse-delta accumulators survive into the
+	// game's read — otherwise clearing them at tick start zeros the
+	// events the game is trying to consume.
 	if tps > 0 {
 		e.accumulator += delta
 		for e.accumulator >= tickDuration {
-			e.inputState.Update()
+			e.inputState.BeginTick()
 			if err := e.game.Update(); err != nil {
 				if errors.Is(err, ErrTermination) {
 					e.loopErr = err
@@ -377,15 +386,17 @@ func (e *engine) frame() {
 				e.loopErr = err
 				return
 			}
+			e.inputState.EndTick()
 			e.tickCount++
 			e.accumulator -= tickDuration
 		}
 	} else {
-		e.inputState.Update()
+		e.inputState.BeginTick()
 		if err := e.game.Update(); err != nil {
 			e.loopErr = err
 			return
 		}
+		e.inputState.EndTick()
 		e.tickCount++
 	}
 
