@@ -318,6 +318,9 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 		usage |= jsGPUTextureUsage(d.device, "RENDER_ATTACHMENT")
 	}
 	texDesc.Set("usage", usage)
+	if desc.Label != "" {
+		texDesc.Set("label", desc.Label)
+	}
 
 	handle := d.device.Call("createTexture", texDesc)
 	if handle.IsNull() || handle.IsUndefined() {
@@ -360,6 +363,9 @@ func (d *Device) NewBuffer(desc backend.BufferDescriptor) (backend.Buffer, error
 	bufDesc := js.Global().Get("Object").New()
 	bufDesc.Set("size", alignedSize)
 	bufDesc.Set("usage", jsBufferUsage(d.device, desc.Usage)|jsGPUBufferUsage(d.device, "COPY_DST"))
+	if desc.Label != "" {
+		bufDesc.Set("label", desc.Label)
+	}
 
 	handle := d.device.Call("createBuffer", bufDesc)
 	if handle.IsNull() || handle.IsUndefined() {
@@ -401,9 +407,16 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 		colorFmt = backend.TextureFormatRGBA8
 	}
 
+	colorLabel := ""
+	depthLabel := ""
+	if desc.Label != "" {
+		colorLabel = desc.Label + ".color"
+		depthLabel = desc.Label + ".depth"
+	}
 	colorTex, err := d.NewTexture(backend.TextureDescriptor{
 		Width: desc.Width, Height: desc.Height, Format: colorFmt,
 		RenderTarget: true,
+		Label:        colorLabel,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("webgpu: render target color: %w", err)
@@ -418,6 +431,7 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 		dt, err := d.NewTexture(backend.TextureDescriptor{
 			Width: desc.Width, Height: desc.Height, Format: depthFmt,
 			RenderTarget: true,
+			Label:        depthLabel,
 		})
 		if err != nil {
 			colorTex.Dispose()
