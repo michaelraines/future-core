@@ -34,3 +34,4 @@ coverage.html
 node_modules/
 package.json
 package-lock.json
+/futurecoremobile
