@@ -1,9 +1,13 @@
 package futurerender
 
 import (
+	"bytes"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 func TestPendingClearTrackerRequest(t *testing.T) {
@@ -139,4 +143,120 @@ func TestAABufferMultiFlushClearLifecycle(t *testing.T) {
 	require.True(t, rend.pendingClears.Consume(aaID), "flush 2 clear")
 	// The aaBufferNeedsClear from Clear() adds one more via RequestOnce,
 	// but it doesn't stack beyond what Request already accumulated.
+}
+
+// --- Registry cleanup + stale-ID warning ---
+//
+// These tests pin the dispose/resolve contract that replaced the
+// silent "destroyed texture used in a submit" crash:
+//   1. disposeNow calls rend.unregisterTexture / unregisterRenderTarget
+//      so subsequent resolveTexture lookups return nil rather than a
+//      stale/destroyed GPU handle.
+//   2. The same disposal records the ID in rend.disposedIDs so that
+//      the FIRST subsequent resolve emits a one-shot diagnostic
+//      warning, which turns "app silently breaks" into an actionable
+//      log line pointing at the lifecycle bug.
+
+func TestDisposeNowUnregistersTextureAndRenderTarget(t *testing.T) {
+	_, registered := withMockRenderer(t)
+	rend := getRenderer()
+	// withMockRenderer leaves unregisterRenderTarget as a no-op (the
+	// RT map isn't tracked by the helper) — override with a real one
+	// for this test.
+	rtMap := make(map[uint32]struct{})
+	rend.registerRenderTarget = func(id uint32, _ backend.RenderTarget) {
+		rtMap[id] = struct{}{}
+	}
+	rend.unregisterRenderTarget = func(id uint32) {
+		delete(rtMap, id)
+	}
+
+	img := NewImage(16, 16)
+	require.NotZero(t, img.textureID)
+	require.Contains(t, registered, img.textureID, "texture must be registered on creation")
+	require.Contains(t, rtMap, img.textureID, "render target must be registered on creation")
+
+	img.Dispose()
+	// Dispose is deferred — drain the queue to trigger disposeNow.
+	rend.disposeDeferred()
+
+	require.NotContains(t, registered, img.textureID, "unregisterTexture must remove the ID on dispose")
+	require.NotContains(t, rtMap, img.textureID, "unregisterRenderTarget must remove the ID on dispose")
+}
+
+func TestDisposeNowRecordsDisposedID(t *testing.T) {
+	withMockRenderer(t)
+	rend := getRenderer()
+
+	img := NewImage(8, 8)
+	id := img.textureID
+	require.NotZero(t, id)
+
+	img.Dispose()
+	rend.disposeDeferred()
+
+	_, recorded := rend.disposedIDs[id]
+	require.True(t, recorded, "disposeNow must add textureID to disposedIDs")
+}
+
+func TestMarkDisposedIDNilRendererIsNoOp(t *testing.T) {
+	var r *renderer
+	require.NotPanics(t, func() { r.markDisposedID(1) })
+}
+
+func TestMarkDisposedIDZeroIDIsNoOp(t *testing.T) {
+	// Texture ID 0 is the default "no texture" sentinel — never a real
+	// allocation. Storing it in disposedIDs would produce spurious
+	// warnings when code resolves untextured draws.
+	r := &renderer{}
+	r.markDisposedID(0)
+	require.Empty(t, r.disposedIDs)
+}
+
+func TestWarnStaleIDOnceEmitsExactlyOnce(t *testing.T) {
+	r := &renderer{}
+	r.markDisposedID(42)
+
+	// Capture stderr so we can verify the warning text without
+	// spamming test output. This also asserts the warning fires
+	// exactly once for a given stale ID.
+	origStderr := os.Stderr
+	readEnd, writeEnd, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = writeEnd
+	t.Cleanup(func() { os.Stderr = origStderr })
+
+	require.True(t, r.warnStaleIDOnce(42, "texture"), "stale ID must be detected")
+	require.False(t, r.warnStaleIDOnce(42, "texture"), "second call on same ID must be quiet")
+
+	require.NoError(t, writeEnd.Close())
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(readEnd)
+	require.Contains(t, buf.String(), "texture with id 42 was resolved after it was disposed")
+	require.Contains(t, buf.String(), "stale reference")
+}
+
+func TestWarnStaleIDOnceReturnsFalseForUnknownID(t *testing.T) {
+	r := &renderer{}
+	require.False(t, r.warnStaleIDOnce(99, "texture"),
+		"resolve miss for a never-registered ID is NOT a stale-dispose signal")
+}
+
+func TestWarnStaleIDOnceNilRendererIsNoOp(t *testing.T) {
+	var r *renderer
+	require.False(t, r.warnStaleIDOnce(1, "texture"))
+}
+
+func TestNewImageLabeledUsesProvidedPrefix(t *testing.T) {
+	dev, _ := withMockRenderer(t)
+
+	// mockDevice.NewRenderTarget drops the Label; we only care that
+	// the code path uses newImageLabeled correctly from the call
+	// sites. Inspect the last descriptor via the mock.
+	_ = newImageLabeled(8, 8, "aa-buffer")
+
+	require.NotEmpty(t, dev.renderTargetDescs, "mock device should have recorded the RT descriptor")
+	last := dev.renderTargetDescs[len(dev.renderTargetDescs)-1]
+	require.Contains(t, last.Label, "aa-buffer-")
+	require.Contains(t, last.Label, "-8x8")
 }

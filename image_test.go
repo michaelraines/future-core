@@ -47,9 +47,11 @@ func (rt *mockRenderTarget) Height() int                   { return rt.h }
 func (rt *mockRenderTarget) Dispose()                      { rt.disposed = true }
 
 type mockDevice struct {
-	textures      []*mockTexture
-	renderTargets []*mockRenderTarget
-	readScreenFn  func([]byte) bool
+	textures          []*mockTexture
+	renderTargets     []*mockRenderTarget
+	textureDescs      []backend.TextureDescriptor
+	renderTargetDescs []backend.RenderTargetDescriptor
+	readScreenFn      func([]byte) bool
 }
 
 func (d *mockDevice) Init(_ backend.DeviceConfig) error { return nil }
@@ -65,6 +67,7 @@ func (d *mockDevice) EndFrame()   {}
 func (d *mockDevice) NewTexture(desc backend.TextureDescriptor) (backend.Texture, error) {
 	t := &mockTexture{w: desc.Width, h: desc.Height, fmt: desc.Format}
 	d.textures = append(d.textures, t)
+	d.textureDescs = append(d.textureDescs, desc)
 	return t, nil
 }
 func (d *mockDevice) NewBuffer(_ backend.BufferDescriptor) (backend.Buffer, error) {
@@ -77,6 +80,7 @@ func (d *mockDevice) NewRenderTarget(desc backend.RenderTargetDescriptor) (backe
 	colorTex := &mockTexture{w: desc.Width, h: desc.Height}
 	rt := &mockRenderTarget{colorTex: colorTex, w: desc.Width, h: desc.Height}
 	d.renderTargets = append(d.renderTargets, rt)
+	d.renderTargetDescs = append(d.renderTargetDescs, desc)
 	return rt, nil
 }
 func (d *mockDevice) NewPipeline(_ backend.PipelineDescriptor) (backend.Pipeline, error) {
@@ -99,8 +103,12 @@ func withMockRenderer(t *testing.T) (dev *mockDevice, registered map[uint32]back
 		registerTexture: func(id uint32, tex backend.Texture) {
 			registered[id] = tex
 		},
-		registerRenderTarget: func(_ uint32, _ backend.RenderTarget) {},
-		pendingClears:        newPendingClearTracker(),
+		unregisterTexture: func(id uint32) {
+			delete(registered, id)
+		},
+		registerRenderTarget:   func(_ uint32, _ backend.RenderTarget) {},
+		unregisterRenderTarget: func(_ uint32) {},
+		pendingClears:          newPendingClearTracker(),
 	}
 	old := getRenderer()
 	setRenderer(rend)

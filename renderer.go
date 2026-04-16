@@ -1,6 +1,8 @@
 package futurerender
 
 import (
+	"fmt"
+	"os"
 	"sync/atomic"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -24,6 +26,14 @@ type renderer struct {
 	// NewImage) so the engine can track it for lookup during rendering.
 	registerTexture func(id uint32, tex backend.Texture)
 
+	// unregisterTexture drops a texture ID from the engine's registry.
+	// Called from disposeNow to prevent sprite_pass.ResolveTexture from
+	// handing out a destroyed handle on a subsequent frame — previously
+	// the entries lived on as dangling pointers and caused intermittent
+	// "Destroyed texture used in a submit" errors when a subcomponent
+	// held a stale textureID across scene transitions.
+	unregisterTexture func(id uint32)
+
 	// registerShader is called when a new shader is created so the
 	// pipeline can look it up by ID during rendering.
 	registerShader func(id uint32, shader *Shader)
@@ -38,6 +48,18 @@ type renderer struct {
 	// so the engine can resolve target IDs during rendering.
 	registerRenderTarget func(id uint32, rt backend.RenderTarget)
 
+	// unregisterRenderTarget drops a render target ID from the engine's
+	// registry on disposal. Mirror of unregisterTexture for RTs.
+	unregisterRenderTarget func(id uint32)
+
+	// disposedIDs tracks texture IDs that have been disposed. Each entry
+	// lives only long enough to produce one diagnostic warning the next
+	// time sprite pass resolves a stale ID — after the warning fires,
+	// the entry is cleared so subsequent hits stay quiet and the map
+	// can't grow unbounded. Populated by disposeNow, read by the
+	// engine-provided Resolve{Texture,RenderTarget} closures.
+	disposedIDs map[uint32]struct{}
+
 	// deferredDispose holds images whose GPU resources should be released
 	// AFTER the current frame's sprite-pass Flush+Execute has consumed
 	// any command-buffer references to them. Used by drawTrianglesAA when
@@ -47,6 +69,38 @@ type renderer struct {
 	// target when it begins the pass. The engine drains this list by
 	// calling disposeDeferred() immediately after renderPipeline.Execute.
 	deferredDispose []*Image
+}
+
+// markDisposedID records that textureID id has just had its GPU
+// resources destroyed, so the next stale lookup can surface a warning
+// rather than either crashing (if the sprite pass passed the dead
+// handle to the backend) or failing silently (if it returned nil).
+func (r *renderer) markDisposedID(id uint32) {
+	if r == nil || id == 0 {
+		return
+	}
+	if r.disposedIDs == nil {
+		r.disposedIDs = make(map[uint32]struct{})
+	}
+	r.disposedIDs[id] = struct{}{}
+}
+
+// warnStaleIDOnce emits a warning on the first resolve attempt for a
+// disposed texture ID and removes the entry, so the log doesn't spam
+// when the same stale handle is referenced repeatedly. Returns true
+// if this was a stale ID (signal to the caller that something in the
+// app is holding onto a disposed image).
+func (r *renderer) warnStaleIDOnce(id uint32, kind string) bool {
+	if r == nil || r.disposedIDs == nil {
+		return false
+	}
+	if _, stale := r.disposedIDs[id]; !stale {
+		return false
+	}
+	delete(r.disposedIDs, id)
+	fmt.Fprintf(os.Stderr, "future-core: %s with id %d was resolved after it was disposed — "+
+		"something in the app is holding a stale reference (scene transition leak?)\n", kind, id)
+	return true
 }
 
 // deferDispose queues an Image for GPU-resource teardown at the end of

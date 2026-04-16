@@ -114,7 +114,19 @@ var aaBufferScale = func() int {
 
 // NewImage creates a new blank image with the given dimensions.
 // If the rendering backend is initialized, a GPU texture is allocated.
+// The underlying GPU render target is labeled "image-rt-<id>-<w>x<h>"
+// for diagnostic purposes; callers that want a more specific label
+// (e.g. the sprite atlas, AA buffer) should use newImageLabeled.
 func NewImage(width, height int) *Image {
+	return newImageLabeled(width, height, "image-rt")
+}
+
+// newImageLabeled is NewImage with an explicit label prefix. Used by
+// subsystems that create render-target-backed images for specific
+// purposes — sprite atlas pages, AA supersample buffers — so the
+// resulting label in WebGPU / Vulkan validation errors identifies the
+// owning subsystem at a glance.
+func newImageLabeled(width, height int, labelPrefix string) *Image {
 	img := &Image{
 		width:  width,
 		height: height,
@@ -132,7 +144,7 @@ func NewImage(width, height int) *Image {
 			Width:       width,
 			Height:      height,
 			ColorFormat: backend.TextureFormatRGBA8,
-			Label:       fmt.Sprintf("image-rt-%d-%dx%d", img.textureID, width, height),
+			Label:       fmt.Sprintf("%s-%d-%dx%d", labelPrefix, img.textureID, width, height),
 		})
 		if rtErr == nil {
 			img.renderTarget = rt
@@ -694,6 +706,23 @@ func (img *Image) disposeNow() {
 	}
 
 	if img.parent == nil {
+		// Drop the registry entries for this image's texture and render
+		// target BEFORE disposing the GPU resources, so that any late
+		// resolveTexture / resolveRenderTarget call for this ID (e.g.
+		// an app component that hasn't been unmounted yet and still
+		// holds the old textureID) returns nil — the sprite pass
+		// already skips nil bindings — instead of handing out a
+		// destroyed GPU handle which WebGPU rejects at submit time
+		// with "Destroyed texture used in a submit".
+		if rend := getRenderer(); rend != nil && img.textureID != 0 {
+			if rend.unregisterTexture != nil {
+				rend.unregisterTexture(img.textureID)
+			}
+			if rend.unregisterRenderTarget != nil && img.renderTarget != nil {
+				rend.unregisterRenderTarget(img.textureID)
+			}
+			rend.markDisposedID(img.textureID)
+		}
 		if img.renderTarget != nil {
 			img.renderTarget.Dispose()
 			img.renderTarget = nil
@@ -1580,7 +1609,7 @@ func (img *Image) drawTrianglesAA(vertices []Vertex, indices []uint16, src *Imag
 	if img.aaBuffer == nil {
 		w := region.Dx() * aaBufferScale
 		h := region.Dy() * aaBufferScale
-		buf := NewImage(w, h)
+		buf := newImageLabeled(w, h, "aa-buffer")
 		if buf == nil || buf.renderTarget == nil {
 			if buf != nil {
 				buf.Dispose()

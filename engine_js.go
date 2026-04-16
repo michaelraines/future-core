@@ -177,11 +177,17 @@ func (e *engine) run() error {
 		registerTexture: func(id uint32, tex backend.Texture) {
 			e.textures[id] = tex
 		},
+		unregisterTexture: func(id uint32) {
+			delete(e.textures, id)
+		},
 		registerShader: func(id uint32, shader *Shader) {
 			e.shaders[id] = shader
 		},
 		registerRenderTarget: func(id uint32, rt backend.RenderTarget) {
 			e.renderTargets[id] = rt
+		},
+		unregisterRenderTarget: func(id uint32) {
+			delete(e.renderTargets, id)
 		},
 		pendingClears: newPendingClearTracker(),
 	}
@@ -281,7 +287,11 @@ func (e *engine) initRenderResources() error {
 	e.spritePass = sp
 
 	sp.ResolveTexture = func(texID uint32) backend.Texture {
-		return e.textures[texID]
+		if tex, ok := e.textures[texID]; ok {
+			return tex
+		}
+		e.rend.warnStaleIDOnce(texID, "texture")
+		return nil
 	}
 	sp.ResolveShader = func(shaderID uint32) *pipeline.ShaderInfo {
 		s, ok := e.shaders[shaderID]
@@ -294,7 +304,11 @@ func (e *engine) initRenderResources() error {
 		}
 	}
 	sp.ResolveRenderTarget = func(targetID uint32) backend.RenderTarget {
-		return e.renderTargets[targetID]
+		if rt, ok := e.renderTargets[targetID]; ok {
+			return rt
+		}
+		e.rend.warnStaleIDOnce(targetID, "render target")
+		return nil
 	}
 	sp.ConsumePendingClear = func(targetID uint32) bool {
 		return e.rend.pendingClears.Consume(targetID)
