@@ -93,7 +93,7 @@ func (sa *spriteAtlas) tryAtlas(padded []byte, padW, padH, contentW, contentH in
 
 func (sa *spriteAtlas) newPage() *atlasPage {
 	size := spriteAtlasInitialSize
-	img := NewImage(size, size)
+	img := newImageLabeled(size, size, "sprite-atlas-page")
 	if img.texture == nil {
 		return nil
 	}
@@ -196,7 +196,7 @@ func (ap *atlasPage) grow(rend *renderer) bool {
 	}
 
 	// Create a new larger texture and copy old content via shadow buffer.
-	newImg := NewImage(newSize, newSize)
+	newImg := newImageLabeled(newSize, newSize, "sprite-atlas-page-grown")
 	if newImg.texture == nil {
 		return false
 	}

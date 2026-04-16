@@ -202,9 +202,14 @@ func (e *engine) initRenderResources() error {
 	}
 	e.spritePass = sp
 
-	// Wire texture resolver.
+	// Wire texture resolver. The miss path surfaces a one-shot warning
+	// when a previously-disposed ID is looked up — see renderer.go.
 	sp.ResolveTexture = func(texID uint32) backend.Texture {
-		return e.textures[texID]
+		if tex, ok := e.textures[texID]; ok {
+			return tex
+		}
+		e.rend.warnStaleIDOnce(texID, "texture")
+		return nil
 	}
 
 	// Wire shader resolver.
@@ -221,7 +226,11 @@ func (e *engine) initRenderResources() error {
 
 	// Wire render target resolver.
 	sp.ResolveRenderTarget = func(targetID uint32) backend.RenderTarget {
-		return e.renderTargets[targetID]
+		if rt, ok := e.renderTargets[targetID]; ok {
+			return rt
+		}
+		e.rend.warnStaleIDOnce(targetID, "render target")
+		return nil
 	}
 	sp.ConsumePendingClear = func(targetID uint32) bool {
 		return e.rend.pendingClears.Consume(targetID)
@@ -491,11 +500,17 @@ func (e *engine) initDevice(win platform.Window) error {
 		registerTexture: func(id uint32, tex backend.Texture) {
 			e.textures[id] = tex
 		},
+		unregisterTexture: func(id uint32) {
+			delete(e.textures, id)
+		},
 		registerShader: func(id uint32, shader *Shader) {
 			e.shaders[id] = shader
 		},
 		registerRenderTarget: func(id uint32, rt backend.RenderTarget) {
 			e.renderTargets[id] = rt
+		},
+		unregisterRenderTarget: func(id uint32) {
+			delete(e.renderTargets, id)
 		},
 		pendingClears: newPendingClearTracker(),
 	}
