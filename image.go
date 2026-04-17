@@ -81,6 +81,16 @@ type Image struct {
 	// their pixel data is interleaved with other images in the atlas.
 	atlased bool
 
+	// atlasPageBackref, on atlased images AND their SubImage descendants,
+	// points at the atlas page that owns the underlying GPU texture. On
+	// atlas grow the page rescales its UVs in-place; tracking descendants
+	// here lets `SubImage` enroll any derived glyph/sprite sub-image in
+	// the same rescale list so cached SubImage references (e.g. the
+	// DebugPrint per-rune cache, the text package's glyphImageCache)
+	// don't end up sampling a doubled pixel region after grow and
+	// producing white/garbled text.
+	atlasPageBackref *atlasPage
+
 	// aaBuffer is a lazily-allocated 2x-scale offscreen used to implement
 	// DrawTrianglesOptions.AntiAlias. Drawn into at AA call sites, then
 	// flushed (downsample-composited) back into img at the next sync
@@ -574,17 +584,36 @@ func (img *Image) SubImage(r goimage.Rectangle) *Image {
 		parent = img.parent
 	}
 
-	return &Image{
-		width:     rw,
-		height:    rh,
-		texture:   parent.texture,
-		textureID: parent.textureID,
-		parent:    parent,
-		u0:        su0,
-		v0:        sv0,
-		u1:        su1,
-		v1:        sv1,
+	// Propagate img.textureID rather than parent.textureID. For atlased
+	// images these now differ: the sub-image's textureID is the atlas's
+	// shared alias (the one the renderer re-points on every grow), while
+	// parent.textureID is the underlying atlas page's own ID — only used
+	// for ownership bookkeeping inside disposeNow.
+	sub := &Image{
+		width:            rw,
+		height:           rh,
+		texture:          parent.texture,
+		textureID:        img.textureID,
+		parent:           parent,
+		u0:               su0,
+		v0:               sv0,
+		u1:               su1,
+		v1:               sv1,
+		atlased:          img.atlased,
+		atlasPageBackref: img.atlasPageBackref,
 	}
+	// If this sub-image is rooted in a sprite-atlas page, enroll it in
+	// the page's placed list so atlas.grow() rescales its UVs alongside
+	// direct atlased images. Without this, long-lived cached sub-images
+	// (e.g. util/debugprint.go's per-rune cache) retain pre-grow UVs,
+	// end up sampling a 2× pixel region after every grow, and render
+	// as white/garbled blocks. The `atlasPageBackref` may be nil if the
+	// parent isn't atlased — non-atlased SubImage is a pure UV-range
+	// calculation and needs no registration.
+	if sub.atlasPageBackref != nil {
+		sub.atlasPageBackref.registerDescendant(sub)
+	}
+	return sub
 }
 
 // Clear resets all pixels to transparent black (0, 0, 0, 0).

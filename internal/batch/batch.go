@@ -228,6 +228,33 @@ func (b *Batcher) AddQuad(
 	})
 }
 
+// RescaleUVsForTexture multiplies TexU/TexV on every already-queued
+// vertex whose command's TextureID matches `textureID` by `scale`.
+// Called from the sprite atlas on a mid-frame grow: by the time the
+// atlas page's backing GPU texture is replaced with a larger one,
+// in-place mutation of the source Image's u0..u1 fields alone is not
+// enough because DrawImage has already copied the pre-grow UVs into
+// the arena. Leaving them unscaled would make every batched quad that
+// already referenced the old atlas sample a doubled pixel region on
+// the new, larger texture — which is exactly the "DebugPrint HUD text
+// is garbled after scene transitions" regression. Only UVs are
+// touched; positions, colors, indices stay unchanged.
+func (b *Batcher) RescaleUVsForTexture(textureID uint32, scale float32) {
+	if scale == 1 || textureID == 0 {
+		return
+	}
+	for i := range b.commands {
+		cmd := &b.commands[i]
+		if cmd.TextureID != textureID {
+			continue
+		}
+		for v := range cmd.Vertices {
+			cmd.Vertices[v].TexU *= scale
+			cmd.Vertices[v].TexV *= scale
+		}
+	}
+}
+
 // Flush produces batches from accumulated commands and resets the batcher.
 //
 // Commands are emitted in strict insertion order: there is NO reordering.
