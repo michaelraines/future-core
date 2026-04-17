@@ -183,6 +183,7 @@ func (rt *ResourceTracker) recoverImage(device backend.Device, img *Image, rec *
 
 	img.texture = tex
 	img.disposed = false
+	img.pendingDispose = false
 
 	// Re-register texture with renderer.
 	if rend := getRenderer(); rend != nil && rend.registerTexture != nil {

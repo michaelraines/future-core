@@ -185,6 +185,7 @@ func TestRecoverImageBlank(t *testing.T) {
 	img.texture = nil
 	img.renderTarget = nil
 	img.disposed = true
+	img.pendingDispose = true
 
 	// Create a fresh device for recovery.
 	recoveryDev := &shaderMockDevice{}
@@ -194,6 +195,7 @@ func TestRecoverImageBlank(t *testing.T) {
 	// Image should have a new texture and be un-disposed.
 	require.NotNil(t, img.texture)
 	require.False(t, img.disposed)
+	require.False(t, img.pendingDispose, "context recovery must clear pendingDispose alongside disposed")
 	require.NotNil(t, img.renderTarget, "render target should be recreated for NewImage")
 
 	// The recovery device should have created 1 texture + 1 render target.
