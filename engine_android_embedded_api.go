@@ -5,6 +5,8 @@ package futurerender
 import (
 	"errors"
 	"sync"
+
+	platandroid "github.com/michaelraines/future-core/internal/platform/android"
 )
 
 // errEmbeddedEngineUnset is returned from AndroidBootstrap /
@@ -198,6 +200,62 @@ func AndroidDispose() {
 	}
 	embeddedEngine.Dispose()
 	embeddedEngine = nil
+}
+
+// rawInputWindow returns the android.Window backing the embedded engine,
+// or nil if no engine / window is set up. Callers must hold embeddedMu.
+func rawInputWindow() *platandroid.Window {
+	if embeddedEngine == nil || embeddedEngine.window == nil {
+		return nil
+	}
+	w, _ := embeddedEngine.window.(*platandroid.Window)
+	return w
+}
+
+// AndroidDispatchTouch routes a MotionEvent sample into the engine's
+// input handler. action is one of android.MotionAction*; id is the
+// pointer ID; x/y are in physical pixels.
+func AndroidDispatchTouch(action, id int, x, y float32) {
+	embeddedMu.Lock()
+	w := rawInputWindow()
+	embeddedMu.Unlock()
+	if w != nil {
+		w.HandleRawTouch(action, id, x, y)
+	}
+}
+
+// AndroidDispatchKey routes a KeyEvent into the engine's input handler.
+// keyCode is KeyEvent.getKeyCode(), unicodeChar is getUnicodeChar(0),
+// meta is getMetaState(), source is getSource(), deviceID is
+// getDeviceId(), and down is true for ACTION_DOWN.
+func AndroidDispatchKey(keyCode, unicodeChar, meta, source, deviceID int, down bool) {
+	embeddedMu.Lock()
+	w := rawInputWindow()
+	embeddedMu.Unlock()
+	if w != nil {
+		w.HandleRawKey(keyCode, unicodeChar, meta, source, deviceID, down)
+	}
+}
+
+// AndroidDispatchGamepadAxis routes a MotionEvent axis value into
+// the engine's gamepad state machine.
+func AndroidDispatchGamepadAxis(deviceID, axis int, value float32) {
+	embeddedMu.Lock()
+	w := rawInputWindow()
+	embeddedMu.Unlock()
+	if w != nil {
+		w.HandleRawGamepadAxis(deviceID, axis, value)
+	}
+}
+
+// AndroidDispatchGamepadConnection reports a device add/remove event.
+func AndroidDispatchGamepadConnection(deviceID int, connected bool) {
+	embeddedMu.Lock()
+	w := rawInputWindow()
+	embeddedMu.Unlock()
+	if w != nil {
+		w.HandleRawGamepadConnection(deviceID, connected)
+	}
 }
 
 // AndroidDeviceScale returns the pixel density for the current

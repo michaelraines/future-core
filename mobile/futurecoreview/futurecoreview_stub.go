@@ -80,16 +80,18 @@ func UpdateTouchesOnAndroid(action, id int, x, y float32) {
 }
 
 // OnKeyDownOnAndroid — android-only; no-op elsewhere.
-func OnKeyDownOnAndroid(keyCode, unicodeChar, source, deviceID int) {
+func OnKeyDownOnAndroid(keyCode, unicodeChar, meta, source, deviceID int) {
 	_ = keyCode
 	_ = unicodeChar
+	_ = meta
 	_ = source
 	_ = deviceID
 }
 
 // OnKeyUpOnAndroid — android-only; no-op elsewhere.
-func OnKeyUpOnAndroid(keyCode, source, deviceID int) {
+func OnKeyUpOnAndroid(keyCode, meta, source, deviceID int) {
 	_ = keyCode
+	_ = meta
 	_ = source
 	_ = deviceID
 }

@@ -163,7 +163,7 @@ func parseJavaPkgFlag(args []string) (string, bool) {
 // without consuming it. Supports both "-flag value" and "-flag=value"
 // forms; ignores unknown flags.
 func parseStringFlag(args []string, name string) (string, bool) {
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		a := args[i]
 		if a == "--" || !strings.HasPrefix(a, "-") {
 			return "", false
@@ -224,19 +224,18 @@ func overlayAndroidJava(aarPath, javaPkg string) error {
 	}
 	defer os.RemoveAll(tmp)
 
-	// 1. Extract AAR into tmp/aar/, classes.jar into tmp/classes/.
+	// 1. Extract AAR (shallow). classes.jar is NOT extracted — on
+	// case-insensitive filesystems (default on macOS APFS) the
+	// gomobile-generated Futurecoreview.class and our FutureCoreView.class
+	// overwrite each other on disk. Instead we merge the JAR in-memory.
 	aarDir := filepath.Join(tmp, "aar")
 	if err := unzip(aarPath, aarDir); err != nil {
 		return fmt.Errorf("extract aar: %w", err)
 	}
 	classesJarPath := filepath.Join(aarDir, "classes.jar")
-	classesDir := filepath.Join(tmp, "classes")
-	if err := unzip(classesJarPath, classesDir); err != nil {
-		return fmt.Errorf("extract classes.jar: %w", err)
-	}
 
 	// 2. Template Java source files and write to tmp/src/<pkgPath>/.
-	// Note: gomobile maps Go package "futurecoreview" to Java package
+	// gomobile maps Go package "futurecoreview" to Java package
 	// "<javaPkg>.futurecoreview"; our view classes live in the same
 	// package so `import ...Futurecoreview` resolves without qualified
 	// class names in the .java source.
@@ -259,7 +258,11 @@ func overlayAndroidJava(aarPath, javaPkg string) error {
 
 	// 3. Compile with javac. Classpath includes the gomobile-generated
 	// classes.jar (for the Futurecoreview trampoline class we import)
-	// and android.jar (for Android framework types).
+	// and android.jar (for Android framework types). Output goes to a
+	// case-safe directory: the compiled class file names (FutureCoreView,
+	// FutureCoreSurfaceView) differ from gomobile's Futurecoreview ONLY
+	// in case, so we keep them in their own dir and merge at the JAR
+	// level where case preservation is guaranteed.
 	classesOut := filepath.Join(tmp, "compiled")
 	if err := os.MkdirAll(classesOut, 0o755); err != nil {
 		return err
@@ -277,19 +280,134 @@ func overlayAndroidJava(aarPath, javaPkg string) error {
 		return fmt.Errorf("javac: %w", err)
 	}
 
-	// 4. Merge compiled .class files into classes/.
-	if err := copyTree(classesOut, classesDir); err != nil {
-		return fmt.Errorf("merge compiled classes: %w", err)
-	}
-
-	// 5. Rebuild classes.jar and the AAR.
-	if err := zipDir(classesDir, classesJarPath); err != nil {
+	// 4. Rebuild classes.jar in-memory: copy every entry from the
+	// existing classes.jar, then add compiled .class files. Zip
+	// entries preserve case unambiguously even if the filesystem
+	// the tool runs on wouldn't.
+	if err := mergeClassesJar(classesJarPath, classesOut); err != nil {
 		return fmt.Errorf("rebuild classes.jar: %w", err)
 	}
+
+	// 5. Rebuild the AAR from the extracted tree.
 	if err := zipDir(aarDir, aarPath); err != nil {
 		return fmt.Errorf("rebuild aar: %w", err)
 	}
 	return nil
+}
+
+// mergeClassesJar rewrites jarPath to contain every entry already in it
+// PLUS every file under compiledDir (added at the same relative path).
+// Existing entries are preserved byte-for-byte. Compiled class files
+// with the same (case-sensitive) name as an existing entry replace it;
+// names that only differ in case co-exist — the zip format is fully
+// case-sensitive, so this round-trip is lossless even on APFS/NTFS.
+func mergeClassesJar(jarPath, compiledDir string) error {
+	zr, err := zip.OpenReader(jarPath)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	// Index compiled files by archive-relative path.
+	compiled := map[string]string{}
+	if err := filepath.Walk(compiledDir, func(p string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() {
+			return werr
+		}
+		rel, err := filepath.Rel(compiledDir, p)
+		if err != nil {
+			return err
+		}
+		compiled[filepath.ToSlash(rel)] = p
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Write to <jarPath>.new, then atomically swap.
+	tmpOut := jarPath + ".new"
+	f, err := os.Create(tmpOut)
+	if err != nil {
+		return err
+	}
+	zw := zip.NewWriter(f)
+
+	// 4a. Copy existing entries, skipping any the compiler is about
+	// to overwrite (exact-name match only).
+	for _, e := range zr.File {
+		if _, clash := compiled[e.Name]; clash {
+			continue
+		}
+		if err := copyZipEntry(zw, e); err != nil {
+			zw.Close()
+			f.Close()
+			os.Remove(tmpOut)
+			return err
+		}
+	}
+
+	// 4b. Add compiled entries.
+	for name, diskPath := range compiled {
+		if err := addZipFile(zw, name, diskPath); err != nil {
+			zw.Close()
+			f.Close()
+			os.Remove(tmpOut)
+			return err
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		f.Close()
+		os.Remove(tmpOut)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpOut)
+		return err
+	}
+	return os.Rename(tmpOut, jarPath)
+}
+
+// copyZipEntry re-writes one archive entry into the new writer,
+// preserving its byte content and metadata.
+func copyZipEntry(zw *zip.Writer, e *zip.File) error {
+	hdr := &zip.FileHeader{
+		Name:     e.Name,
+		Method:   e.Method,
+		Modified: time.Time{},
+	}
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		return err
+	}
+	rc, err := e.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	_, err = io.Copy(w, rc) //nolint:gosec // trusted archive produced in the same pipeline
+	return err
+}
+
+// addZipFile adds diskPath into zw at archive path name, with a zeroed
+// mtime so the result is reproducible.
+func addZipFile(zw *zip.Writer, name, diskPath string) error {
+	hdr := &zip.FileHeader{
+		Name:     name,
+		Method:   zip.Deflate,
+		Modified: time.Time{},
+	}
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		return err
+	}
+	src, err := os.Open(diskPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	_, err = io.Copy(w, src)
+	return err
 }
 
 // findAndroidJar returns a path to an android.jar from the installed
@@ -432,38 +550,3 @@ func zipDir(dir, path string) error {
 	return zw.Close()
 }
 
-// copyTree copies every file under src into dst, preserving the
-// relative path layout.
-func copyTree(src, dst string) error {
-	return filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, p)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		r, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		defer r.Close()
-		w, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode())
-		if err != nil {
-			return err
-		}
-		defer w.Close()
-		_, err = io.Copy(w, r)
-		return err
-	})
-}

@@ -119,80 +119,71 @@ func DeviceScale() float64 {
 	return futurerender.AndroidDeviceScale()
 }
 
-// Input dispatch — Phase 2 will populate these. Phase 1 leaves them
-// as no-ops so the AAR still exports matching Java signatures; input
-// events hit Go but are dropped on the floor. This avoids
-// regenerating the AAR between Phase 1 and Phase 2.
+// Input dispatch — routes Java-sourced MotionEvent / KeyEvent /
+// InputDevice data through futurerender's embedded-engine API. Each
+// function forwards to AndroidDispatch* which type-asserts the engine's
+// window to *android.Window and calls its HandleRaw* method.
 
-// UpdateTouchesOnAndroid forwards a touch event to the engine.
-// action is AMOTION_EVENT_ACTION_* (0=DOWN, 1=UP, 2=MOVE, 3=CANCEL).
+// UpdateTouchesOnAndroid forwards a touch sample to the engine.
+// action is the masked MotionEvent action (0=DOWN, 1=UP, 2=MOVE,
+// 3=CANCEL, 5=POINTER_DOWN, 6=POINTER_UP). id is the pointer ID;
+// x/y are in physical pixels.
 func UpdateTouchesOnAndroid(action, id int, x, y float32) {
-	// Phase 2: window.HandleRawTouch
-	_ = action
-	_ = id
-	_ = x
-	_ = y
+	futurerender.AndroidDispatchTouch(action, id, x, y)
 }
 
-// OnKeyDownOnAndroid forwards a key-press event.
-func OnKeyDownOnAndroid(keyCode, unicodeChar, source, deviceID int) {
-	// Phase 2
-	_ = keyCode
-	_ = unicodeChar
-	_ = source
-	_ = deviceID
+// OnKeyDownOnAndroid forwards a key-press event from dispatchKeyEvent.
+func OnKeyDownOnAndroid(keyCode, unicodeChar, meta, source, deviceID int) {
+	futurerender.AndroidDispatchKey(keyCode, unicodeChar, meta, source, deviceID, true)
 }
 
-// OnKeyUpOnAndroid forwards a key-release event.
-func OnKeyUpOnAndroid(keyCode, source, deviceID int) {
-	// Phase 2
-	_ = keyCode
-	_ = source
-	_ = deviceID
+// OnKeyUpOnAndroid forwards a key-release event from dispatchKeyEvent.
+func OnKeyUpOnAndroid(keyCode, meta, source, deviceID int) {
+	futurerender.AndroidDispatchKey(keyCode, 0, meta, source, deviceID, false)
 }
 
-// OnGamepadAxisChanged reports a gamepad analog axis change.
+// OnGamepadAxisChanged reports one axis from MotionEvent.getAxisValue
+// (usually called once per axis per event). axisID is the Android
+// MotionEvent.AXIS_* constant; value is the normalized axis value.
 func OnGamepadAxisChanged(deviceID, axisID int, value float32) {
-	_ = deviceID
-	_ = axisID
-	_ = value
+	futurerender.AndroidDispatchGamepadAxis(deviceID, axisID, value)
 }
 
-// OnGamepadHatChanged reports a d-pad / hat-switch change.
-func OnGamepadHatChanged(deviceID, hatID, xValue, yValue int) {
-	_ = deviceID
-	_ = hatID
-	_ = xValue
-	_ = yValue
+// OnGamepadHatChanged reports a d-pad / hat-switch change. The
+// Android input system exposes the HAT as two axes (HAT_X / HAT_Y);
+// we forward them through the same axis path.
+func OnGamepadHatChanged(deviceID, _, xValue, yValue int) {
+	// HAT values from Android are already in {-1, 0, +1}; the axis path
+	// stores them as float64 in the GamepadEvent.Axes slots beyond the
+	// stick/trigger layout. Treat them as axis 15/16 (MotionEvent.AXIS_HAT_X/Y).
+	futurerender.AndroidDispatchGamepadAxis(deviceID, 15, float32(xValue))
+	futurerender.AndroidDispatchGamepadAxis(deviceID, 16, float32(yValue))
 }
 
-// OnGamepadButton reports a gamepad button press or release.
+// OnGamepadButton reports a button press or release. keyCode is the
+// Android KeyEvent.KEYCODE_BUTTON_* value.
 func OnGamepadButton(deviceID, keyCode int, pressed bool) {
-	_ = deviceID
-	_ = keyCode
-	_ = pressed
+	// Buttons share the dispatchKey path: Window.HandleRawKey detects
+	// gamepad sources and routes to the gamepad state machine.
+	const gamepadSource = 0x00000401 // SOURCE_GAMEPAD
+	futurerender.AndroidDispatchKey(keyCode, 0, 0, gamepadSource, deviceID, pressed)
 }
 
-// OnGamepadAdded registers a newly-connected gamepad.
+// OnGamepadAdded registers a newly-connected gamepad. For now the
+// device registration is implicit — the first axis/button event
+// activates the gamepad state — so this is a connection notification
+// only.
 func OnGamepadAdded(
 	deviceID int,
-	name string,
-	axisCount, hatCount int,
-	descriptor string,
-	vendorID, productID, buttonMask, axisMask int,
+	_ string,
+	_, _ int,
+	_ string,
+	_, _, _, _ int,
 ) {
-	_ = deviceID
-	_ = name
-	_ = axisCount
-	_ = hatCount
-	_ = descriptor
-	_ = vendorID
-	_ = productID
-	_ = buttonMask
-	_ = axisMask
+	futurerender.AndroidDispatchGamepadConnection(deviceID, true)
 }
 
 // OnInputDeviceRemoved drops gamepad state on unplug.
 func OnInputDeviceRemoved(deviceID int) {
-	_ = deviceID
+	futurerender.AndroidDispatchGamepadConnection(deviceID, false)
 }

@@ -40,19 +40,28 @@ func TestHasOutputFlagIgnoresDoubleDashSentinel(t *testing.T) {
 	require.False(t, hasOutputFlag([]string{"-target=android", "--", "-o=not-a-flag"}))
 }
 
-func TestTakesValueRecognizesGomobileFlags(t *testing.T) {
-	// Anchors the list of gomobile bind flags that consume a
-	// following positional argument. If gomobile adds a new
-	// space-separated flag we don't list here, an unknown-flag skip
-	// in hasOutputFlag may miscount — so this test documents the
-	// known set.
-	for _, name := range []string{
-		"target", "o", "ldflags", "gcflags", "tags",
-		"javapkg", "prefix", "bundleid", "iosversion",
-		"androidapi", "classpath", "bootclasspath",
-	} {
-		require.True(t, takesValue(name), "%q should be a value-consuming flag", name)
+func TestParseStringFlagForms(t *testing.T) {
+	// Covers both "-name value" and "-name=value" forms, plus -- stop.
+	cases := []struct {
+		name    string
+		args    []string
+		flag    string
+		want    string
+		present bool
+	}{
+		{"equals form", []string{"-o=x.aar"}, "o", "x.aar", true},
+		{"space form", []string{"-o", "x.aar"}, "o", "x.aar", true},
+		{"double dash prefix", []string{"--o=x.aar"}, "o", "x.aar", true},
+		{"javapkg equals", []string{"-javapkg=com.example.app"}, "javapkg", "com.example.app", true},
+		{"missing", []string{"-target=android"}, "o", "", false},
+		{"stop on --", []string{"--", "-o=x.aar"}, "o", "", false},
+		{"missing value after space flag", []string{"-o"}, "o", "", false},
 	}
-	require.False(t, takesValue("nonexistent"))
-	require.False(t, takesValue("a"))
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := parseStringFlag(c.args, c.flag)
+			require.Equal(t, c.present, ok)
+			require.Equal(t, c.want, got)
+		})
+	}
 }

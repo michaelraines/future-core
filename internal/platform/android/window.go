@@ -323,3 +323,118 @@ func (w *Window) queueEvent(e interface{}) {
 	defer w.mu.Unlock()
 	w.pendingEvents = append(w.pendingEvents, e)
 }
+
+// --- Raw-input path (embedded mode / JNI) --------------------------------
+//
+// The NativeActivity path receives events via x/mobile/event/* types and
+// routes them through HandleTouchEvent / HandleKeyEvent above. The embedded
+// (gomobile-bind) path has no access to those types because they depend on
+// the NDK looper; instead the Java layer calls into Go with primitive
+// parameters, which we translate to platform.* types here.
+
+// HandleRawTouch routes a JNI-sourced touch sample to the registered
+// InputHandler. action is one of the MotionAction* constants (Down, Up,
+// Move, Cancel, PointerDown, PointerUp); id is the pointer ID from
+// MotionEvent.getPointerId(i); x/y are in physical pixels.
+func (w *Window) HandleRawTouch(action, id int, x, y float32) {
+	w.mu.Lock()
+	handler := w.handler
+	w.mu.Unlock()
+	if handler == nil {
+		return
+	}
+
+	var pa platform.Action
+	switch action {
+	case MotionActionDown, MotionActionPointerDown:
+		pa = platform.ActionPress
+	case MotionActionUp, MotionActionPointerUp, MotionActionCancel:
+		pa = platform.ActionRelease
+	case MotionActionMove:
+		pa = platform.ActionRepeat
+	default:
+		return
+	}
+
+	handler.OnTouchEvent(platform.TouchEvent{
+		ID:       id,
+		Action:   pa,
+		X:        float64(x),
+		Y:        float64(y),
+		Pressure: 1.0,
+	})
+}
+
+// HandleRawKey routes a JNI-sourced key event to the registered
+// InputHandler. keyCode is an Android KeyEvent.KEYCODE_*; unicodeChar is
+// the result of KeyEvent.getUnicodeChar() (0 for non-printing keys);
+// meta is the KeyEvent.getMetaState() bitmask; source is the device
+// source used to detect gamepad input; deviceID is the InputDevice id
+// (reserved for multi-gamepad support).
+func (w *Window) HandleRawKey(keyCode, unicodeChar, meta, source, deviceID int, down bool) {
+	w.mu.Lock()
+	handler := w.handler
+	w.mu.Unlock()
+	if handler == nil {
+		return
+	}
+
+	// Gamepad-sourced key events short-circuit into the gamepad state
+	// machine. Treat the keyCode as a gamepad button; fall through to
+	// keyboard dispatch only if the code doesn't map to any button.
+	if IsGamepadSource(source) {
+		if handleRawGamepadKey(handler, deviceID, keyCode, down) {
+			return
+		}
+	}
+
+	key := mapAndroidKeyCode(keyCode)
+	if key == platform.KeyUnknown {
+		return
+	}
+	pa := platform.ActionRelease
+	if down {
+		pa = platform.ActionPress
+	}
+
+	handler.OnKeyEvent(platform.KeyEvent{
+		Key:    key,
+		Action: pa,
+		Mods:   mapAndroidMetaState(meta),
+	})
+
+	if down && unicodeChar > 0 {
+		handler.OnCharEvent(rune(unicodeChar))
+	}
+}
+
+// HandleRawGamepadAxis routes an analog-stick or trigger sample.
+// deviceID is the InputDevice id; axis is one of the Android
+// MotionEvent.AXIS_* constants we care about (X, Y, Z, RZ, HAT_X,
+// HAT_Y, LTRIGGER, RTRIGGER); value is the normalized axis value from
+// getAxisValue.
+func (w *Window) HandleRawGamepadAxis(deviceID, axis int, value float32) {
+	w.mu.Lock()
+	handler := w.handler
+	w.mu.Unlock()
+	if handler == nil {
+		return
+	}
+	handleRawGamepadAxis(handler, deviceID, axis, value)
+}
+
+// HandleRawGamepadConnection updates gamepad-presence state when Android
+// reports an InputDevice change (added/removed).
+func (w *Window) HandleRawGamepadConnection(deviceID int, connected bool) {
+	w.mu.Lock()
+	handler := w.handler
+	w.mu.Unlock()
+	if handler == nil {
+		return
+	}
+	if !connected {
+		currentGamepad = gamepadState{}
+		handler.OnGamepadEvent(platform.GamepadEvent{ID: 0, Disconnected: true})
+	}
+	// Connection is implicit: the first axis/button event activates state.
+}
