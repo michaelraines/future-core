@@ -210,7 +210,19 @@ func (ap *atlasPage) grow(rend *renderer) bool {
 		newImg.texture.UploadRegion(ap.pixels, 0, 0, oldSize, oldSize, 0)
 	}
 
-	// Dispose old atlas texture.
+	// Dispose old atlas texture — but keep the textureID slot alive.
+	// `ap.textureID` is shared by every atlased sub-image this page ever
+	// placed, and we are about to re-register it (a few lines down) to
+	// point at `newImg.texture`. If we let the default `disposeNow` path
+	// unregister and markDisposedID it, the end-of-frame drain would
+	// clobber the re-registration and the next frame would see every
+	// atlased sub-image fail to resolve — producing the "texture with
+	// id N was resolved after it was disposed" warning and black
+	// thumbnails in the scene-selector. Zeroing `textureID` causes
+	// `disposeNow` to skip the registry/markDisposedID step while still
+	// disposing the old GPU texture + render target at the deferred
+	// drain.
+	ap.image.textureID = 0
 	ap.image.Dispose()
 
 	// Update the page to use the new texture. All existing Images that

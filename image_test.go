@@ -224,27 +224,89 @@ func TestDisposeReleasesTexture(t *testing.T) {
 	mt := rt.colorTex
 	require.False(t, mt.disposed, "texture should not be disposed yet")
 
-	// Dispose marks the image as disposed immediately but defers the
-	// GPU-resource teardown until renderer.disposeDeferred() runs after
-	// the frame's submit. This avoids "Destroyed texture used in a
-	// submit" WebGPU validation errors from mid-frame disposals.
+	// Dispose queues the image for the end-of-frame drain. The image
+	// stays usable (disposed=false) and its GPU resources stay live
+	// until renderer.disposeDeferred() runs. The draw-path guards key
+	// off `disposed`, NOT `pendingDispose`, so already-queued batcher
+	// commands that reference this image continue to render correctly
+	// until the drain — this was the scene-selector WebGPU regression.
 	img.Dispose()
-	require.True(t, img.disposed, "image should be disposed")
+	require.False(t, img.disposed, "disposed flips only after the deferred drain")
+	require.True(t, img.pendingDispose, "image should be marked pending-dispose")
 	require.False(t, rt.disposed, "render target should remain live until the deferred drain runs")
 	require.NotNil(t, img.texture, "texture reference should remain until the deferred drain runs")
 
 	rend.disposeDeferred()
+	require.True(t, img.disposed, "image should be fully disposed after the deferred drain")
+	require.False(t, img.pendingDispose, "pendingDispose is cleared by the deferred drain")
 	require.True(t, rt.disposed, "render target should be disposed after the deferred drain")
 	require.Nil(t, img.texture, "texture reference should be nil after the deferred drain")
 }
 
 func TestDisposeIdempotent(t *testing.T) {
-	withMockRenderer(t)
+	_, _ = withMockRenderer(t)
+	rend := getRenderer()
 
 	img := NewImage(8, 8)
 	img.Dispose()
 	img.Dispose() // should not panic or double-free
-	require.True(t, img.disposed, "image should remain disposed")
+	require.True(t, img.pendingDispose, "second Dispose is a no-op, pending flag remains set")
+	require.False(t, img.disposed)
+
+	rend.disposeDeferred()
+	img.Dispose() // should not panic after full teardown either
+	require.True(t, img.disposed, "image should remain fully disposed")
+}
+
+// TestDisposeAllowsDrawInSameFrame is the regression test for the WebGPU
+// scene-selector "disposed-flag race" bug. The scene-selector's tile
+// canvas reallocation pattern (Deallocate old, NewCanvas new) used to
+// silently drop every draw queued against the new canvas in the same
+// frame, because Dispose() synchronously flipped `disposed=true` and
+// the drawImageRaw guard bailed on any reference to a pending-dispose
+// source. The fix splits the flag into `disposed` (GPU gone) and
+// `pendingDispose` (queued for drain); only the former gates draws.
+func TestDisposeAllowsDrawInSameFrame(t *testing.T) {
+	_, _ = withMockRenderer(t)
+	rend := getRenderer()
+
+	dst := NewImage(32, 32)
+	src := NewImage(16, 16)
+	srcID := src.textureID
+	require.NotEqual(t, uint32(0), srcID)
+
+	src.Dispose()
+	require.True(t, src.pendingDispose)
+	require.False(t, src.disposed, "src must remain drawable until the deferred drain")
+
+	before := rend.batcher.CommandCount()
+	dst.DrawImage(src, nil)
+	require.Equal(t, before+1, rend.batcher.CommandCount(), "draw against pending-dispose src must enqueue")
+	_, staleBefore := rend.disposedIDs[srcID]
+	require.False(t, staleBefore, "stale-ID warning must not fire while drawing against a pending-dispose image")
+
+	rend.disposeDeferred()
+	require.True(t, src.disposed)
+	_, staleAfter := rend.disposedIDs[srcID]
+	require.True(t, staleAfter, "drain should register the disposed texture ID")
+}
+
+// TestDisposeAfterDeferredDrainBlocksDraw confirms that once the
+// deferred drain has run, further draws against the image ARE dropped.
+func TestDisposeAfterDeferredDrainBlocksDraw(t *testing.T) {
+	_, _ = withMockRenderer(t)
+	rend := getRenderer()
+
+	dst := NewImage(32, 32)
+	src := NewImage(16, 16)
+
+	src.Dispose()
+	rend.disposeDeferred()
+	require.True(t, src.disposed)
+
+	before := rend.batcher.CommandCount()
+	dst.DrawImage(src, nil)
+	require.Equal(t, before, rend.batcher.CommandCount(), "draw against a fully-disposed image must be a no-op")
 }
 
 func TestWritePixels(t *testing.T) {
@@ -1043,6 +1105,7 @@ func TestImageReadPixelsDisposed(t *testing.T) {
 
 	img := NewImage(4, 4)
 	img.Dispose()
+	getRenderer().disposeDeferred() // fully tear down so the `disposed` guard applies
 
 	dst := make([]byte, 4*4*4)
 	img.ReadPixels(dst)
@@ -1880,16 +1943,17 @@ func TestAABufferDisposedOnImageDispose(t *testing.T) {
 	require.NotNil(t, img.aaBuffer)
 
 	img.Dispose()
-	// Image.Dispose() marks the image as disposed immediately but
-	// defers the GPU-resource teardown to the end-of-frame drain
-	// (renderer.disposeDeferred) so in-flight draw commands don't
-	// reference destroyed textures. The image is unusable
-	// (disposed=true) but aaBuffer stays live until the deferred
-	// drain runs.
-	require.True(t, img.disposed)
+	// Dispose() queues the image for the end-of-frame drain. The
+	// disposed flag stays false so the draw path keeps serving the
+	// image; the AA buffer also stays live. renderer.disposeDeferred()
+	// performs the actual teardown, flipping `disposed` and recursively
+	// disposing the AA buffer.
+	require.False(t, img.disposed)
+	require.True(t, img.pendingDispose)
 	require.NotNil(t, img.aaBuffer, "AA buffer must still be alive until the deferred drain runs")
 
 	rend.disposeDeferred()
+	require.True(t, img.disposed)
 	require.Nil(t, img.aaBuffer, "disposeDeferred must release the AA buffer")
 }
 
@@ -1899,8 +1963,9 @@ func TestClearDisposedIsNoop(t *testing.T) {
 
 	img := NewImage(128, 128)
 	img.Dispose()
+	rend.disposeDeferred() // fully tear down so the `disposed` guard applies
 
-	// Clear on a disposed image must be a no-op — no pending clear
+	// Clear on a fully-disposed image must be a no-op — no pending clear
 	// should be registered and no panic should occur.
 	img.Clear()
 	require.False(t, rend.pendingClears.Has(img.textureID))

@@ -43,7 +43,20 @@ func pixelSnap(v float64) float64 {
 // This type is the equivalent of ebiten.Image.
 type Image struct {
 	width, height int
-	disposed      bool
+
+	// disposed is true once disposeNow() has released the GPU resources
+	// — at that point any further use is a no-op. Draw-path guards check
+	// this flag, not pendingDispose: an image between Dispose() and the
+	// end-of-frame drain still has live GPU resources and must continue
+	// to accept draws, or the batcher silently loses commands that were
+	// already queued against it (this was the "scene transition leak"
+	// regression on WebGPU — see renderer.deferDispose docstring).
+	disposed bool
+
+	// pendingDispose is set synchronously by Dispose() to block double-
+	// dispose while the image waits on the deferred-drain queue. It
+	// intentionally does NOT gate the draw path — see `disposed` above.
+	pendingDispose bool
 
 	// GPU texture handle (nil for screen images or stub builds).
 	texture   backend.Texture
@@ -654,11 +667,19 @@ func (img *Image) RenderTarget() backend.RenderTarget {
 
 // Dispose releases the image's GPU resources.
 // Sub-images do not release the parent's texture.
+//
+// Dispose does not synchronously invalidate the image. The GPU texture
+// and render target remain live until renderer.disposeDeferred() drains
+// the queue after device.EndFrame(), and the draw path continues to
+// honor commands against this image until then. This matches
+// ebiten.Image.Deallocate's soft-hint semantics — callers can Dispose()
+// a canvas mid-Draw, continue compositing already-queued references,
+// and the teardown happens at the frame boundary. See the `disposed`
+// vs `pendingDispose` fields on Image for the rationale.
 func (img *Image) Dispose() {
-	if img.disposed {
+	if img.disposed || img.pendingDispose {
 		return
 	}
-	img.disposed = true
 
 	// Untrack from context loss recovery.
 	if tracker := getTracker(); tracker != nil {
@@ -682,6 +703,7 @@ func (img *Image) Dispose() {
 	// When no renderer is active (tests, teardown before/after engine
 	// run), fall through to immediate disposal.
 	if rend := getRenderer(); rend != nil {
+		img.pendingDispose = true
 		rend.deferDispose(img)
 		return
 	}
@@ -694,6 +716,15 @@ func (img *Image) Dispose() {
 // disposed mid-frame. Safe to call once; subsequent calls are no-ops
 // because texture/renderTarget/aaBuffer have been nilled out.
 func (img *Image) disposeNow() {
+	// Flip `disposed` here — NOT in Dispose(). Setting it in Dispose()
+	// would cause the draw-path guards (drawImageRaw, Fill, Clear, etc.)
+	// to drop commands queued against this image between Dispose() and
+	// the end-of-frame drain, even though the GPU texture is still live.
+	// See the Image struct docs for the `disposed` / `pendingDispose`
+	// split.
+	img.disposed = true
+	img.pendingDispose = false
+
 	// Dispose the AA buffer BEFORE tearing down this image's own GPU
 	// resources. We deliberately skip flushing pending AA content: the
 	// parent is being thrown away, so the content is worthless. Calling

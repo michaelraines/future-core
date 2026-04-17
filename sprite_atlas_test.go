@@ -138,6 +138,9 @@ func TestSpriteAtlasDisposeDoesNotFreeAtlas(t *testing.T) {
 	// Disposing an atlased image should not destroy the atlas texture.
 	tex := img.texture
 	img.Dispose()
+	require.True(t, img.pendingDispose)
+
+	getRenderer().disposeDeferred()
 	require.True(t, img.disposed)
 	// The parent image (atlas page) should still be intact.
 	require.NotNil(t, tex)
@@ -204,6 +207,45 @@ func TestSpriteAtlasGrows(t *testing.T) {
 	require.Equal(t, 1, pages, "atlas should grow instead of creating new pages")
 	require.Greater(t, totalPixels, spriteAtlasInitialSize*spriteAtlasInitialSize,
 		"atlas should have grown beyond initial size")
+}
+
+// TestSpriteAtlasGrowPreservesTextureRegistration is the regression test
+// for the scene-selector thumbnail bug. Growing the atlas replaces the
+// GPU texture while keeping the shared textureID stable, so every
+// atlased sub-image (thumbnails etc.) must continue to resolve through
+// the deferred drain that releases the old GPU resources.
+func TestSpriteAtlasGrowPreservesTextureRegistration(t *testing.T) {
+	_, registered := withMockRenderer(t)
+	SetSpriteAtlasEnabled(true)
+	defer ResetSpriteAtlas()
+
+	rend := getRenderer()
+
+	// Capture a sub-image placed BEFORE the grow.
+	small := goimage.NewRGBA(goimage.Rect(0, 0, 8, 8))
+	early := NewImageFromImage(small)
+	require.True(t, early.atlased)
+	sharedID := early.textureID
+
+	// Force a grow by placing enough 200x200 images to overflow the
+	// initial 512x512 page (same pattern as TestSpriteAtlasGrows).
+	for i := 0; i < 6; i++ {
+		src := goimage.NewRGBA(goimage.Rect(0, 0, 200, 200))
+		img := NewImageFromImage(src)
+		require.True(t, img.atlased)
+	}
+
+	// Drain the deferred queue — this is where the regression bit:
+	// disposeDeferred used to unregister sharedID after grow() had
+	// already re-registered it against the new GPU texture, leaving
+	// sub-images pointing at a now-stale slot.
+	rend.disposeDeferred()
+
+	require.NotNil(t, registered[sharedID],
+		"sub-images placed before grow must still resolve to a live GPU texture after the drain")
+	_, stale := rend.disposedIDs[sharedID]
+	require.False(t, stale,
+		"the shared atlas textureID must not be flagged as stale after a grow")
 }
 
 func TestSpriteAtlasGrowRescalesUVs(t *testing.T) {
