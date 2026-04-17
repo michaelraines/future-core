@@ -60,13 +60,13 @@ var androidRawKeyMap = map[int]platform.Key{
 	15: platform.Key8, 16: platform.Key9,
 
 	// Navigation / control
-	66: platform.KeyEnter,     // KEYCODE_ENTER
-	62: platform.KeySpace,     // KEYCODE_SPACE
-	67: platform.KeyBackspace, // KEYCODE_DEL
-	112: platform.KeyDelete,   // KEYCODE_FORWARD_DEL
-	61: platform.KeyTab,       // KEYCODE_TAB
-	111: platform.KeyEscape,   // KEYCODE_ESCAPE
-	4: platform.KeyEscape,     // KEYCODE_BACK (treat as Escape)
+	66:  platform.KeyEnter,     // KEYCODE_ENTER
+	62:  platform.KeySpace,     // KEYCODE_SPACE
+	67:  platform.KeyBackspace, // KEYCODE_DEL
+	112: platform.KeyDelete,    // KEYCODE_FORWARD_DEL
+	61:  platform.KeyTab,       // KEYCODE_TAB
+	111: platform.KeyEscape,    // KEYCODE_ESCAPE
+	4:   platform.KeyEscape,    // KEYCODE_BACK (treat as Escape)
 
 	// Arrows
 	19: platform.KeyUp,    // KEYCODE_DPAD_UP
@@ -75,14 +75,14 @@ var androidRawKeyMap = map[int]platform.Key{
 	22: platform.KeyRight, // KEYCODE_DPAD_RIGHT
 
 	// Modifiers
-	59: platform.KeyLeftShift,   // KEYCODE_SHIFT_LEFT
-	60: platform.KeyRightShift,  // KEYCODE_SHIFT_RIGHT
+	59:  platform.KeyLeftShift,    // KEYCODE_SHIFT_LEFT
+	60:  platform.KeyRightShift,   // KEYCODE_SHIFT_RIGHT
 	113: platform.KeyLeftControl,  // KEYCODE_CTRL_LEFT
 	114: platform.KeyRightControl, // KEYCODE_CTRL_RIGHT
-	57: platform.KeyLeftAlt,     // KEYCODE_ALT_LEFT
-	58: platform.KeyRightAlt,    // KEYCODE_ALT_RIGHT
-	117: platform.KeyLeftSuper,  // KEYCODE_META_LEFT
-	118: platform.KeyRightSuper, // KEYCODE_META_RIGHT
+	57:  platform.KeyLeftAlt,      // KEYCODE_ALT_LEFT
+	58:  platform.KeyRightAlt,     // KEYCODE_ALT_RIGHT
+	117: platform.KeyLeftSuper,    // KEYCODE_META_LEFT
+	118: platform.KeyRightSuper,   // KEYCODE_META_RIGHT
 }
 
 // mapAndroidKeyCode converts an Android KeyEvent.KEYCODE_* integer to a
@@ -126,20 +126,20 @@ func mapAndroidMetaState(meta int) platform.Modifier {
 //	[0]=A, [1]=B, [2]=X, [3]=Y, [4]=LB, [5]=RB, [6]=Options, [7]=Menu,
 //	[8]=LThumb, [9]=RThumb, [10]=DUp, [11]=DDown, [12]=DLeft, [13]=DRight
 var androidGamepadButtonMap = map[int]int{
-	96: 0,  // KEYCODE_BUTTON_A
-	97: 1,  // KEYCODE_BUTTON_B
-	99: 2,  // KEYCODE_BUTTON_X
-	100: 3, // KEYCODE_BUTTON_Y
-	102: 4, // KEYCODE_BUTTON_L1
-	103: 5, // KEYCODE_BUTTON_R1
-	109: 6, // KEYCODE_BUTTON_SELECT
-	108: 7, // KEYCODE_BUTTON_START
-	106: 8, // KEYCODE_BUTTON_THUMBL
-	107: 9, // KEYCODE_BUTTON_THUMBR
-	19: 10, // KEYCODE_DPAD_UP
-	20: 11, // KEYCODE_DPAD_DOWN
-	21: 12, // KEYCODE_DPAD_LEFT
-	22: 13, // KEYCODE_DPAD_RIGHT
+	96:  0,  // KEYCODE_BUTTON_A
+	97:  1,  // KEYCODE_BUTTON_B
+	99:  2,  // KEYCODE_BUTTON_X
+	100: 3,  // KEYCODE_BUTTON_Y
+	102: 4,  // KEYCODE_BUTTON_L1
+	103: 5,  // KEYCODE_BUTTON_R1
+	109: 6,  // KEYCODE_BUTTON_SELECT
+	108: 7,  // KEYCODE_BUTTON_START
+	106: 8,  // KEYCODE_BUTTON_THUMBL
+	107: 9,  // KEYCODE_BUTTON_THUMBR
+	19:  10, // KEYCODE_DPAD_UP
+	20:  11, // KEYCODE_DPAD_DOWN
+	21:  12, // KEYCODE_DPAD_LEFT
+	22:  13, // KEYCODE_DPAD_RIGHT
 }
 
 // Android MotionEvent axis constants (subset — sticks and triggers).
