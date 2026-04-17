@@ -97,9 +97,27 @@ func (sa *spriteAtlas) newPage() *atlasPage {
 	if img.texture == nil {
 		return nil
 	}
+
+	// Allocate a distinct `textureID` for the atlas page, separate from
+	// the page Image's own `img.textureID`. This ID is the one every
+	// atlased sub-image references and the one the engine re-points at
+	// each grown page's GPU texture; keeping it decoupled from any
+	// individual page's `img.textureID` means `Dispose()` can freely
+	// tear down the old page's registry entries on a grow without
+	// clobbering the shared alias. On startup there is no renderer in
+	// some tests; fall back to `img.textureID` in that case.
+	rend := getRenderer()
+	sharedID := img.textureID
+	if rend != nil {
+		sharedID = rend.allocTextureID()
+		if rend.registerTexture != nil {
+			rend.registerTexture(sharedID, img.texture)
+		}
+	}
+
 	page := &atlasPage{
 		image:     img,
-		textureID: img.textureID,
+		textureID: sharedID,
 		size:      size,
 		pixels:    make([]byte, size*size*4),
 	}
@@ -138,19 +156,31 @@ func (ap *atlasPage) tryPlace(padded []byte, padW, padH, contentW, contentH int,
 	v1 := float32(y+1+contentH) / atlasH
 
 	img := &Image{
-		width:     contentW,
-		height:    contentH,
-		texture:   ap.image.texture,
-		textureID: ap.textureID,
-		parent:    ap.image,
-		u0:        u0,
-		v0:        v0,
-		u1:        u1,
-		v1:        v1,
-		atlased:   true,
+		width:            contentW,
+		height:           contentH,
+		texture:          ap.image.texture,
+		textureID:        ap.textureID,
+		parent:           ap.image,
+		u0:               u0,
+		v0:               v0,
+		u1:               u1,
+		v1:               v1,
+		atlased:          true,
+		atlasPageBackref: ap,
 	}
 	ap.placed = append(ap.placed, img)
 	return img
+}
+
+// registerDescendant enrolls a SubImage-derived atlased image in the
+// page's placed list so atlas.grow()'s UV rescale covers it alongside
+// the direct tryPlace results. Acquires the sprite-atlas lock to stay
+// safe against any future concurrent grow, but in practice the engine
+// loop is single-threaded per platform.
+func (ap *atlasPage) registerDescendant(sub *Image) {
+	globalSpriteAtlas.mu.Lock()
+	defer globalSpriteAtlas.mu.Unlock()
+	ap.placed = append(ap.placed, sub)
 }
 
 // allocate finds space using row-based packing.
@@ -210,19 +240,18 @@ func (ap *atlasPage) grow(rend *renderer) bool {
 		newImg.texture.UploadRegion(ap.pixels, 0, 0, oldSize, oldSize, 0)
 	}
 
-	// Dispose old atlas texture — but keep the textureID slot alive.
-	// `ap.textureID` is shared by every atlased sub-image this page ever
-	// placed, and we are about to re-register it (a few lines down) to
-	// point at `newImg.texture`. If we let the default `disposeNow` path
-	// unregister and markDisposedID it, the end-of-frame drain would
-	// clobber the re-registration and the next frame would see every
-	// atlased sub-image fail to resolve — producing the "texture with
-	// id N was resolved after it was disposed" warning and black
-	// thumbnails in the scene-selector. Zeroing `textureID` causes
-	// `disposeNow` to skip the registry/markDisposedID step while still
-	// disposing the old GPU texture + render target at the deferred
-	// drain.
-	ap.image.textureID = 0
+	// Dispose the old atlas page image. `ap.textureID` is a separate
+	// alias (allocated in newPage) that lives in its own registry slot —
+	// so the old image's `disposeNow` can cleanly unregister and
+	// destroy its own GPU texture + render target without touching the
+	// shared alias. A few lines below we re-point the alias at the new
+	// page's texture. Without the alias split, `disposeNow` would
+	// unregister `ap.textureID` (since it used to equal `img.textureID`
+	// for the initial page), clobbering the re-registration and leaving
+	// every atlased sub-image resolving to `nil` or — worse, on the
+	// WebGPU backend — to a destroyed texture handle, which Chrome
+	// flags as "Destroyed texture used in a submit" for every
+	// subsequent frame.
 	ap.image.Dispose()
 
 	// Update the page to use the new texture. All existing Images that
@@ -252,6 +281,16 @@ func (ap *atlasPage) grow(rend *renderer) bool {
 		img.v0 *= scale
 		img.u1 *= scale
 		img.v1 *= scale
+	}
+	// Mid-frame grow: the batcher may already hold vertex data copied
+	// from the pre-grow u0..u1 values. DrawImage bakes UVs into the
+	// arena at add-time, so mutating the source Image after that has
+	// no effect on already-queued quads. Rescale those vertices too so
+	// every in-flight draw against this atlas's shared texture ID keeps
+	// sampling the same pixel region once the bigger texture is bound
+	// at submit time.
+	if rend.batcher != nil {
+		rend.batcher.RescaleUVsForTexture(ap.textureID, scale)
 	}
 
 	// Re-register the new texture under the original atlas textureID so
@@ -305,9 +344,21 @@ func newImageFromImageAtlased(padded []byte, padW, padH, contentW, contentH int)
 func ResetSpriteAtlas() {
 	globalSpriteAtlas.mu.Lock()
 	defer globalSpriteAtlas.mu.Unlock()
+	rend := getRenderer()
 	for _, page := range globalSpriteAtlas.atlases {
 		if page.image != nil {
 			page.image.Dispose()
+		}
+		// The shared alias (ap.textureID) lives in the registry under
+		// its own slot, decoupled from page.image.textureID — clear it
+		// here so a later ResolveTexture(page.textureID) surfaces a
+		// stale-ID warning instead of silently returning a destroyed
+		// handle. Safe to call on an un-initialized renderer.
+		if rend != nil && page.textureID != 0 {
+			if rend.unregisterTexture != nil {
+				rend.unregisterTexture(page.textureID)
+			}
+			rend.markDisposedID(page.textureID)
 		}
 	}
 	globalSpriteAtlas.atlases = nil
