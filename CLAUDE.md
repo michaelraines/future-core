@@ -12,6 +12,10 @@ Key documents:
 - `FUTURE_3D.md` — 3D integration plan and Phase 1 constraints
 - `ROADMAP.md` — phased implementation plan (update as work progresses)
 - `BACKENDS.md` — per-backend GPU implementation status, features, and roadmap
+- `mobile/futurecoreview/CLAUDE.md` — Android JNI bridge: embedded-mode
+  engine driver, input dispatch, engine_android build-tag split
+- `cmd/futurecoremobile/CLAUDE.md` — Android AAR builder; overlay
+  pipeline + case-insensitive-FS bug writeup
 
 ## Text Rendering
 

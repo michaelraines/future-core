@@ -13,6 +13,7 @@ import (
 // Analog stick input requires JNI access to MotionEvent (future work).
 type gamepadState struct {
 	buttons [16]bool
+	axes    [6]float64
 	active  bool
 }
 
@@ -51,4 +52,60 @@ func handleGamepadKeyEvent(handler platform.InputHandler, code mkey.Code, presse
 		// Axes remain zero — analog sticks require MotionEvent via JNI.
 	})
 	return true
+}
+
+// handleRawGamepadKey processes a JNI-sourced button press keyed by the
+// Android KEYCODE_BUTTON_* integer. Returns true if the code mapped to a
+// known gamepad button.
+func handleRawGamepadKey(handler platform.InputHandler, _ int, keyCode int, pressed bool) bool {
+	btnIdx, ok := androidGamepadButtonMap[keyCode]
+	if !ok {
+		return false
+	}
+	currentGamepad.buttons[btnIdx] = pressed
+	currentGamepad.active = true
+	handler.OnGamepadEvent(platform.GamepadEvent{
+		ID:      0,
+		Axes:    currentGamepad.axes,
+		Buttons: currentGamepad.buttons,
+	})
+	return true
+}
+
+// handleRawGamepadAxis updates the cached axis state and dispatches a
+// GamepadEvent. axis is an Android MotionEvent.AXIS_* integer.
+func handleRawGamepadAxis(handler platform.InputHandler, _ int, axis int, value float32) {
+	idx, ok := mapAndroidAxis(axis)
+	if !ok {
+		return
+	}
+	currentGamepad.axes[idx] = float64(value)
+	currentGamepad.active = true
+	handler.OnGamepadEvent(platform.GamepadEvent{
+		ID:      0,
+		Axes:    currentGamepad.axes,
+		Buttons: currentGamepad.buttons,
+	})
+}
+
+// mapAndroidAxis maps an Android MotionEvent axis constant to the 6-slot
+// axis array used by platform.GamepadEvent. Layout:
+//
+//	[0]=LeftX  [1]=LeftY  [2]=RightX  [3]=RightY  [4]=LTrigger  [5]=RTrigger
+func mapAndroidAxis(axis int) (int, bool) {
+	switch axis {
+	case AxisX:
+		return 0, true
+	case AxisY:
+		return 1, true
+	case AxisZ:
+		return 2, true
+	case AxisRZ:
+		return 3, true
+	case AxisLTrigger:
+		return 4, true
+	case AxisRTrigger:
+		return 5, true
+	}
+	return 0, false
 }
