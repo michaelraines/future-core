@@ -5,6 +5,7 @@ package futurerender
 import (
 	"errors"
 	"fmt"
+	goimage "image"
 	"os"
 	"syscall/js"
 	"time"
@@ -436,6 +437,7 @@ func (e *engine) frame() {
 	screen := &Image{
 		width: screenW, height: screenH,
 		u0: 0, v0: 0, u1: 1, v1: 1,
+		bounds: goimage.Rect(0, 0, screenW, screenH),
 	}
 
 	var drawStart time.Time

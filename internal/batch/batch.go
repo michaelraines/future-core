@@ -60,6 +60,15 @@ type DrawCommand struct {
 	// other. The sprite pass applies these before each draw; built-in
 	// uniforms (uProjection, uColorBody) are set separately.
 	Uniforms map[string]any
+
+	// ClipX/Y/W/H is the scissor rect (in root-texture pixels) applied
+	// before this command's draw call. Populated by Image destination-
+	// draw paths from `Image.Bounds()` so that draws to a SubImage stay
+	// inside the sub-rect — mirrors Ebitengine's `dstRegion` clipping.
+	// `ClipW == 0` means "no scissor" (full render target). The sprite
+	// pass tracks the last applied clip and only calls SetScissor on
+	// changes.
+	ClipX, ClipY, ClipW, ClipH int32
 }
 
 // Batch represents a group of draw commands that share the same state.
@@ -77,6 +86,10 @@ type Batch struct {
 	ColorTranslation [4]float32
 	ExtraTextureIDs  [3]uint32
 	Uniforms         map[string]any
+
+	// ClipX/Y/W/H: see DrawCommand.ClipX. Merged batches carry the
+	// common clip rect; commands with different clips don't merge.
+	ClipX, ClipY, ClipW, ClipH int32
 }
 
 // Batcher accumulates draw commands and produces optimized batches.
@@ -294,6 +307,10 @@ func (b *Batcher) Flush() []Batch {
 			current.ColorBody == cmd.ColorBody &&
 			current.ColorTranslation == cmd.ColorTranslation &&
 			current.ExtraTextureIDs == cmd.ExtraTextureIDs &&
+			current.ClipX == cmd.ClipX &&
+			current.ClipY == cmd.ClipY &&
+			current.ClipW == cmd.ClipW &&
+			current.ClipH == cmd.ClipH &&
 			cmd.Uniforms == nil && current.Uniforms == nil &&
 			len(current.Vertices)+len(cmd.Vertices) <= b.maxVertices &&
 			len(current.Indices)+len(cmd.Indices) <= b.maxIndices &&
@@ -322,6 +339,10 @@ func (b *Batcher) Flush() []Batch {
 				ColorTranslation: cmd.ColorTranslation,
 				ExtraTextureIDs:  cmd.ExtraTextureIDs,
 				Uniforms:         cmd.Uniforms,
+				ClipX:            cmd.ClipX,
+				ClipY:            cmd.ClipY,
+				ClipW:            cmd.ClipW,
+				ClipH:            cmd.ClipH,
 			})
 			current = &batches[len(batches)-1]
 			copy(current.Vertices, cmd.Vertices)
