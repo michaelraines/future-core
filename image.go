@@ -44,6 +44,16 @@ func pixelSnap(v float64) float64 {
 type Image struct {
 	width, height int
 
+	// bounds is the destination-rect this Image represents on its root
+	// render target. Top-level images: {0, 0, width, height} (Min.X/Y
+	// are zero). Sub-images: the rect passed to SubImage, intersected
+	// with the parent's bounds — Min can be non-zero. The draw path
+	// forwards this to the sprite pass as a GPU scissor so writes to a
+	// sub-image are clipped to the sub-rect instead of bleeding onto
+	// the rest of the root target. Mirrors ebiten's Image.Bounds()
+	// semantics (see vendor/.../ebiten/v2/image.go:968-973).
+	bounds goimage.Rectangle
+
 	// disposed is true once disposeNow() has released the GPU resources
 	// — at that point any further use is a no-op. Draw-path guards check
 	// this flag, not pendingDispose: an image between Dispose() and the
@@ -155,6 +165,7 @@ func newImageLabeled(width, height int, labelPrefix string) *Image {
 		height: height,
 		u0:     0, v0: 0,
 		u1: 1, v1: 1,
+		bounds: goimage.Rect(0, 0, width, height),
 	}
 
 	// Allocate GPU render target if a device is available. The render
@@ -257,6 +268,7 @@ func NewImageFromImage(src goimage.Image) *Image {
 		u0:     u0, v0: v0,
 		u1: u1, v1: v1,
 		padded: true,
+		bounds: goimage.Rect(0, 0, w, h),
 	}
 
 	// Cache the unpadded CPU bytes so ReadPixels can serve them
@@ -316,9 +328,31 @@ func (img *Image) Size() (width, height int) {
 }
 
 // Bounds returns the image bounds as an image.Rectangle.
-// This matches Ebitengine's Image.Bounds() signature.
+// This matches Ebitengine's Image.Bounds() signature: for top-level
+// images, Min is (0, 0) and Max is (width, height); for SubImage
+// results, Min is the rect passed to SubImage so draw coordinates can
+// live in the same space as the root render target.
 func (img *Image) Bounds() goimage.Rectangle {
-	return goimage.Rect(0, 0, img.width, img.height)
+	if img.bounds.Dx() == 0 && img.bounds.Dy() == 0 {
+		// Safety net for any legacy Image constructed without
+		// populating bounds directly (older tests, context-recovery
+		// paths) — fall back to the size-based rect.
+		return goimage.Rect(0, 0, img.width, img.height)
+	}
+	return img.bounds
+}
+
+// clipParams returns the scissor rect to apply when drawing TO this
+// image, or (0, 0, 0, 0) meaning "no scissor — full render target".
+// Sub-images (Bounds with a non-zero Min) get clipped to their sub-rect
+// so draws don't bleed onto the rest of the root target; top-level
+// images skip the scissor call entirely to avoid needless state changes.
+func (img *Image) clipParams() (x, y, w, h int32) {
+	b := img.Bounds()
+	if b.Min.X == 0 && b.Min.Y == 0 {
+		return 0, 0, 0, 0
+	}
+	return int32(b.Min.X), int32(b.Min.Y), int32(b.Dx()), int32(b.Dy())
 }
 
 // DrawImage draws src onto img with the given options.
@@ -392,6 +426,7 @@ func (img *Image) drawImageRaw(src *Image, opts *DrawImageOptions) {
 	filter := filterToBackend(o.Filter)
 	colorBody, colorTrans := colorMatrixToUniforms(o.ColorM)
 
+	clipX, clipY, clipW, clipH := img.clipParams()
 	rend.batcher.AddQuadDirect(
 		batch.Vertex2D{PosX: float32(x0), PosY: float32(y0), TexU: u0, TexV: v0, R: cr, G: cg, B: cb, A: ca},
 		batch.Vertex2D{PosX: float32(x1), PosY: float32(y1), TexU: u1, TexV: v0, R: cr, G: cg, B: cb, A: ca},
@@ -405,6 +440,7 @@ func (img *Image) drawImageRaw(src *Image, opts *DrawImageOptions) {
 			TargetID:         img.textureID,
 			ColorBody:        colorBody,
 			ColorTranslation: colorTrans,
+			ClipX:            clipX, ClipY: clipY, ClipW: clipW, ClipH: clipH,
 		},
 	)
 }
@@ -500,6 +536,7 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 		fillRule = fillRuleToBackend(opts.FillRule)
 	}
 
+	clipX, clipY, clipW, clipH := img.clipParams()
 	rend.batcher.AddDirect(batch.DrawCommand{
 		Vertices:  batchVerts,
 		Indices:   batchIdx,
@@ -510,6 +547,7 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 		ShaderID:  0,
 		TargetID:  img.textureID,
 		ColorBody: colorMatrixIdentityBody,
+		ClipX:     clipX, ClipY: clipY, ClipW: clipW, ClipH: clipH,
 	})
 }
 
@@ -527,28 +565,36 @@ func (img *Image) Fill(clr color.Color) {
 		return
 	}
 
-	w := float32(img.width)
-	h := float32(img.height)
 	cr, cg, cb, ca := clr.RGBA()
-	r := float32(cr) / 0xffff
-	g := float32(cg) / 0xffff
-	b := float32(cb) / 0xffff
-	a := float32(ca) / 0xffff
+	cR := float32(cr) / 0xffff
+	cG := float32(cg) / 0xffff
+	cB := float32(cb) / 0xffff
+	cA := float32(ca) / 0xffff
 
 	// Use the white texture and multiply by vertex color.
 	texID := rend.whiteTextureID
 
+	// Fill covers the image's full destination rect. For a sub-image
+	// that means (bounds.Min..bounds.Max) on the root render target,
+	// not (0..w, 0..h) — otherwise the quad would be positioned in the
+	// wrong half of the root texture (clipped to nothing, or worse,
+	// painting the root's top-left corner instead of the sub-region).
+	bounds := img.Bounds()
+	x0, y0 := float32(bounds.Min.X), float32(bounds.Min.Y)
+	x1, y1 := float32(bounds.Max.X), float32(bounds.Max.Y)
+	clipX, clipY, clipW, clipH := img.clipParams()
 	rend.batcher.AddQuadDirect(
-		batch.Vertex2D{PosX: 0, PosY: 0, TexU: 0, TexV: 0, R: r, G: g, B: b, A: a},
-		batch.Vertex2D{PosX: w, PosY: 0, TexU: 1, TexV: 0, R: r, G: g, B: b, A: a},
-		batch.Vertex2D{PosX: w, PosY: h, TexU: 1, TexV: 1, R: r, G: g, B: b, A: a},
-		batch.Vertex2D{PosX: 0, PosY: h, TexU: 0, TexV: 1, R: r, G: g, B: b, A: a},
+		batch.Vertex2D{PosX: x0, PosY: y0, TexU: 0, TexV: 0, R: cR, G: cG, B: cB, A: cA},
+		batch.Vertex2D{PosX: x1, PosY: y0, TexU: 1, TexV: 0, R: cR, G: cG, B: cB, A: cA},
+		batch.Vertex2D{PosX: x1, PosY: y1, TexU: 1, TexV: 1, R: cR, G: cG, B: cB, A: cA},
+		batch.Vertex2D{PosX: x0, PosY: y1, TexU: 0, TexV: 1, R: cR, G: cG, B: cB, A: cA},
 		batch.DrawCommand{
 			TextureID: texID,
 			BlendMode: backend.BlendSourceOver,
 			ShaderID:  0,
 			TargetID:  img.textureID,
 			ColorBody: colorMatrixIdentityBody,
+			ClipX:     clipX, ClipY: clipY, ClipW: clipW, ClipH: clipH,
 		},
 	)
 }
@@ -556,16 +602,36 @@ func (img *Image) Fill(clr color.Color) {
 // SubImage returns a sub-region of the image for sprite sheet support.
 // The returned Image shares the parent's GPU texture with adjusted UVs.
 // This matches Ebitengine's Image.SubImage signature (takes image.Rectangle).
+//
+// The returned Image's `Bounds()` is the passed rect intersected with
+// the parent's bounds, so `Bounds().Min` is usually non-zero. Draws
+// targeting a sub-image are clipped to that rect by the sprite pass —
+// mirrors ebiten's `dstRegion` clipping, which is what orb-drop relies
+// on to keep physics content out of the UI panel.
 func (img *Image) SubImage(r goimage.Rectangle) *Image {
 	w := float32(img.width)
 	h := float32(img.height)
 	rw := r.Dx()
 	rh := r.Dy()
 
+	// `r` is expressed in the parent's coordinate system — the same
+	// space as `img.Bounds()` — mirroring ebiten's SubImage contract.
+	// For a top-level image Bounds().Min is (0,0) so r maps directly;
+	// for a nested SubImage the caller passes root-texture-absolute
+	// coords. Clamp to the parent to stay inside valid sample space,
+	// and convert to sub-local coords for the UV arithmetic below
+	// (which expects offsets in [0, img.width/height]).
+	absRect := r.Intersect(img.bounds)
+	localMinX := r.Min.X - img.bounds.Min.X
+	localMinY := r.Min.Y - img.bounds.Min.Y
+	localMaxX := r.Max.X - img.bounds.Min.X
+	localMaxY := r.Max.Y - img.bounds.Min.Y
+
 	if w == 0 || h == 0 {
 		return &Image{
 			width:  rw,
 			height: rh,
+			bounds: absRect,
 		}
 	}
 
@@ -573,10 +639,10 @@ func (img *Image) SubImage(r goimage.Rectangle) *Image {
 	uRange := img.u1 - img.u0
 	vRange := img.v1 - img.v0
 
-	su0 := img.u0 + float32(r.Min.X)/w*uRange
-	sv0 := img.v0 + float32(r.Min.Y)/h*vRange
-	su1 := img.u0 + float32(r.Max.X)/w*uRange
-	sv1 := img.v0 + float32(r.Max.Y)/h*vRange
+	su0 := img.u0 + float32(localMinX)/w*uRange
+	sv0 := img.v0 + float32(localMinY)/h*vRange
+	su1 := img.u0 + float32(localMaxX)/w*uRange
+	sv1 := img.v0 + float32(localMaxY)/h*vRange
 
 	// Point to the root texture owner.
 	parent := img
@@ -601,6 +667,7 @@ func (img *Image) SubImage(r goimage.Rectangle) *Image {
 		v1:               sv1,
 		atlased:          img.atlased,
 		atlasPageBackref: img.atlasPageBackref,
+		bounds:           absRect,
 	}
 	// If this sub-image is rooted in a sprite-atlas page, enroll it in
 	// the page's placed list so atlas.grow() rescales its UVs alongside
@@ -1030,6 +1097,7 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 	// (e.g. lighting) already set TexU/TexV in pixel space, so DrawRectShader
 	// must too — otherwise `imageSrc0At(srcPos)` samples in sub-pixel UV
 	// space and the multiply_dither/bloom shaders return near-zero.
+	clipX, clipY, clipW, clipH := img.clipParams()
 	rend.batcher.AddQuadDirect(
 		batch.Vertex2D{PosX: float32(x0), PosY: float32(y0), TexU: 0, TexV: 0, R: cr, G: cg, B: cb, A: ca},
 		batch.Vertex2D{PosX: float32(x1), PosY: float32(y1), TexU: w, TexV: 0, R: cr, G: cg, B: cb, A: ca},
@@ -1043,6 +1111,7 @@ func (img *Image) DrawRectShader(width, height int, shader *Shader, opts *DrawRe
 			ColorBody:       colorMatrixIdentityBody,
 			ExtraTextureIDs: extraTexIDs,
 			Uniforms:        uniformsCopy,
+			ClipX:           clipX, ClipY: clipY, ClipW: clipW, ClipH: clipH,
 		},
 	)
 }
@@ -1112,6 +1181,7 @@ func (img *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shade
 		}
 	}
 
+	clipX, clipY, clipW, clipH := img.clipParams()
 	rend.batcher.Add(batch.DrawCommand{
 		Vertices:        batchVerts,
 		Indices:         indices,
@@ -1123,6 +1193,7 @@ func (img *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shade
 		ColorBody:       colorMatrixIdentityBody,
 		ExtraTextureIDs: extraTexIDs,
 		Uniforms:        dtUniformsCopy,
+		ClipX:           clipX, ClipY: clipY, ClipW: clipW, ClipH: clipH,
 	})
 }
 

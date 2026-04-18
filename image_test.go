@@ -383,6 +383,78 @@ func TestSubImageUVMapping(t *testing.T) {
 	require.InDelta(t, float32(1.0), sub2.v1, 1e-6)
 }
 
+// TestSubImageBoundsMatchPassedRect confirms the orb-drop clipping
+// contract: a sub-image's Bounds() equals the rect passed to
+// SubImage (intersected with the parent). This is what drives the
+// per-batch GPU scissor in the sprite pass so draws to a SubCanvas
+// don't bleed onto the rest of the root render target.
+func TestSubImageBoundsMatchPassedRect(t *testing.T) {
+	parent := NewImage(1024, 768)
+	defer parent.Dispose()
+
+	sub := parent.SubImage(goimage.Rect(260, 0, 1024, 768))
+	require.Equal(t, goimage.Rect(260, 0, 1024, 768), sub.Bounds())
+
+	// `r` is always in parent-space (matches ebiten.Image.SubImage):
+	// the passed rect must overlap the parent's bounds — it's not
+	// implicitly offset by the parent's Min. So a nested SubImage of
+	// `sub` above still uses root-texture coordinates.
+	nested := sub.SubImage(goimage.Rect(270, 20, 360, 200))
+	require.Equal(t, goimage.Rect(270, 20, 360, 200), nested.Bounds())
+
+	// A rect that overflows the parent gets clamped to the parent's bounds.
+	clamped := parent.SubImage(goimage.Rect(900, 600, 2000, 2000))
+	require.Equal(t, goimage.Rect(900, 600, 1024, 768), clamped.Bounds())
+}
+
+// TestSubImageDrawsCarryClipRect checks that every destination-draw
+// path stamps the sub-image's bounds onto the batched DrawCommand, and
+// that top-level images leave the clip unset so the sprite pass can
+// skip SetScissor entirely.
+func TestSubImageDrawsCarryClipRect(t *testing.T) {
+	b := withBatchRenderer(t, 1)
+
+	parent := &Image{
+		width: 1024, height: 768,
+		textureID: 7,
+		u0:        0, v0: 0, u1: 1, v1: 1,
+		bounds: goimage.Rect(0, 0, 1024, 768),
+	}
+	src := &Image{
+		width: 32, height: 32,
+		textureID: 9,
+		u0:        0, v0: 0, u1: 1, v1: 1,
+		bounds: goimage.Rect(0, 0, 32, 32),
+	}
+
+	// Top-level draws: ClipW stays zero → sprite pass won't scissor.
+	parent.DrawImage(src, nil)
+	batches := b.Flush()
+	require.Equal(t, 1, len(batches))
+	require.EqualValues(t, 0, batches[0].ClipW, "top-level image draws must not carry a clip rect")
+
+	// Sub-image draws: the rect passed to SubImage flows through to
+	// every DrawImage / Fill / DrawTriangles command.
+	sub := parent.SubImage(goimage.Rect(260, 0, 1024, 768))
+	sub.DrawImage(src, nil)
+	sub.Fill(color.RGBA{R: 10, G: 20, B: 30, A: 255})
+	vs := []Vertex{
+		{DstX: 0, DstY: 0},
+		{DstX: 10, DstY: 0},
+		{DstX: 5, DstY: 10},
+	}
+	sub.DrawTriangles(vs, []uint16{0, 1, 2}, nil, nil)
+
+	batches = b.Flush()
+	require.Greater(t, len(batches), 0)
+	for i, got := range batches {
+		require.EqualValues(t, 260, got.ClipX, "batch %d ClipX", i)
+		require.EqualValues(t, 0, got.ClipY, "batch %d ClipY", i)
+		require.EqualValues(t, 764, got.ClipW, "batch %d ClipW", i)
+		require.EqualValues(t, 768, got.ClipH, "batch %d ClipH", i)
+	}
+}
+
 func TestSubImageZeroSize(t *testing.T) {
 	// Zero-width image should not cause division by zero.
 	img := &Image{width: 0, height: 100}

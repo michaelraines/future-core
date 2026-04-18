@@ -66,6 +66,14 @@ type SpritePass struct {
 	lastBlendMode  backend.BlendMode
 	colorBodySet   bool // false until the first batch sets it this frame
 
+	// lastClip is the scissor rect applied to the most recent batch.
+	// `Set` means the encoder currently has a scissor bound; we reset to
+	// full-target scissor (nil) when a batch's Clip is unset. Tracking
+	// here parallels lastTextureID/lastFilter to skip redundant encoder
+	// calls when consecutive batches share the same clip.
+	lastClip    backend.ScissorRect
+	lastClipSet bool
+
 	// ResolveTexture maps batch texture IDs to backend textures.
 	ResolveTexture TextureResolver
 
@@ -219,6 +227,8 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 	sp.colorBodySet = false
 	sp.lastTextureID = 0
 	sp.lastFilter = 0
+	sp.lastClipSet = false
+	sp.lastClip = backend.ScissorRect{}
 
 	batches := sp.batcher.Flush()
 
@@ -327,6 +337,12 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			enc.EndRenderPass()
 			currentTargetID = b.TargetID
 			currentShaderID = 0
+			// Scissor state is per-render-pass on WebGPU/Vulkan —
+			// opening a new pass resets it to full-target, so forget
+			// the last applied clip so the first batch in the new
+			// pass re-issues SetScissor if needed.
+			sp.lastClipSet = false
+			sp.lastClip = backend.ScissorRect{}
 			sp.beginTargetPass(enc, ctx, currentTargetID)
 			sp.bindDefaultShader(enc)
 			sp.setProjectionForTarget(enc, ctx, currentTargetID)
@@ -416,6 +432,31 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 		if b.Filter != sp.lastFilter {
 			enc.SetTextureFilter(0, b.Filter)
 			sp.lastFilter = b.Filter
+		}
+
+		// Apply per-batch scissor. Sub-image draws populate ClipW/H
+		// (matches ebiten's `dstRegion` clipping), so physics content in
+		// e.g. orb-drop stays inside `simCanvas` instead of painting
+		// over the UI panel. Top-level images leave ClipW=0; we reset
+		// to a nil scissor so the previous batch's clip doesn't leak
+		// onto an unclipped draw later in the frame.
+		switch {
+		case b.ClipW > 0:
+			rect := backend.ScissorRect{
+				X:      int(b.ClipX),
+				Y:      int(b.ClipY),
+				Width:  int(b.ClipW),
+				Height: int(b.ClipH),
+			}
+			if !sp.lastClipSet || rect != sp.lastClip {
+				enc.SetScissor(&rect)
+				sp.lastClip = rect
+				sp.lastClipSet = true
+			}
+		case sp.lastClipSet:
+			enc.SetScissor(nil)
+			sp.lastClip = backend.ScissorRect{}
+			sp.lastClipSet = false
 		}
 		if sp.ResolveTexture != nil && b.TextureID != sp.lastTextureID {
 			tex := sp.ResolveTexture(b.TextureID)

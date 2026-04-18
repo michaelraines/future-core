@@ -5,6 +5,7 @@ package futurerender
 import (
 	"errors"
 	"fmt"
+	goimage "image"
 	"time"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -354,6 +355,7 @@ func (e *engine) TickOnce() error {
 	screen := &Image{
 		width: screenW, height: screenH,
 		u0: 0, v0: 0, u1: 1, v1: 1,
+		bounds: goimage.Rect(0, 0, screenW, screenH),
 	}
 	e.game.Draw(screen)
 
