@@ -629,6 +629,32 @@ each unique texture forcing a separate draw batch.
 
 ---
 
+## Milestone 11b — Vector Rendering Parity (Done, with known gaps)
+
+Shipped in [PR #61](https://github.com/michaelraines/future-core/pull/61) / v0.1.56.
+
+| Task | Status | Notes |
+|---|---|---|
+| Stencil-based FillRuleNonZero / FillRuleEvenOdd | Done | Backend abstraction + sprite-pass two-pass dance (writeNonZero/writeEvenOdd + colorPass). Wired end-to-end on soft, WebGPU browser, Vulkan, OpenGL; stub-compliant on WebGL/Metal/DX12. |
+| Per-segment stroke tessellator matching Ebitengine | Done | `vector.AppendVerticesAndIndicesForStroke` emits independent 4-vertex quads per segment + explicit miter/bevel/round join geometry. |
+| `ColorScale.ScaleAlpha` correctness | Done | Scales all four channels (matches ebiten). Removed `rgb=min(rgb,a)` shader clamp that was band-aiding the broken ScaleAlpha and silently destroying bright low-alpha stroke colors. |
+| `DrawTrianglesOptions.ColorScaleMode` | Done | `StraightAlpha` (default; image.go premultiplies RGB*A) vs `PremultipliedAlpha` (pass-through; used by vector stroke library). |
+| Conformance scenes `fill_rule_nonzero` / `fill_rule_evenodd` | Done | Gated on `Capabilities.SupportsStencil`. Soft generates goldens. |
+| `FUTURE_CORE_DIAG_LOGS` tracer + WebGPU `uncapturederror` handler | Done | Surfaced the attachment-size mismatch that blocked WebGPU browser rollout. |
+
+### Outstanding Follow-ups
+
+| Task | Status | Notes |
+|---|---|---|
+| WebGL encoder stencil path | Future | Canvas already gets `stencil:true` attribute. Encoder stays no-op + `SupportsStencil=false` until the encoder path is wired. |
+| Metal stencil: `MTLDepthStencilState` + `setStencilReferenceValue:` | Future | Must handle `MTLPixelFormatDepth32Float_Stencil8` on iOS/tvOS (no Depth24Stencil8). |
+| DX12 stencil: depth-stencil heap + `OMSetStencilRef` | Future | |
+| Fan-triangulation sunburst parity on semi-transparent fills | Deferred | Ebiten produces a sunburst artifact on overlapping fan triangles for alpha fills. Matching it requires switching stencil color pass from `DPPass=Zero` to `DPPass=Keep` plus per-batch stencil clears. Futurecore keeps the smoother fill as a parity-acceptable but visually-different choice. |
+| Sprite shader B-channel residual | Deferred | ~11% B-channel intensity gap on bright PremultipliedAlpha strokes (e.g. purple crosshair blue). Fully closing requires a per-mode shader variant or uniform-gated clamp skip. |
+| Vector tessellator: fill via non-overlapping triangulation | Future | Current fan triangulation overlaps at vertex 0 of every path. A proper ear-clip or Seidel triangulator would eliminate the sunburst-vs-smooth cross-backend gap above at the source. |
+
+---
+
 ## Milestone 12 — 3D Rendering (Future)
 
 Goal: 3D mesh rendering, lighting, materials — as described in FUTURE_3D.md.

@@ -109,13 +109,13 @@ See `BACKENDS.md` at the project root for detailed per-backend status and roadma
 
 | Interface | Methods | Key Methods |
 |---|---|---|
-| Device | 10 | Init, Dispose, BeginFrame, EndFrame, NewTexture, NewBuffer, NewShader, NewRenderTarget, NewPipeline, Capabilities |
+| Device | 11 | Init, Dispose, BeginFrame, EndFrame, NewTexture, NewBuffer, NewShader, NewRenderTarget, NewPipeline, Capabilities, Encoder |
 | Texture | 7 | Upload, UploadRegion, ReadPixels, Width, Height, Format, Dispose |
 | Buffer | 4 | Upload, UploadRegion, Size, Dispose |
 | Shader | 7 | SetUniformFloat, SetUniformVec2, SetUniformVec4, SetUniformMat4, SetUniformInt, SetUniformBlock, Dispose |
-| RenderTarget | 5 | ColorTexture, DepthTexture, Width, Height, Dispose |
+| RenderTarget | 6 | ColorTexture, DepthTexture, HasStencil, Width, Height, Dispose |
 | Pipeline | 1 | Dispose |
-| CommandEncoder | 14 | BeginRenderPass, EndRenderPass, SetPipeline, SetVertexBuffer, SetIndexBuffer, SetTexture, SetTextureFilter, SetStencil, SetColorWrite, SetViewport, SetScissor, Draw, DrawIndexed, Flush |
+| CommandEncoder | 15 | BeginRenderPass, EndRenderPass, SetPipeline, SetBlendMode, SetVertexBuffer, SetIndexBuffer, SetTexture, SetTextureFilter, SetStencilReference, SetColorWrite, SetViewport, SetScissor, Draw, DrawIndexed, Flush |
 
 ## Conformance Testing
 
@@ -241,6 +241,54 @@ implementation details:
   all enums add `Undefined = 0` sentinel, `WGPUFlags` types are `uint64`,
   descriptors use `WGPUStringView` labels, async functions use `CallbackInfo`
   structs by value.
+
+## Stencil Fill Rules
+
+`FillRule{None, NonZero, EvenOdd}` in `types.go` routes through a stencil
+pipeline pair on backends whose `Capabilities().SupportsStencil` is
+true (soft, WebGPU browser, Vulkan, OpenGL). The zero value is
+`FillRuleNone` — so `DrawImage`, particle emitters, and `DrawTriangles`
+without explicit opts bypass stencil entirely. Explicit `NonZero` or
+`EvenOdd` opts the batch into stencil compositing.
+
+**Pipeline state split**: stencil ops (`SFail`/`DPFail`/`DPPass`, per
+face), compare func, and read/write masks live on the pipeline
+(compiled at creation on pipeline-native backends). Only the
+reference value is dynamic, set via
+`CommandEncoder.SetStencilReference(uint32)` per draw. GL-style
+backends apply the pipeline's stencil state eagerly in `SetPipeline`.
+
+**Sprite pass routing** (`internal/pipeline/sprite_pass.go`): lazily
+builds three pipelines per `(shader, blend)` combination —
+`writeNonZero` (color-write off, incr-wrap front / decr-wrap back,
+two-sided), `writeEvenOdd` (color-write off, invert), and `colorPass`
+(NotEqual ref=0, DPPass=Zero so stencil resets as color draws). Each
+fill-rule batch runs the two-pass stencil dance. Non-fill-rule batches
+hit the plain indexed-draw path.
+
+**Batcher gate** (`internal/batch/batch.go`): `canMerge` refuses to
+merge any batch whose `FillRule` isn't `FillRuleNone`. Merging two
+independent fill-rule batches into a single stencil compositing unit
+produces catastrophic artifacts — overlapping transparent shapes
+render as if only the first shape existed, because the color pass's
+`DPPass=Zero` zeros the stencil as it draws. Do not relax this rule.
+
+**WebGPU browser specifics**: every render pass attaches a
+depth24plus-stencil8 view (a screen-wide one lives on the device;
+offscreen RTs carry their own), and every pipeline declares the
+matching depth-stencil format. Without this pair-invariant, WebGPU
+rejects the pipeline-vs-attachment compatibility check. Screen
+depth-stencil is reallocated in
+`Device.ensureScreenDepthStencilForCanvas` when the canvas resizes.
+
+**Vector library rendering**: strokes set
+`DrawTrianglesOptions.ColorScaleMode = ColorScaleModePremultipliedAlpha`
+to pass ebiten-style "invalid premultiplied" vertex colors through
+unchanged — this is what makes low-alpha strokes render vividly
+instead of dimly. Fills use the default StraightAlpha mode (smoother
+output than ebiten's sunburst fan artifact). See
+`future/libs/rendering/futurecore/vector.go` for the explicit flags
+on each call site.
 
 ## Coverage Requirements
 
