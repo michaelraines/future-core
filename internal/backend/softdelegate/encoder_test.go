@@ -124,7 +124,7 @@ func TestEncoderPassthroughMethods(t *testing.T) {
 
 	// These methods are pure passthrough — just verify they don't panic.
 	enc.SetTextureFilter(0, backend.FilterLinear)
-	enc.SetStencil(false, backend.StencilDescriptor{})
+	enc.SetStencilReference(0)
 	enc.SetColorWrite(true)
 	enc.SetViewport(backend.Viewport{X: 0, Y: 0, Width: 64, Height: 64})
 	enc.SetScissor(nil)

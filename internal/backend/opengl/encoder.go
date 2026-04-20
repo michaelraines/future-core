@@ -26,6 +26,15 @@ type commandEncoder struct {
 	// prevAttribCount tracks how many vertex attributes were enabled by the
 	// previous pipeline, so stale slots can be disabled on switch.
 	prevAttribCount int
+
+	// Stencil state cached from the most recent SetPipeline call. OpenGL
+	// stencil ops change per-draw (not per-pipeline); we apply them
+	// eagerly in SetPipeline and then re-issue glStencilFunc with the
+	// same (func, mask) and a new reference value when
+	// SetStencilReference is called.
+	stencilEnabled  bool
+	stencilFunc     uint32
+	stencilReadMask uint32
 }
 
 // BeginRenderPass begins a render pass.
@@ -91,6 +100,41 @@ func (e *commandEncoder) SetPipeline(pipeline backend.Pipeline) {
 		gl.CullFace(gl.BACK)
 	default:
 		gl.Disable(gl.CULL_FACE)
+	}
+
+	// Pipeline-baked color write mask. Stencil-only passes set this so
+	// they populate the stencil buffer without touching color; the
+	// cross-backend contract is "color write state lives on the pipeline
+	// on WebGPU/Vulkan/Metal/DX12, and GL applies it eagerly here".
+	// Runtime SetColorWrite callers can still override after SetPipeline.
+	if ps.desc.ColorWriteDisabled {
+		gl.ColorMask(false, false, false, false)
+	} else {
+		gl.ColorMask(true, true, true, true)
+	}
+
+	// Stencil state is baked into the pipeline on pipeline-native APIs
+	// (WebGPU/Vulkan/Metal/DX12); on GL it's mutable state so we apply
+	// it eagerly here from the pipeline's StencilDescriptor. Only the
+	// Front face ops are applied here — OpenGL two-sided stencil
+	// (glStencil*Separate) is follow-up work; the `internal/gl` package
+	// currently only exposes the monolithic entry points.
+	if ps.desc.StencilEnable {
+		sd := ps.desc.Stencil
+		gl.Enable(gl.STENCIL_TEST)
+		e.stencilFunc = compareFuncToGL(sd.Func)
+		e.stencilReadMask = sd.Mask
+		e.stencilEnabled = true
+		gl.StencilFunc(e.stencilFunc, 0, e.stencilReadMask)
+		gl.StencilOp(
+			stencilOpToGL(sd.Front.SFail),
+			stencilOpToGL(sd.Front.DPFail),
+			stencilOpToGL(sd.Front.DPPass),
+		)
+		gl.StencilMask(sd.WriteMask)
+	} else if e.stencilEnabled {
+		gl.Disable(gl.STENCIL_TEST)
+		e.stencilEnabled = false
 	}
 }
 
@@ -169,16 +213,15 @@ func (e *commandEncoder) ensureSamplers() {
 	e.samplersReady = true
 }
 
-// SetStencil configures and enables/disables the stencil test.
-func (e *commandEncoder) SetStencil(enabled bool, desc backend.StencilDescriptor) {
-	if !enabled {
-		gl.Disable(gl.STENCIL_TEST)
+// SetStencilReference updates the dynamic stencil reference value by
+// re-issuing glStencilFunc with the pipeline's cached compare-func and
+// read mask. A no-op when the current pipeline doesn't enable the
+// stencil test.
+func (e *commandEncoder) SetStencilReference(ref uint32) {
+	if !e.stencilEnabled {
 		return
 	}
-	gl.Enable(gl.STENCIL_TEST)
-	gl.StencilFunc(compareFuncToGL(desc.Func), int32(desc.Ref), desc.Mask)
-	gl.StencilOp(stencilOpToGL(desc.SFail), stencilOpToGL(desc.DPFail), stencilOpToGL(desc.DPPass))
-	gl.StencilMask(desc.WriteMask)
+	gl.StencilFunc(e.stencilFunc, int32(ref), e.stencilReadMask)
 }
 
 // SetColorWrite enables or disables writing to the color buffer.

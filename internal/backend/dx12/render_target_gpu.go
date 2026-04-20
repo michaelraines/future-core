@@ -9,14 +9,20 @@ import (
 
 // RenderTarget implements backend.RenderTarget for DX12.
 type RenderTarget struct {
-	dev      *Device
-	colorTex *Texture
-	depthTex backend.Texture
-	w, h     int
+	dev        *Device
+	colorTex   *Texture
+	depthTex   backend.Texture
+	w, h       int
+	hasStencil bool
 
 	// DX12 resources for this render target.
 	rtvHandle d3d12.CPUDescriptorHandle
 }
+
+// HasStencil reports whether a stencil attachment was requested. DX12
+// encoder-side stencil wiring is follow-up work; the RT tracks the flag
+// for consistency with other backends.
+func (rt *RenderTarget) HasStencil() bool { return rt.hasStencil }
 
 // InnerRenderTarget returns nil for GPU render targets (no soft delegation).
 func (rt *RenderTarget) InnerRenderTarget() backend.RenderTarget { return nil }

@@ -9,6 +9,41 @@ import (
 	"github.com/michaelraines/future-core/internal/backend"
 )
 
+// Diagnostic console.log budget — enabled by FUTURE_CORE_DIAG_LOGS=N,
+// disabled by default (limit=0). When enabled, the browser backend emits
+// console.log lines from BeginRenderPass, Flush, and createRenderPipeline
+// up to a combined total of N entries across the session.
+//
+// This is a coarser tool than FUTURE_CORE_TRACE_WEBGPU: that tracer is
+// frame-scoped (logs every call for the first N frames) and writes to
+// stderr. This one is per-call-site and writes to console.log so entries
+// show up naturally in the browser's devtools while probing from Go.
+//
+// When a subtle WebGPU-browser rendering regression is suspected
+// (mysterious blank canvas, wrong attachment sizes, silent pipeline
+// creation failures), start here: set FUTURE_CORE_DIAG_LOGS=200 on
+// go.env in wasm_exec.js and watch the console stream.
+var (
+	diagLogLimit      = parseTraceEnvInt("FUTURE_CORE_DIAG_LOGS")
+	diagLogCount      int
+	beginPassLogCount int
+	flushLogCount     int
+)
+
+// diagLogAllow reports whether a diagnostic console.log line should fire
+// for a given bucket counter. Increments the counter on allow.
+func diagLogAllow(counter *int) bool {
+	if diagLogLimit == 0 {
+		return false
+	}
+	if *counter >= diagLogLimit {
+		return false
+	}
+	*counter++
+	diagLogCount++
+	return true
+}
+
 // Encoder implements backend.CommandEncoder for WebGPU via the browser JS API.
 type Encoder struct {
 	dev    *Device
@@ -55,9 +90,15 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		e.cmdEncoder = e.dev.device.Call("createCommandEncoder")
 	}
 
+	// Canvas may resize between frames (scenes that request different
+	// viewport sizes) — re-allocate the screen depth-stencil if so to keep
+	// color+depth attachments the same size.
+	e.dev.ensureScreenDepthStencilForCanvas()
+
 	view := e.dev.currentColorView()
 	w, h := e.width, e.height
-	var depthView js.Value
+	depthView := e.dev.screenDepthView
+	hasStencil := true
 
 	// Determine the target format: canvas preferred format or rgba8unorm for offscreen.
 	e.targetFormat = "rgba8unorm"
@@ -71,6 +112,8 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 			e.targetFormat = jsTextureFormat(rt.colorTex.format)
 			w = rt.w
 			h = rt.h
+			depthView = js.Undefined()
+			hasStencil = rt.hasStencil
 			if rt.depthTex != nil {
 				if dt, ok := rt.depthTex.(*Texture); ok {
 					depthView = dt.view
@@ -109,11 +152,23 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		depthAttach.Set("depthLoadOp", "clear")
 		depthAttach.Set("depthStoreOp", "store")
 		depthAttach.Set("depthClearValue", 1.0)
+		if hasStencil {
+			depthAttach.Set("stencilLoadOp", "clear")
+			depthAttach.Set("stencilStoreOp", "store")
+			depthAttach.Set("stencilClearValue", int(desc.ClearStencil))
+		}
 		rpDesc.Set("depthStencilAttachment", depthAttach)
 	}
 
 	e.passEncoder = e.cmdEncoder.Call("beginRenderPass", rpDesc)
 	e.inRenderPass = true
+	if diagLogAllow(&beginPassLogCount) {
+		js.Global().Get("console").Call("log",
+			fmt.Sprintf("[webgpu] BeginRenderPass target=%v format=%s w=%d h=%d depthView=%v hasStencil=%v loadOp=%s",
+				desc.Target != nil, e.targetFormat, w, h,
+				!depthView.IsUndefined() && !depthView.IsNull(),
+				hasStencil, loadOp))
+	}
 
 	// Set default viewport.
 	e.passEncoder.Call("setViewport", 0, 0, float64(w), float64(h), 0, 1)
@@ -368,8 +423,14 @@ func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
 	}
 }
 
-// SetStencil configures stencil test state (baked into pipeline in WebGPU).
-func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {}
+// SetStencilReference updates the dynamic stencil reference value.
+// Stencil ops/compare/masks are baked into the pipeline; only ref is dynamic.
+// No-op when no render pass is active.
+func (e *Encoder) SetStencilReference(ref uint32) {
+	if e.inRenderPass {
+		e.passEncoder.Call("setStencilReference", int(ref))
+	}
+}
 
 // SetColorWrite enables or disables color writing (baked into pipeline in WebGPU).
 // SetBlendMode records the desired blend mode. On the next SetPipeline
@@ -434,6 +495,9 @@ func (e *Encoder) Flush() {
 		return
 	}
 	cmdBuf := e.cmdEncoder.Call("finish")
+	if diagLogAllow(&flushLogCount) {
+		js.Global().Get("console").Call("log", "[webgpu] Flush: submitting command buffer")
+	}
 	e.dev.queue.Call("submit", js.Global().Get("Array").New(cmdBuf))
 	e.cmdEncoder = js.Undefined()
 

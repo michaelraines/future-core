@@ -26,6 +26,21 @@ type Device struct {
 	defaultColorTex  js.Value
 	defaultColorView js.Value
 
+	// Screen depth-stencil texture + view. Always allocated so that every
+	// render pass can attach a depth-stencil. The pipeline-always-declares
+	// depth24plus-stencil8, render-pass-always-attaches it invariant keeps
+	// pipeline/attachment compatibility trivially satisfied without needing
+	// split pipelines per target. Reallocated on canvas resize.
+	screenDepthTex  js.Value
+	screenDepthView js.Value
+	// screenDepthW/H track the dimensions of the last allocation so that
+	// ensureScreenDepthStencilForCanvas can detect canvas resizes and
+	// re-allocate. Without this the depth-stencil stays frozen at the Init
+	// size and the browser rejects render passes whose color attachment
+	// (live canvas swapchain texture) has grown.
+	screenDepthW int
+	screenDepthH int
+
 	// Presentation state.
 	hasContext      bool
 	preferredFormat string // e.g. "bgra8unorm" or "rgba8unorm"
@@ -110,6 +125,25 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	d.device = device
 	d.queue = d.device.Get("queue")
 
+	// Log any uncaptured WebGPU validation/out-of-memory errors to the
+	// console so that silent pipeline-creation or render-pass failures
+	// don't turn into a mysterious blank canvas.
+	errHandler := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) == 0 {
+			return nil
+		}
+		ev := args[0]
+		errObj := ev.Get("error")
+		if errObj.IsUndefined() || errObj.IsNull() {
+			js.Global().Get("console").Call("error", "[webgpu] uncaptured: (no error object)")
+			return nil
+		}
+		msg := errObj.Get("message").String()
+		js.Global().Get("console").Call("error", "[webgpu] uncaptured: "+msg)
+		return nil
+	})
+	d.device.Call("addEventListener", "uncapturederror", errHandler)
+
 	// Set up canvas and GPUCanvasContext if DOM is available.
 	// Use the existing "game-canvas" element so that WebGPU renders directly
 	// to the visible canvas (auto-presented on queue.submit).
@@ -140,6 +174,12 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		d.createDefaultTexture()
 	}
 
+	// Create the screen depth-stencil texture. Every render pass in this
+	// backend attaches a depth-stencil view so that pipelines which declare
+	// a depth-stencil format remain compatible with the pass; the screen
+	// pass uses this view, offscreen RTs bring their own.
+	d.createScreenDepthStencilTexture()
+
 	// Create a 1x1 white placeholder texture for default bind group 1.
 	d.createDefaultWhiteTexture()
 
@@ -162,6 +202,90 @@ func (d *Device) createDefaultTexture() {
 			jsGPUTextureUsage(d.device, "TEXTURE_BINDING"))
 	d.defaultColorTex = d.device.Call("createTexture", desc)
 	d.defaultColorView = d.defaultColorTex.Call("createView")
+}
+
+// createScreenDepthStencilTexture allocates a depth24plus-stencil8 texture
+// sized to the current canvas width×height. Called from Init and lazily
+// from ensureScreenDepthStencilForCanvas when the canvas has resized.
+func (d *Device) createScreenDepthStencilTexture() {
+	w, h := d.screenDepthStencilSize()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	if !d.screenDepthTex.IsUndefined() && !d.screenDepthTex.IsNull() {
+		d.screenDepthTex.Call("destroy")
+	}
+	desc := js.Global().Get("Object").New()
+	sizeArr := js.Global().Get("Array").New(w, h, 1)
+	desc.Set("size", sizeArr)
+	desc.Set("format", "depth24plus-stencil8")
+	desc.Set("usage", jsGPUTextureUsage(d.device, "RENDER_ATTACHMENT"))
+	d.screenDepthTex = d.device.Call("createTexture", desc)
+	d.screenDepthView = d.screenDepthTex.Call("createView")
+	d.screenDepthW = w
+	d.screenDepthH = h
+}
+
+// screenDepthStencilSize returns the dimensions the screen depth-stencil
+// texture should have. When a canvas context is present this tracks the
+// live canvas size (so resizes propagate); otherwise it follows the
+// offscreen device width/height.
+func (d *Device) screenDepthStencilSize() (int, int) {
+	if d.hasContext && !d.canvas.IsUndefined() && !d.canvas.IsNull() {
+		w := d.canvas.Get("width").Int()
+		h := d.canvas.Get("height").Int()
+		if w > 0 && h > 0 {
+			return w, h
+		}
+	}
+	return d.width, d.height
+}
+
+// newDepthStencilTexture allocates a depth24plus-stencil8 texture suitable
+// for a render target's depth+stencil attachment. Only the
+// RENDER_ATTACHMENT usage flag is set — depth-stencil formats cannot be
+// used as sampled textures (no TEXTURE_BINDING) under the default WebGPU
+// feature set, so threading through NewTexture would silently fail. The
+// returned *Texture is wrapped the same way ordinary textures are so the
+// encoder's render-pass code can extract the view.
+func (d *Device) newDepthStencilTexture(w, h int, label string) *Texture {
+	desc := js.Global().Get("Object").New()
+	sizeArr := js.Global().Get("Array").New(w, h, 1)
+	desc.Set("size", sizeArr)
+	desc.Set("format", "depth24plus-stencil8")
+	desc.Set("usage", jsGPUTextureUsage(d.device, "RENDER_ATTACHMENT"))
+	if label != "" {
+		desc.Set("label", label)
+	}
+	handle := d.device.Call("createTexture", desc)
+	if handle.IsNull() || handle.IsUndefined() {
+		return nil
+	}
+	view := handle.Call("createView")
+	d.nextTexID++
+	return &Texture{
+		dev:    d,
+		handle: handle,
+		view:   view,
+		w:      w,
+		h:      h,
+		format: backend.TextureFormatDepth24Stencil8,
+		id:     d.nextTexID,
+	}
+}
+
+// ensureScreenDepthStencilForCanvas re-allocates the screen depth-stencil
+// texture if the canvas has been resized since the last allocation. Called
+// at the top of every BeginRenderPass so that attachment sizes always
+// match the current swapchain texture (WebGPU rejects pass creation when
+// color and depth sizes differ — symptom: "depth stencil attachment size
+// does not match the size of the other attachments' base plane").
+func (d *Device) ensureScreenDepthStencilForCanvas() {
+	w, h := d.screenDepthStencilSize()
+	if w == d.screenDepthW && h == d.screenDepthH {
+		return
+	}
+	d.createScreenDepthStencilTexture()
 }
 
 // createDefaultWhiteTexture creates a 1x1 RGBA white texture used as a
@@ -422,29 +546,26 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 		return nil, fmt.Errorf("webgpu: render target color: %w", err)
 	}
 
-	var depthTex backend.Texture
-	if desc.HasDepth {
-		depthFmt := desc.DepthFormat
-		if depthFmt == 0 {
-			depthFmt = backend.TextureFormatDepth24
-		}
-		dt, err := d.NewTexture(backend.TextureDescriptor{
-			Width: desc.Width, Height: desc.Height, Format: depthFmt,
-			RenderTarget: true,
-			Label:        depthLabel,
-		})
-		if err != nil {
-			colorTex.Dispose()
-			return nil, fmt.Errorf("webgpu: render target depth: %w", err)
-		}
-		depthTex = dt
+	// Every RT gets a packed depth24plus-stencil8 attachment so that every
+	// render pass can attach depth-stencil and every pipeline's declared
+	// depth-stencil format matches. Allocating unconditionally sidesteps
+	// per-target format mismatch errors and keeps the sprite pass's
+	// stencil-pipeline cache viable without a format key. Allocated
+	// directly here (not through NewTexture) because depth24plus-stencil8
+	// cannot carry TEXTURE_BINDING usage — NewTexture would add that flag
+	// and WebGPU would reject the allocation silently.
+	dt := d.newDepthStencilTexture(desc.Width, desc.Height, depthLabel)
+	if dt == nil {
+		colorTex.Dispose()
+		return nil, fmt.Errorf("webgpu: render target depth-stencil allocation failed")
 	}
 
 	return &RenderTarget{
-		colorTex: colorTex.(*Texture),
-		depthTex: depthTex,
-		w:        desc.Width,
-		h:        desc.Height,
+		colorTex:   colorTex.(*Texture),
+		depthTex:   dt,
+		hasStencil: true,
+		w:          desc.Width,
+		h:          desc.Height,
 	}, nil
 }
 
@@ -466,6 +587,7 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 		SupportsMSAA:      true,
 		MaxMSAASamples:    4,
 		SupportsFloat16:   true,
+		SupportsStencil:   true,
 	}
 }
 
@@ -571,6 +693,8 @@ func jsTextureFormat(f backend.TextureFormat) string {
 		return "depth24plus"
 	case backend.TextureFormatDepth32F:
 		return "depth32float"
+	case backend.TextureFormatDepth24Stencil8:
+		return "depth24plus-stencil8"
 	default:
 		return "rgba8unorm"
 	}

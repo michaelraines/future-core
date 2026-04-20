@@ -495,13 +495,13 @@ func TestEncoderSetScissor(t *testing.T) {
 	require.Nil(t, enc.scissor)
 }
 
-func TestEncoderSetStencil(t *testing.T) {
+func TestEncoderSetStencilReference(t *testing.T) {
 	d := initDevice(t)
 	enc := d.Encoder().(*Encoder)
-	enc.SetStencil(true, backend.StencilDescriptor{})
-	require.True(t, enc.stencil)
-	enc.SetStencil(false, backend.StencilDescriptor{})
-	require.False(t, enc.stencil)
+	enc.SetStencilReference(7)
+	require.Equal(t, uint32(7), enc.stencilRef)
+	enc.SetStencilReference(0)
+	require.Equal(t, uint32(0), enc.stencilRef)
 }
 
 func TestEncoderSetColorWrite(t *testing.T) {

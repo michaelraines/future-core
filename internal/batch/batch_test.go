@@ -117,10 +117,14 @@ func TestBatcherFillRuleSplit(t *testing.T) {
 	require.Equal(t, backend.FillRuleEvenOdd, batches[1].FillRule)
 }
 
-func TestBatcherFillRuleMerge(t *testing.T) {
+func TestBatcherFillRuleNeverMerges(t *testing.T) {
+	// Explicit fill-rule draws never merge — each is its own stencil
+	// compositing unit. See the comment on canMerge in batch.go for the
+	// "overlapping transparent ellipses" regression this guards against.
 	b := NewBatcher(65535, 65535)
 
-	// Same fill rule should merge
+	// Two successive identical-state FillRuleEvenOdd draws must stay
+	// as separate batches.
 	b.Add(DrawCommand{
 		Vertices:  []Vertex2D{{PosX: 0, PosY: 0}, {PosX: 10, PosY: 0}, {PosX: 10, PosY: 10}},
 		Indices:   []uint16{0, 1, 2},
@@ -137,9 +141,41 @@ func TestBatcherFillRuleMerge(t *testing.T) {
 	})
 
 	batches := b.Flush()
-	require.Len(t, batches, 1)
+	require.Len(t, batches, 2)
 	require.Equal(t, backend.FillRuleEvenOdd, batches[0].FillRule)
-	require.Len(t, batches[0].Vertices, 6)
+	require.Equal(t, backend.FillRuleEvenOdd, batches[1].FillRule)
+	require.Len(t, batches[0].Vertices, 3)
+	require.Len(t, batches[1].Vertices, 3)
+}
+
+func TestBatcherMixedFillRulesAreAllSeparate(t *testing.T) {
+	// A None-rule draw can merge with another None-rule draw, but any
+	// explicit fill-rule draw (NonZero or EvenOdd) always stands alone.
+	b := NewBatcher(65535, 65535)
+
+	addTri := func(fr backend.FillRule) {
+		b.Add(DrawCommand{
+			Vertices:  []Vertex2D{{}, {}, {}},
+			Indices:   []uint16{0, 1, 2},
+			TextureID: 1,
+			BlendMode: backend.BlendSourceOver,
+			FillRule:  fr,
+		})
+	}
+
+	addTri(backend.FillRuleNone)
+	addTri(backend.FillRuleNone)    // merges with the previous None
+	addTri(backend.FillRuleNonZero) // breaks the run, own batch
+	addTri(backend.FillRuleEvenOdd) // own batch
+	addTri(backend.FillRuleNone)    // own batch (different from previous)
+
+	batches := b.Flush()
+	require.Len(t, batches, 4)
+	require.Equal(t, backend.FillRuleNone, batches[0].FillRule)
+	require.Len(t, batches[0].Vertices, 6) // two None draws merged
+	require.Equal(t, backend.FillRuleNonZero, batches[1].FillRule)
+	require.Equal(t, backend.FillRuleEvenOdd, batches[2].FillRule)
+	require.Equal(t, backend.FillRuleNone, batches[3].FillRule)
 }
 
 func TestBatcherDepthSplit(t *testing.T) {

@@ -150,8 +150,41 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 		DepthWriteEnable: depthWrite,
 		DepthCompareOp:   vkCompareOp(p.desc.DepthFunc),
 	}
+	if p.desc.StencilEnable {
+		sd := p.desc.Stencil
+		depthStencil.StencilTestEnable = 1
+		cmpOp := vkCompareOp(sd.Func)
+		depthStencil.FrontFailOp = vkStencilOp(sd.Front.SFail)
+		depthStencil.FrontPassOp = vkStencilOp(sd.Front.DPPass)
+		depthStencil.FrontDepthFailOp = vkStencilOp(sd.Front.DPFail)
+		depthStencil.FrontCompareOp = cmpOp
+		depthStencil.FrontCompareMask = sd.Mask
+		depthStencil.FrontWriteMask = sd.WriteMask
+		backOps := sd.Front
+		if sd.TwoSided {
+			backOps = sd.Back
+		}
+		depthStencil.BackFailOp = vkStencilOp(backOps.SFail)
+		depthStencil.BackPassOp = vkStencilOp(backOps.DPPass)
+		depthStencil.BackDepthFailOp = vkStencilOp(backOps.DPFail)
+		depthStencil.BackCompareOp = cmpOp
+		depthStencil.BackCompareMask = sd.Mask
+		depthStencil.BackWriteMask = sd.WriteMask
+		// Reference is dynamic — set via vkCmdSetStencilReference at draw
+		// time. The dynamic-state entry below is required; without it,
+		// Vulkan bakes the FrontReference/BackReference values and the
+		// encoder's SetStencilReference calls silently no-op.
+	}
 
 	colorBlendAttachment := vkBlendAttachment(p.desc.BlendMode)
+	if p.desc.ColorWriteDisabled {
+		// Stencil-only passes disable color writes at pipeline creation
+		// time; masking all channels produces the same effect as
+		// setcolor toggling on other backends. Needed for the sprite
+		// pass's fill-rule stencil-write pipelines to populate stencil
+		// without touching color.
+		colorBlendAttachment.ColorWriteMask = 0
+	}
 	colorBlend := vk.PipelineColorBlendStateCreateInfo{
 		SType:           vk.StructureTypePipelineColorBlendStateCreateInfo,
 		AttachmentCount: 1,
@@ -159,6 +192,13 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 	}
 
 	dynamicStates := []uint32{vk.DynamicStateViewport, vk.DynamicStateScissor}
+	if p.desc.StencilEnable {
+		// Must be included for vkCmdSetStencilReference to take effect —
+		// omitting it silently bakes ref=0 into the pipeline and breaks
+		// all stencil-based draws (e.g. fill-rule routing in sprite
+		// pass) with no Vulkan validation error to flag the problem.
+		dynamicStates = append(dynamicStates, vk.DynamicStateStencilReference)
+	}
 	dynamicState := vk.PipelineDynamicStateCreateInfo{
 		SType:             vk.StructureTypePipelineDynamicStateCreateInfo,
 		DynamicStateCount: uint32(len(dynamicStates)),
@@ -280,6 +320,30 @@ func vkCullMode(c backend.CullMode) uint32 {
 		return vk.CullModeBack
 	default:
 		return vk.CullModeNone
+	}
+}
+
+// vkStencilOp maps a backend.StencilOp to the corresponding VkStencilOp
+// value. Clamp vs. wrap variants map to Vulkan's Increment/DecrementAndClamp
+// and Increment/DecrementAndWrap respectively.
+func vkStencilOp(op backend.StencilOp) uint32 {
+	switch op {
+	case backend.StencilZero:
+		return vk.StencilOpZero
+	case backend.StencilReplace:
+		return vk.StencilOpReplace
+	case backend.StencilIncr:
+		return vk.StencilOpIncrementAndClamp
+	case backend.StencilDecr:
+		return vk.StencilOpDecrementAndClamp
+	case backend.StencilInvert:
+		return vk.StencilOpInvert
+	case backend.StencilIncrWrap:
+		return vk.StencilOpIncrementAndWrap
+	case backend.StencilDecrWrap:
+		return vk.StencilOpDecrementAndWrap
+	default: // StencilKeep
+		return vk.StencilOpKeep
 	}
 }
 

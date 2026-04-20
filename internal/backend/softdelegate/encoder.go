@@ -89,9 +89,9 @@ func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
 	e.Inner.SetTextureFilter(slot, filter)
 }
 
-// SetStencil configures stencil test state.
-func (e *Encoder) SetStencil(enabled bool, desc backend.StencilDescriptor) {
-	e.Inner.SetStencil(enabled, desc)
+// SetStencilReference forwards the reference value to the inner encoder.
+func (e *Encoder) SetStencilReference(ref uint32) {
+	e.Inner.SetStencilReference(ref)
 }
 
 // SetColorWrite enables or disables color writing.

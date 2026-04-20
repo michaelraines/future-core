@@ -296,12 +296,23 @@ func (b *Batcher) Flush() []Batch {
 		// Check if we can merge with the current batch.
 		// Custom shader draws with Uniforms never merge — each has
 		// unique per-draw uniforms (e.g., per-light position/color).
+		// Explicit fill-rule draws NEVER merge — even with another explicit
+		// fill-rule draw of the same rule. The sprite pass routes each
+		// fill-rule batch through a stencil-write + color-pass pair whose
+		// color pass zeros the stencil as it draws (DPPass=Zero). Merging
+		// two independent shapes into one batch would make the first
+		// shape's color pass consume the overlap region's stencil, so
+		// later shapes at the same pixels test stencil==0, fail
+		// CompareNotEqual, and silently drop — the classic "overlapping
+		// transparent ellipses render fully opaque" regression. Only the
+		// zero-value FillRuleNone merges.
 		canMerge := current != nil &&
+			current.FillRule == backend.FillRuleNone &&
+			cmd.FillRule == backend.FillRuleNone &&
 			current.TargetID == cmd.TargetID &&
 			current.TextureID == cmd.TextureID &&
 			current.BlendMode == cmd.BlendMode &&
 			current.Filter == cmd.Filter &&
-			current.FillRule == cmd.FillRule &&
 			current.ShaderID == cmd.ShaderID &&
 			current.Depth == cmd.Depth &&
 			current.ColorBody == cmd.ColorBody &&

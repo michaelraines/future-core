@@ -174,8 +174,13 @@ func (e *Encoder) SetTextureFilter(_ int, filter backend.TextureFilter) {
 	}
 }
 
-// SetStencil configures stencil test state.
-func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {}
+// SetStencilReference is a no-op until the Metal encoder is wired for
+// stencil. Device advertises SupportsStencil=false so the sprite pass
+// never routes stencil-requiring batches here.
+//
+// TODO(metal-stencil): build MTLDepthStencilState from the pipeline's
+// stencil state on SetPipeline, then call setStencilReferenceValue:.
+func (e *Encoder) SetStencilReference(_ uint32) {}
 
 // SetColorWrite enables or disables color writing.
 func (e *Encoder) SetColorWrite(_ bool) {}

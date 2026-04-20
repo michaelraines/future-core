@@ -3,6 +3,8 @@ package soft
 import (
 	"encoding/binary"
 	"math"
+
+	"github.com/michaelraines/future-core/internal/backend"
 )
 
 // rasterizer performs CPU-based triangle rasterization into a framebuffer.
@@ -18,6 +20,19 @@ type rasterizer struct {
 	colorWrite bool
 	scissor    *scissorRect
 	viewport   viewportRect
+
+	// Stencil state (flat in the hot path — copied from the bound
+	// pipeline + encoder in buildRasterizer so the loop never touches
+	// backend types). When stencilEnable is false the stencil test is
+	// skipped entirely; there is no per-pixel cost.
+	stencilBuf       []uint8
+	stencilEnable    bool
+	stencilFunc      backend.CompareFunc
+	stencilRef       uint8
+	stencilMask      uint8
+	stencilWriteMask uint8
+	stencilFront     backend.StencilFaceOps
+	stencilBack      backend.StencilFaceOps
 }
 
 type scissorRect struct {
@@ -202,6 +217,14 @@ func (r *rasterizer) rasterizeTriangle(
 	}
 	invDenom := 1.0 / denom
 
+	// Triangle winding — positive denom is CCW (front) under this
+	// rasterizer's convention (matches WebGPU/Vulkan FrontFaceCCW). Picked
+	// once per triangle so the inner loop indexes the face's ops directly.
+	faceOps := r.stencilFront
+	if denom < 0 {
+		faceOps = r.stencilBack
+	}
+
 	// Precompute float64 UV coordinates.
 	tu0, tv0 := float64(v0.tu), float64(v0.tv)
 	tu1, tv1 := float64(v1.tu), float64(v1.tv)
@@ -227,16 +250,54 @@ func (r *rasterizer) rasterizeTriangle(
 			// Interpolate depth (all terms via FMA for consistent rounding).
 			depth := math.FMA(w0, nz0, math.FMA(w1, nz1, math.FMA(w2, nz2, 0)))
 
-			// Depth test.
-			if r.depthTest {
-				depthF32 := float32(depth)
-				idx := py*r.width + px
-				if idx < len(r.depthBuf) && depthF32 > r.depthBuf[idx] {
+			pixelIdx := py*r.width + px
+
+			// Stencil test runs before depth per GL semantics. When the
+			// stencil test fails we apply the SFail op and skip both
+			// color write and depth write. A pixel outside the stencil
+			// buffer (defensive guard — shouldn't happen in practice
+			// because the buffer is sized to the full RT) is treated as
+			// a test failure: we skip color output since we can't
+			// apply ops either, and writing a colored pixel without a
+			// matching stencil update would diverge from GL/WebGPU.
+			if r.stencilEnable {
+				if pixelIdx >= len(r.stencilBuf) {
 					continue
 				}
-				if r.depthWrite && idx < len(r.depthBuf) {
-					r.depthBuf[idx] = depthF32
+				current := r.stencilBuf[pixelIdx]
+				if !stencilCompare(r.stencilFunc, r.stencilRef&r.stencilMask, current&r.stencilMask) {
+					next := stencilApplyOp(faceOps.SFail, r.stencilRef, current)
+					r.stencilBuf[pixelIdx] = (current &^ r.stencilWriteMask) |
+						(next & r.stencilWriteMask)
+					continue
 				}
+			}
+
+			// Depth test.
+			depthPassed := true
+			if r.depthTest {
+				depthF32 := float32(depth)
+				if pixelIdx < len(r.depthBuf) && depthF32 > r.depthBuf[pixelIdx] {
+					depthPassed = false
+				} else if r.depthWrite && pixelIdx < len(r.depthBuf) {
+					r.depthBuf[pixelIdx] = depthF32
+				}
+			}
+
+			// Stencil op after depth: DPPass / DPFail mirror GL.
+			if r.stencilEnable && pixelIdx < len(r.stencilBuf) {
+				current := r.stencilBuf[pixelIdx]
+				op := faceOps.DPPass
+				if !depthPassed {
+					op = faceOps.DPFail
+				}
+				next := stencilApplyOp(op, r.stencilRef, current)
+				r.stencilBuf[pixelIdx] = (current &^ r.stencilWriteMask) |
+					(next & r.stencilWriteMask)
+			}
+
+			if !depthPassed {
+				continue
 			}
 
 			// Interpolate texcoords with FMA for determinism (all terms via FMA).
@@ -267,6 +328,59 @@ func (r *rasterizer) rasterizeTriangle(
 				r.writePixel(px, py, fr, fg, fb, fa)
 			}
 		}
+	}
+}
+
+// stencilCompare applies a stencil compare function. Both operands are
+// already pre-masked by the caller (ref & readMask, buf & readMask).
+func stencilCompare(fn backend.CompareFunc, ref, buf uint8) bool {
+	switch fn {
+	case backend.CompareNever:
+		return false
+	case backend.CompareLess:
+		return ref < buf
+	case backend.CompareLessEqual:
+		return ref <= buf
+	case backend.CompareEqual:
+		return ref == buf
+	case backend.CompareGreaterEqual:
+		return ref >= buf
+	case backend.CompareGreater:
+		return ref > buf
+	case backend.CompareNotEqual:
+		return ref != buf
+	default: // CompareAlways
+		return true
+	}
+}
+
+// stencilApplyOp computes the new stencil value for a single op. Does not
+// apply the write mask — callers merge via (current & ^writeMask) | (new &
+// writeMask). Wrap variants rely on uint8 wrap-around arithmetic.
+func stencilApplyOp(op backend.StencilOp, ref, current uint8) uint8 {
+	switch op {
+	case backend.StencilZero:
+		return 0
+	case backend.StencilReplace:
+		return ref
+	case backend.StencilIncr:
+		if current < 0xFF {
+			return current + 1
+		}
+		return current
+	case backend.StencilDecr:
+		if current > 0 {
+			return current - 1
+		}
+		return current
+	case backend.StencilInvert:
+		return ^current
+	case backend.StencilIncrWrap:
+		return current + 1
+	case backend.StencilDecrWrap:
+		return current - 1
+	default: // StencilKeep
+		return current
 	}
 }
 

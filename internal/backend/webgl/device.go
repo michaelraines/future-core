@@ -29,28 +29,6 @@ type Device struct {
 	contextAttrs ContextAttributes
 }
 
-// ContextAttributes mirrors WebGL2 context creation attributes.
-type ContextAttributes struct {
-	Alpha                 bool
-	Depth                 bool
-	Stencil               bool
-	Antialias             bool
-	PremultipliedAlpha    bool
-	PreserveDrawingBuffer bool
-	PowerPreference       string // "default", "high-performance", "low-power"
-}
-
-// DefaultContextAttributes returns sensible defaults for WebGL2.
-func DefaultContextAttributes() ContextAttributes {
-	return ContextAttributes{
-		Alpha:              true,
-		Depth:              true,
-		Antialias:          true,
-		PremultipliedAlpha: true,
-		PowerPreference:    "default",
-	}
-}
-
 // New creates a new WebGL2 device.
 func New() *Device {
 	return &Device{
@@ -152,7 +130,10 @@ func (d *Device) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline,
 	return &Pipeline{Pipeline: inner, desc: desc}, nil
 }
 
-// Capabilities returns WebGL2 device capabilities.
+// Capabilities returns WebGL2 device capabilities. Stencil is advertised
+// here too so the soft-delegating CI path exercises the sprite pass's
+// stencil routing end-to-end (soft rasterizer implements stencil; the
+// wrapper forwards through softdelegate.Encoder).
 func (d *Device) Capabilities() backend.DeviceCapabilities {
 	return backend.DeviceCapabilities{
 		MaxTextureSize:    4096,
@@ -162,6 +143,7 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 		SupportsMSAA:      true,
 		MaxMSAASamples:    4,
 		SupportsFloat16:   false, // Extension-dependent in WebGL2
+		SupportsStencil:   true,
 	}
 }
 

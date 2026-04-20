@@ -31,6 +31,18 @@ type SpritePass struct {
 	pipeline backend.Pipeline
 	shader   backend.Shader
 
+	// Lazily-built stencil pipelines used to render FillRuleNonZero and
+	// FillRuleEvenOdd batches when the current target has a stencil
+	// attachment and the device supports stencil. Built on first use via
+	// ensureStencilPipelines(); nil until then. Each pair is the
+	// stencil-write pass (color write off, stencil ops active) and the
+	// color pass (NotEqual ref=0, Zero on pass — clears stencil as it
+	// draws so the next path starts fresh).
+	stencilPipesBuilt    bool
+	writeNonZeroPipeline backend.Pipeline
+	writeEvenOddPipeline backend.Pipeline
+	colorPassPipeline    backend.Pipeline
+
 	// Dynamic GPU buffers for per-frame vertex/index uploads. The
 	// buffers start at the initial capacity requested via
 	// SpritePassConfig and grow on demand when a frame's cumulative
@@ -478,9 +490,14 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			}
 		}
 
-		// Draw using the pre-computed index region.
-		if b.FillRule == backend.FillRuleEvenOdd {
-			sp.drawEvenOdd(enc, b)
+		// Draw using the pre-computed index region. Route fill-rule
+		// batches through the stencil pipeline pair when the current
+		// target and device both support stencil; otherwise fall back
+		// to a plain indexed draw (which produces correct output for
+		// NonZero without opposite-winding subpaths but incorrect output
+		// for EvenOdd — the same pre-stencil behavior as before).
+		if sp.stencilEligible(b, ctx, currentTargetID) {
+			sp.drawStenciled(enc, b, regions[i].indexCount, regions[i].firstIndex)
 		} else {
 			enc.DrawIndexed(regions[i].indexCount, 1, regions[i].firstIndex)
 		}
@@ -653,41 +670,217 @@ func (sp *SpritePass) bindDefaultShader(enc backend.CommandEncoder) {
 	sp.shader.SetUniformInt("uTexture", 0)
 }
 
-// drawEvenOdd renders a batch using the even-odd fill rule via stencil.
-// Pass 1: draw triangles to stencil only (INVERT), color writes disabled.
-// Pass 2: redraw with stencil test NOTEQUAL 0, then reset stencil state.
-func (sp *SpritePass) drawEvenOdd(enc backend.CommandEncoder, b *batch.Batch) {
-	// Pass 1: write to stencil, no color output.
-	enc.SetColorWrite(false)
-	enc.SetStencil(true, backend.StencilDescriptor{
-		Func:      backend.CompareAlways,
-		Ref:       0,
-		Mask:      0xFF,
-		SFail:     backend.StencilKeep,
-		DPFail:    backend.StencilKeep,
-		DPPass:    backend.StencilInvert,
-		WriteMask: 0xFF,
-	})
-	enc.DrawIndexed(len(b.Indices), 1, 0)
-
-	// Pass 2: draw where stencil != 0.
-	enc.SetColorWrite(true)
-	enc.SetStencil(true, backend.StencilDescriptor{
-		Func:      backend.CompareNotEqual,
-		Ref:       0,
-		Mask:      0xFF,
-		SFail:     backend.StencilKeep,
-		DPFail:    backend.StencilKeep,
-		DPPass:    backend.StencilZero, // clear stencil as we draw
-		WriteMask: 0xFF,
-	})
-	enc.DrawIndexed(len(b.Indices), 1, 0)
-
-	// Disable stencil for subsequent batches.
-	enc.SetStencil(false, backend.StencilDescriptor{})
+// stencilEligible reports whether a batch should be routed through the
+// stencil draw path. Four conditions must hold: the batch uses a
+// fill-rule that needs winding-sign compositing; the batch's blend mode
+// matches the pre-built stencil pipelines' blend (BlendSourceOver — any
+// other blend falls through to plain DrawIndexed until per-blend
+// stencil pipeline variants are built); the device advertises stencil
+// support; and the current render target carries a stencil attachment.
+// Only default-shader batches qualify today — custom-shader fill-rule
+// batches fall through to the non-stencil path (a no-op for NonZero and
+// silently wrong for EvenOdd, matching pre-stencil behavior).
+func (sp *SpritePass) stencilEligible(b *batch.Batch, ctx *PassContext, targetID uint32) bool {
+	if b.ShaderID != 0 {
+		return false
+	}
+	if b.BlendMode != backend.BlendSourceOver {
+		return false
+	}
+	if !sp.device.Capabilities().SupportsStencil {
+		return false
+	}
+	if !sp.targetHasStencil(ctx, targetID) {
+		return false
+	}
+	// Both NonZero and EvenOdd route through stencil. FillRuleNone (the
+	// zero-value default, used by DrawImage and by DrawTriangles callers
+	// that don't opt in) bypasses stencil and renders via plain indexed
+	// draw. Without this opt-in gate every batch would go through the
+	// two-pass stencil dance and hide content on backends that can't yet
+	// attach a stencil (the root cause of the earlier "blank canvas on
+	// WebGPU browser" regression).
+	return b.FillRule == backend.FillRuleNonZero || b.FillRule == backend.FillRuleEvenOdd
 }
 
-// Dispose releases the pass's GPU buffers.
+// targetHasStencil reports whether the target bound by the current render
+// pass has a stencil attachment. For offscreen targets we resolve through
+// ResolveRenderTarget; for the screen (target=0) we read PassContext,
+// because the sprite pass passes a nil Target to the encoder and has no
+// other handle on the backend's screen RT.
+func (sp *SpritePass) targetHasStencil(ctx *PassContext, targetID uint32) bool {
+	if targetID == 0 {
+		return ctx.ScreenHasStencil
+	}
+	if sp.ResolveRenderTarget == nil {
+		return false
+	}
+	rt := sp.ResolveRenderTarget(targetID)
+	if rt == nil {
+		return false
+	}
+	return rt.HasStencil()
+}
+
+// drawStenciled renders a fill-rule batch through the two-pass stencil
+// pipeline pair. Pass 1 writes winding information to the stencil buffer
+// with color output disabled; pass 2 samples the stencil buffer and
+// writes the final color where the fill rule's compositing predicate is
+// satisfied, clearing the stencil as it goes so subsequent paths start
+// fresh on the same render pass.
+func (sp *SpritePass) drawStenciled(enc backend.CommandEncoder, b *batch.Batch, indexCount, firstIndex int) {
+	if !sp.ensureStencilPipelines() {
+		// Pipeline build failed (rare — NewPipeline on the configured
+		// device returned an error). Fall back to the plain draw so the
+		// batch still produces pixels, matching pre-stencil behavior.
+		enc.DrawIndexed(indexCount, 1, firstIndex)
+		return
+	}
+
+	writePipe := sp.writeNonZeroPipeline
+	if b.FillRule == backend.FillRuleEvenOdd {
+		writePipe = sp.writeEvenOddPipeline
+	}
+
+	// Stencil-write pass: the write pipeline has ColorWriteDisabled
+	// baked in (see ensureStencilPipelines), so no runtime
+	// SetColorWrite toggle is needed — that toggle is a no-op on
+	// pipeline-native backends (WebGPU/Vulkan/Metal/DX12) anyway.
+	enc.SetPipeline(writePipe)
+	enc.SetStencilReference(0)
+	enc.DrawIndexed(indexCount, 1, firstIndex)
+
+	// Color pass: writes color where stencil != 0 and zeros the stencil
+	// buffer as it draws, leaving the buffer clean for the next path.
+	enc.SetPipeline(sp.colorPassPipeline)
+	enc.SetStencilReference(0)
+	enc.DrawIndexed(indexCount, 1, firstIndex)
+
+	// Restore the default pipeline for subsequent non-stencil batches.
+	// The default is always BlendSourceOver + no stencil; any caller
+	// that needs a different blend will re-issue SetBlendMode before
+	// its next draw, same as today. Update lastBlendMode to reflect
+	// the now-bound pipeline's blend so the Execute loop's
+	// "same shader, different blend" guard doesn't skip a re-bind
+	// when the next batch happens to carry the previous non-
+	// SourceOver blend (the batcher interleaves blends freely).
+	enc.SetPipeline(sp.pipeline)
+	sp.lastBlendMode = backend.BlendSourceOver
+}
+
+// ensureStencilPipelines lazily builds the three stencil pipelines used
+// by drawStenciled. Returns true when the pipelines are available (either
+// built on an earlier call or just now). The built pipelines are
+// BlendSourceOver-only — batches with other blend modes are rejected by
+// the caller via stencilEligible.
+func (sp *SpritePass) ensureStencilPipelines() bool {
+	if sp.stencilPipesBuilt {
+		return true
+	}
+	if sp.device == nil || sp.shader == nil {
+		return false
+	}
+
+	vf := batch.Vertex2DFormat()
+
+	mkWrite := func(ops backend.StencilFaceOps, twoSided bool, back backend.StencilFaceOps) (backend.Pipeline, error) {
+		return sp.device.NewPipeline(backend.PipelineDescriptor{
+			Shader:        sp.shader,
+			VertexFormat:  vf,
+			BlendMode:     backend.BlendSourceOver,
+			CullMode:      backend.CullNone,
+			Primitive:     backend.PrimitiveTriangles,
+			StencilEnable: true,
+			Stencil: backend.StencilDescriptor{
+				Func:      backend.CompareAlways,
+				Mask:      0xFF,
+				WriteMask: 0xFF,
+				Front:     ops,
+				Back:      back,
+				TwoSided:  twoSided,
+			},
+			DepthStencilFormat: backend.TextureFormatDepth24Stencil8,
+			// Color writes disabled: the write pass populates only the
+			// stencil buffer. Without this, the triangle geometry fills
+			// color on WebGPU/Vulkan/Metal/DX12 too (SetColorWrite is a
+			// no-op on those backends because color write is baked into
+			// the pipeline) and the subsequent color pass can't restore
+			// the hole — you end up with a solid fill.
+			ColorWriteDisabled: true,
+		})
+	}
+
+	// NonZero fill needs two-sided ops: front-facing triangles increment,
+	// back-facing decrement. Wrap variants so the counter rolls over at
+	// 255/0 instead of saturating — paths with >255 overlapping covers
+	// still compose correctly.
+	nzFront := backend.StencilFaceOps{
+		SFail:  backend.StencilKeep,
+		DPFail: backend.StencilKeep,
+		DPPass: backend.StencilIncrWrap,
+	}
+	nzBack := backend.StencilFaceOps{
+		SFail:  backend.StencilKeep,
+		DPFail: backend.StencilKeep,
+		DPPass: backend.StencilDecrWrap,
+	}
+	writeNZ, err := mkWrite(nzFront, true, nzBack)
+	if err != nil {
+		return false
+	}
+
+	// EvenOdd fill only needs one face; winding doesn't matter because
+	// Invert is self-canceling across opposite-winding subpaths.
+	eoFront := backend.StencilFaceOps{
+		SFail:  backend.StencilKeep,
+		DPFail: backend.StencilKeep,
+		DPPass: backend.StencilInvert,
+	}
+	writeEO, err := mkWrite(eoFront, false, backend.StencilFaceOps{})
+	if err != nil {
+		writeNZ.Dispose()
+		return false
+	}
+
+	// Color pass: reject stencil==0 pixels and zero the stencil buffer
+	// as we draw. That leaves the buffer clean for the next path, so
+	// we don't need an explicit clear between batches.
+	colorOps := backend.StencilFaceOps{
+		SFail:  backend.StencilKeep,
+		DPFail: backend.StencilKeep,
+		DPPass: backend.StencilZero,
+	}
+	colorPipe, err := sp.device.NewPipeline(backend.PipelineDescriptor{
+		Shader:        sp.shader,
+		VertexFormat:  vf,
+		BlendMode:     backend.BlendSourceOver,
+		CullMode:      backend.CullNone,
+		Primitive:     backend.PrimitiveTriangles,
+		StencilEnable: true,
+		Stencil: backend.StencilDescriptor{
+			Func:      backend.CompareNotEqual,
+			Mask:      0xFF,
+			WriteMask: 0xFF,
+			Front:     colorOps,
+			Back:      colorOps,
+		},
+		DepthStencilFormat: backend.TextureFormatDepth24Stencil8,
+	})
+	if err != nil {
+		writeNZ.Dispose()
+		writeEO.Dispose()
+		return false
+	}
+
+	sp.writeNonZeroPipeline = writeNZ
+	sp.writeEvenOddPipeline = writeEO
+	sp.colorPassPipeline = colorPipe
+	sp.stencilPipesBuilt = true
+	return true
+}
+
+// Dispose releases the pass's GPU buffers and any stencil pipelines that
+// were lazily built during rendering.
 func (sp *SpritePass) Dispose() {
 	if sp.vertexBuf != nil {
 		sp.vertexBuf.Dispose()
@@ -695,6 +888,19 @@ func (sp *SpritePass) Dispose() {
 	if sp.indexBuf != nil {
 		sp.indexBuf.Dispose()
 	}
+	if sp.writeNonZeroPipeline != nil {
+		sp.writeNonZeroPipeline.Dispose()
+		sp.writeNonZeroPipeline = nil
+	}
+	if sp.writeEvenOddPipeline != nil {
+		sp.writeEvenOddPipeline.Dispose()
+		sp.writeEvenOddPipeline = nil
+	}
+	if sp.colorPassPipeline != nil {
+		sp.colorPassPipeline.Dispose()
+		sp.colorPassPipeline = nil
+	}
+	sp.stencilPipesBuilt = false
 }
 
 // vertexSliceToBytes reinterprets a []Vertex2D as a []byte without copying.

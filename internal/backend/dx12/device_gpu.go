@@ -425,6 +425,17 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 }
 
 // NewPipeline creates a DX12 pipeline state object.
+//
+// TODO(dx12-native): this just stores the descriptor today — no
+// ID3D12PipelineState is created. When native graphics rendering lands,
+// build the PSO from the descriptor including:
+//   - D3D12_DEPTH_STENCIL_DESC.FrontFace/BackFace from desc.Stencil when
+//     desc.StencilEnable is true
+//   - DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT matching the attached DSV
+//   - BlendState.RenderTarget[0].RenderTargetWriteMask = 0 when
+//     desc.ColorWriteDisabled is true
+//
+// Then flip Capabilities.SupportsStencil=true in this file.
 func (d *Device) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline, error) {
 	return &Pipeline{
 		dev:  d,

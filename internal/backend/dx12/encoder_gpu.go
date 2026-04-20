@@ -106,10 +106,14 @@ func (e *Encoder) SetTextureFilter(_ int, _ backend.TextureFilter) {
 	// Would configure a sampler in the root signature.
 }
 
-// SetStencil configures stencil test state.
-func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {
-	// Stencil state is baked into the PSO.
-}
+// SetStencilReference is a no-op until the DX12 encoder is wired for
+// stencil (needs OMSetStencilRef). Device advertises
+// SupportsStencil=false so the sprite pass never routes stencil-requiring
+// batches here.
+//
+// TODO(dx12-stencil): call ID3D12GraphicsCommandList::OMSetStencilRef
+// with the supplied reference value.
+func (e *Encoder) SetStencilReference(_ uint32) {}
 
 // SetColorWrite enables or disables color writing.
 func (e *Encoder) SetColorWrite(_ bool) {

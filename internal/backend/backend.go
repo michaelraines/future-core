@@ -84,6 +84,12 @@ type DeviceCapabilities struct {
 	SupportsMSAA      bool
 	MaxMSAASamples    int
 	SupportsFloat16   bool
+	// SupportsStencil is true when the device has a working stencil path
+	// (attachment + pipeline ops + dynamic reference value). The sprite pass
+	// only routes FillRuleNonZero/FillRuleEvenOdd batches through the stencil
+	// draw path when both the device and the current render target have
+	// stencil support; otherwise it falls back to a plain indexed draw.
+	SupportsStencil bool
 }
 
 // Texture represents a GPU texture resource.
@@ -227,6 +233,12 @@ type RenderTarget interface {
 	// Height returns the render target height.
 	Height() int
 
+	// HasStencil reports whether the render target carries a stencil
+	// attachment. Consumers (e.g. the sprite pass) combine this with
+	// DeviceCapabilities.SupportsStencil to decide whether fill-rule
+	// batches can be routed through the stencil draw path on this target.
+	HasStencil() bool
+
 	// Dispose releases the render target's GPU resources.
 	Dispose()
 }
@@ -237,7 +249,13 @@ type RenderTargetDescriptor struct {
 	ColorFormat   TextureFormat
 	HasDepth      bool
 	DepthFormat   TextureFormat
-	SampleCount   int
+	// HasStencil indicates whether the render target needs a stencil
+	// attachment. On GPUs that require packed depth-stencil attachments
+	// (most 2D GPUs), setting HasStencil implies a packed depth+stencil
+	// texture is allocated — the depth half is unused if HasDepth is false
+	// but the packing is required by the API.
+	HasStencil  bool
+	SampleCount int
 	// Label is a human-readable name shown in WebGPU/Vulkan validation
 	// errors and debugger captures (e.g. "image-rt-<textureID>",
 	// "aa-buffer-rt"). Optional — empty means unlabeled.
@@ -262,6 +280,32 @@ type PipelineDescriptor struct {
 	DepthFunc    CompareFunc
 	CullMode     CullMode
 	Primitive    PrimitiveType
+
+	// StencilEnable enables the stencil test for this pipeline. On
+	// pipeline-baked backends (WebGPU, Vulkan, Metal, DX12) the Stencil
+	// ops/func/masks are compiled into the pipeline object; the reference
+	// value is dynamic and set via CommandEncoder.SetStencilReference at
+	// draw time. On GL-style backends (OpenGL, WebGL, soft) the pipeline's
+	// Stencil is applied eagerly in SetPipeline.
+	StencilEnable bool
+	// Stencil holds the baked stencil state. Ignored when StencilEnable
+	// is false.
+	Stencil StencilDescriptor
+	// DepthStencilFormat is the format of the depth-stencil attachment
+	// the pipeline will render against. Must match the bound render
+	// target's attachment for pipeline-native backends (WebGPU, Vulkan,
+	// Metal, DX12). Zero value is fine for pipelines without a depth or
+	// stencil attachment.
+	DepthStencilFormat TextureFormat
+
+	// ColorWriteDisabled masks out all color channel writes on this
+	// pipeline. Used by stencil-only passes (e.g. the sprite pass's
+	// fill-rule stencil-write pipelines) so that the draw updates the
+	// stencil buffer without touching color. Baked into pipeline state
+	// on WebGPU/Vulkan/Metal/DX12 where per-draw color-write toggling
+	// requires a pipeline swap anyway; GL-style backends apply it
+	// eagerly in SetPipeline via glColorMask.
+	ColorWriteDisabled bool
 }
 
 // CommandEncoder records rendering commands for a single render pass.
@@ -296,8 +340,12 @@ type CommandEncoder interface {
 	// This uses sampler objects to decouple filter state from the texture.
 	SetTextureFilter(slot int, filter TextureFilter)
 
-	// SetStencil configures and enables/disables the stencil test.
-	SetStencil(enabled bool, desc StencilDescriptor)
+	// SetStencilReference updates the dynamic stencil reference value used
+	// by the currently-bound pipeline's stencil test. The stencil enable
+	// flag, ops, compare func, and masks are baked into the pipeline via
+	// PipelineDescriptor.StencilEnable/Stencil. No-op on backends that do
+	// not support stencil (Capabilities.SupportsStencil == false).
+	SetStencilReference(ref uint32)
 
 	// SetColorWrite enables or disables writing to the color buffer.
 	SetColorWrite(enabled bool)
@@ -320,11 +368,17 @@ type CommandEncoder interface {
 
 // RenderPassDescriptor describes a render pass.
 type RenderPassDescriptor struct {
-	Target      RenderTarget // nil = default framebuffer
-	ClearColor  [4]float32   // RGBA clear color
-	ClearDepth  float32
-	LoadAction  LoadAction
-	StoreAction StoreAction
+	Target       RenderTarget // nil = default framebuffer
+	ClearColor   [4]float32   // RGBA clear color
+	ClearDepth   float32
+	ClearStencil uint32
+	LoadAction   LoadAction
+	StoreAction  StoreAction
+	// StencilLoadAction controls the stencil attachment's load op when the
+	// target has stencil. Zero value (LoadActionClear) is safe for RTs
+	// without a stencil attachment since the field is ignored there.
+	StencilLoadAction  LoadAction
+	StencilStoreAction StoreAction
 }
 
 // LoadAction specifies what happens to render target contents at pass start.

@@ -45,6 +45,12 @@ type Scene struct {
 	Name        string
 	Description string
 	Render      func(t *testing.T, ctx *RenderContext)
+	// NeedsStencil requests a stencil attachment on the scene's render
+	// target. Scenes with NeedsStencil=true are skipped on devices that
+	// report Capabilities.SupportsStencil=false; otherwise the scene
+	// would either allocate an attachment the backend cannot satisfy or
+	// silently miss its stencil ops.
+	NeedsStencil bool
 }
 
 // RenderContext provides the resources needed to render a scene.
@@ -84,6 +90,8 @@ func Scenes() []Scene {
 		sceneScissorRect(),
 		sceneOrthoProjection(),
 		sceneMultipleTriangles(),
+		sceneFillRuleNonZero(),
+		sceneFillRuleEvenOdd(),
 	}
 }
 
@@ -101,11 +109,16 @@ func RunAll(t *testing.T, dev backend.Device, enc backend.CommandEncoder) {
 func RunScene(t *testing.T, dev backend.Device, enc backend.CommandEncoder, scene Scene) {
 	t.Helper()
 
+	if scene.NeedsStencil && !dev.Capabilities().SupportsStencil {
+		t.Skipf("scene %q requires stencil support; device reports SupportsStencil=false", scene.Name)
+	}
+
 	// Create render target.
 	rt, err := dev.NewRenderTarget(backend.RenderTargetDescriptor{
 		Width:       SceneSize,
 		Height:      SceneSize,
 		ColorFormat: backend.TextureFormatRGBA8,
+		HasStencil:  scene.NeedsStencil,
 	})
 	require.NoError(t, err)
 	defer rt.Dispose()
@@ -850,4 +863,236 @@ func clampByte255(v int) uint8 {
 
 func bytesReader(data []byte) *bytes.Reader {
 	return bytes.NewReader(data)
+}
+
+// sceneFillRuleNonZero renders two overlapping opposite-winding triangles
+// through the NonZero stencil path. The winding counters cancel in the
+// overlap region, producing a hole. The golden image is generated from
+// the soft rasterizer and all other stencil-capable backends must match
+// it within the ±3 tolerance.
+func sceneFillRuleNonZero() Scene {
+	return Scene{
+		Name:         "fill_rule_nonzero",
+		Description:  "Two opposite-winding triangles composited under NonZero (hole in overlap)",
+		NeedsStencil: true,
+		Render: func(t *testing.T, ctx *RenderContext) {
+			t.Helper()
+			renderFillRuleScene(t, ctx, fillRuleVariantNonZero)
+		},
+	}
+}
+
+// sceneFillRuleEvenOdd renders two overlapping same-winding triangles
+// through the EvenOdd stencil path. Overlap bits are inverted, producing
+// a hole. The same golden-image gate as NonZero applies.
+func sceneFillRuleEvenOdd() Scene {
+	return Scene{
+		Name:         "fill_rule_evenodd",
+		Description:  "Two same-winding triangles composited under EvenOdd (hole in overlap)",
+		NeedsStencil: true,
+		Render: func(t *testing.T, ctx *RenderContext) {
+			t.Helper()
+			renderFillRuleScene(t, ctx, fillRuleVariantEvenOdd)
+		},
+	}
+}
+
+type fillRuleVariant int
+
+const (
+	fillRuleVariantNonZero fillRuleVariant = iota
+	fillRuleVariantEvenOdd
+)
+
+// renderFillRuleScene runs the two-pass stencil draw sequence used by
+// the sprite pass in production, but against hand-built geometry here so
+// conformance is independent of the sprite-pass / batch layer. Two
+// overlapping triangles composite into a single fill-rule batch; the
+// stencil test in the color pass selects "covered by the winding sign"
+// pixels and leaves the overlap unfilled for both NonZero (opposite
+// winding cancels) and EvenOdd (two Invert ops cancel).
+func renderFillRuleScene(t *testing.T, ctx *RenderContext, variant fillRuleVariant) {
+	t.Helper()
+	whiteTex := newWhiteTexture(t, ctx.Device)
+	defer whiteTex.Dispose()
+
+	dev := ctx.Device
+	shader, err := dev.NewShader(backend.ShaderDescriptor{})
+	require.NoError(t, err)
+	defer shader.Dispose()
+
+	// Write pipeline — ops differ between NonZero (Incr/Decr-wrap,
+	// two-sided) and EvenOdd (Invert, single-face).
+	var writeStencil backend.StencilDescriptor
+	switch variant {
+	case fillRuleVariantNonZero:
+		writeStencil = backend.StencilDescriptor{
+			Func:      backend.CompareAlways,
+			Mask:      0xFF,
+			WriteMask: 0xFF,
+			TwoSided:  true,
+			Front: backend.StencilFaceOps{
+				SFail:  backend.StencilKeep,
+				DPFail: backend.StencilKeep,
+				DPPass: backend.StencilIncrWrap,
+			},
+			Back: backend.StencilFaceOps{
+				SFail:  backend.StencilKeep,
+				DPFail: backend.StencilKeep,
+				DPPass: backend.StencilDecrWrap,
+			},
+		}
+	case fillRuleVariantEvenOdd:
+		writeStencil = backend.StencilDescriptor{
+			Func:      backend.CompareAlways,
+			Mask:      0xFF,
+			WriteMask: 0xFF,
+			Front: backend.StencilFaceOps{
+				SFail:  backend.StencilKeep,
+				DPFail: backend.StencilKeep,
+				DPPass: backend.StencilInvert,
+			},
+		}
+	}
+	writePipe, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader:             shader,
+		BlendMode:          backend.BlendSourceOver,
+		CullMode:           backend.CullNone,
+		Primitive:          backend.PrimitiveTriangles,
+		StencilEnable:      true,
+		Stencil:            writeStencil,
+		DepthStencilFormat: backend.TextureFormatDepth24Stencil8,
+		// Color writes disabled — the write pass populates stencil only.
+		// Critical on WebGPU/Vulkan/Metal/DX12 where encoder.SetColorWrite
+		// is a no-op (color write is baked into pipeline state there).
+		ColorWriteDisabled: true,
+	})
+	require.NoError(t, err)
+	defer writePipe.Dispose()
+
+	// Color pipeline — NotEqual ref=0, Zero-on-pass so the stencil
+	// buffer is cleared as we draw.
+	colorPipe, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader:        shader,
+		BlendMode:     backend.BlendSourceOver,
+		CullMode:      backend.CullNone,
+		Primitive:     backend.PrimitiveTriangles,
+		StencilEnable: true,
+		Stencil: backend.StencilDescriptor{
+			Func:      backend.CompareNotEqual,
+			Mask:      0xFF,
+			WriteMask: 0xFF,
+			Front: backend.StencilFaceOps{
+				SFail:  backend.StencilKeep,
+				DPFail: backend.StencilKeep,
+				DPPass: backend.StencilZero,
+			},
+			Back: backend.StencilFaceOps{
+				SFail:  backend.StencilKeep,
+				DPFail: backend.StencilKeep,
+				DPPass: backend.StencilZero,
+			},
+		},
+		DepthStencilFormat: backend.TextureFormatDepth24Stencil8,
+	})
+	require.NoError(t, err)
+	defer colorPipe.Dispose()
+
+	// Geometry: two overlapping triangles, yellow. For NonZero we use
+	// opposite windings so the counter cancels; for EvenOdd the winding
+	// is irrelevant (both CCW) because Invert is self-canceling.
+	var verts []byte
+	if variant == fillRuleVariantNonZero {
+		verts = packVertices(
+			// Outer triangle — CCW (front)
+			vtx(-0.7, -0.7, 0, 0, 1, 1, 0, 1),
+			vtx(0.7, -0.7, 0, 0, 1, 1, 0, 1),
+			vtx(0.0, 0.7, 0, 0, 1, 1, 0, 1),
+			// Inner triangle — CW (back), flipped vertex order
+			vtx(-0.3, -0.3, 0, 0, 1, 1, 0, 1),
+			vtx(0.0, 0.3, 0, 0, 1, 1, 0, 1),
+			vtx(0.3, -0.3, 0, 0, 1, 1, 0, 1),
+		)
+	} else {
+		verts = packVertices(
+			// Outer triangle — CCW
+			vtx(-0.7, -0.7, 0, 0, 1, 1, 0, 1),
+			vtx(0.7, -0.7, 0, 0, 1, 1, 0, 1),
+			vtx(0.0, 0.7, 0, 0, 1, 1, 0, 1),
+			// Inner triangle — CCW too; Invert is self-canceling
+			// under EvenOdd so winding doesn't matter.
+			vtx(-0.3, -0.3, 0, 0, 1, 1, 0, 1),
+			vtx(0.3, -0.3, 0, 0, 1, 1, 0, 1),
+			vtx(0.0, 0.3, 0, 0, 1, 1, 0, 1),
+		)
+	}
+	indices := packIndices(0, 1, 2, 3, 4, 5)
+
+	vbuf := newBuffer(t, dev, verts)
+	defer vbuf.Dispose()
+	ibuf := newBuffer(t, dev, indices)
+	defer ibuf.Dispose()
+
+	ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
+		Target:             ctx.Target,
+		LoadAction:         backend.LoadActionClear,
+		ClearColor:         [4]float32{0, 0, 0, 1},
+		ClearStencil:       0,
+		StencilLoadAction:  backend.LoadActionClear,
+		StencilStoreAction: backend.StoreActionStore,
+	})
+	ctx.Encoder.SetVertexBuffer(vbuf, 0)
+	ctx.Encoder.SetIndexBuffer(ibuf, backend.IndexUint16)
+	ctx.Encoder.SetTexture(whiteTex, 0)
+
+	// Stencil-write pass: color off (baked into writePipe), winding
+	// counters accumulate.
+	ctx.Encoder.SetPipeline(writePipe)
+	ctx.Encoder.SetStencilReference(0)
+	ctx.Encoder.DrawIndexed(6, 1, 0)
+
+	// Color pass: writes yellow where stencil != 0, zeroing the buffer.
+	ctx.Encoder.SetPipeline(colorPipe)
+	ctx.Encoder.SetStencilReference(0)
+	ctx.Encoder.DrawIndexed(6, 1, 0)
+
+	ctx.Encoder.EndRenderPass()
+
+	// Independent semantic check: the overlap region must be unfilled
+	// (color=black), and the outer-only region must be yellow. Without
+	// this assertion a backend that produces "solid yellow everywhere"
+	// would match any golden regenerated from the same-wrong source,
+	// hiding a broken fill-rule implementation. The checks use 0-index
+	// SceneSize/64 coords and account for the ±Tolerance slack that
+	// ComparePixels otherwise applies.
+	pixels := make([]byte, ctx.Width*ctx.Height*4)
+	ctx.Target.ColorTexture().ReadPixels(pixels)
+
+	// Center of the geometry (0,0 in NDC → middle of the RT). Both
+	// variants place opposite/overlapping triangles such that the
+	// exact center falls inside the overlap — NonZero cancels to zero
+	// winding, EvenOdd inverts twice to zero. In both cases the color
+	// pass's NotEqual ref=0 rejects the pixel, leaving the cleared
+	// background (black, opaque).
+	cx := ctx.Width / 2
+	cy := ctx.Height / 2
+	centerOff := (cy*ctx.Width + cx) * 4
+	require.LessOrEqualf(t, int(pixels[centerOff]), int(Tolerance),
+		"fill-rule overlap should be black; center R=%d", pixels[centerOff])
+	require.LessOrEqualf(t, int(pixels[centerOff+1]), int(Tolerance),
+		"fill-rule overlap should be black; center G=%d", pixels[centerOff+1])
+
+	// Inside the outer triangle but outside the inner — below the
+	// centroid, both variants cover with yellow (R=255, G=255, B=0).
+	// Pick a pixel ~1/4 of the height from the bottom, which is
+	// outside the inner triangle's bounding box by construction.
+	sx := ctx.Width / 2
+	sy := ctx.Height*3/4 + 2
+	outerOff := (sy*ctx.Width + sx) * 4
+	require.GreaterOrEqualf(t, int(pixels[outerOff]), 255-int(Tolerance),
+		"outer fill should be yellow; outer R=%d", pixels[outerOff])
+	require.GreaterOrEqualf(t, int(pixels[outerOff+1]), 255-int(Tolerance),
+		"outer fill should be yellow; outer G=%d", pixels[outerOff+1])
+	require.LessOrEqualf(t, int(pixels[outerOff+2]), int(Tolerance),
+		"outer fill should be yellow; outer B=%d", pixels[outerOff+2])
 }

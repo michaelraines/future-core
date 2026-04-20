@@ -35,15 +35,17 @@ func (t *mockTexture) Dispose()                      { t.disposed = true }
 
 // mockRenderTarget implements backend.RenderTarget for testing.
 type mockRenderTarget struct {
-	colorTex *mockTexture
-	w, h     int
-	disposed bool
+	colorTex   *mockTexture
+	w, h       int
+	hasStencil bool
+	disposed   bool
 }
 
 func (rt *mockRenderTarget) ColorTexture() backend.Texture { return rt.colorTex }
 func (rt *mockRenderTarget) DepthTexture() backend.Texture { return nil }
 func (rt *mockRenderTarget) Width() int                    { return rt.w }
 func (rt *mockRenderTarget) Height() int                   { return rt.h }
+func (rt *mockRenderTarget) HasStencil() bool              { return rt.hasStencil }
 func (rt *mockRenderTarget) Dispose()                      { rt.disposed = true }
 
 type mockDevice struct {
@@ -922,12 +924,20 @@ func TestColorScaleMethods(t *testing.T) {
 }
 
 func TestColorScaleAlpha(t *testing.T) {
+	// ScaleAlpha scales ALL four channels by a, matching Ebitengine.
+	// The RGB channels scale so that vertex colors stay correctly
+	// premultiplied for the sprite shader's SourceOver blend; see the
+	// comment on ColorScale.ScaleAlpha for the bug that motivated the
+	// fix.
 	var cs ColorScale
 	cs.ScaleAlpha(0.5)
-	require.InDelta(t, float32(1), cs.R(), 1e-6)
+	require.InDelta(t, float32(0.5), cs.R(), 1e-6)
+	require.InDelta(t, float32(0.5), cs.G(), 1e-6)
+	require.InDelta(t, float32(0.5), cs.B(), 1e-6)
 	require.InDelta(t, float32(0.5), cs.A(), 1e-6)
 
 	cs.ScaleAlpha(0.5)
+	require.InDelta(t, float32(0.25), cs.R(), 1e-6)
 	require.InDelta(t, float32(0.25), cs.A(), 1e-6)
 }
 
@@ -1055,7 +1065,7 @@ func TestFillRuleToBackend(t *testing.T) {
 
 func TestFillRuleToBackendUnknown(t *testing.T) {
 	got := fillRuleToBackend(FillRule(999))
-	require.Equal(t, backend.FillRuleNonZero, got)
+	require.Equal(t, backend.FillRuleNone, got)
 }
 
 func TestDrawTrianglesFillRulePassedToBatcher(t *testing.T) {
@@ -1094,7 +1104,11 @@ func TestDrawTrianglesDefaultFillRule(t *testing.T) {
 
 	batches := b.Flush()
 	require.Len(t, batches, 1)
-	require.Equal(t, backend.FillRuleNonZero, batches[0].FillRule)
+	// No opts passed: the batch gets the zero-value FillRuleNone so that
+	// it takes the plain indexed-draw path and doesn't accidentally route
+	// through the stencil pipeline pair. Callers that need NonZero/
+	// EvenOdd compositing set DrawTrianglesOptions.FillRule explicitly.
+	require.Equal(t, backend.FillRuleNone, batches[0].FillRule)
 }
 
 func TestNewImageFromImageNoRenderer(t *testing.T) {

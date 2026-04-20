@@ -40,7 +40,14 @@ PKGS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep 
 
 # LINT_PATHS provides relative directory paths for golangci-lint, which
 # requires filesystem paths rather than Go module paths.
-MODULE := $(shell go list -m)
+#
+# We parse go.mod directly rather than calling `go list -m` because the
+# workspace above this directory (go.work referencing both future and
+# future-core) makes `go list -m` return multiple modules, one per line.
+# $(shell …) captures only the first line, picking up the wrong module
+# path and breaking the sed that converts import paths to ./relative
+# form.
+MODULE := $(shell awk '/^module / {print $$2; exit}' go.mod)
 LINT_PATHS := $(shell go list -e $(GO_TAGS) ./... 2>/dev/null | grep -v /audio | grep -v /cmd/ | grep -v /internal/gl$$ | grep -v /internal/platform/glfw | grep -v /internal/platform/cocoa | grep -v /internal/platform/android | grep -v /internal/backend/opengl | grep -v /internal/mtl$$ | grep -v /internal/vk$$ | grep -v /internal/wgpu$$ | grep -v /internal/d3d12$$ | sed "s|^$(MODULE)|.|")
 
 # All buildable packages. Excludes:

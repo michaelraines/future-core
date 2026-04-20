@@ -49,11 +49,22 @@ func (s *mockShader) SetUniformBlock(_ string, _ []byte)        {}
 func (s *mockShader) PackCurrentUniforms() []byte               { return nil }
 func (s *mockShader) Dispose()                                  {}
 
-type mockPipeline struct{}
+// mockPipeline carries a distinguishing tag so tests can verify the
+// sequence of pipelines bound across a drawStenciled call (write →
+// color → default) rather than merely asserting "some pipeline was
+// bound three times." The mockDevice's NewPipeline stamps tags based
+// on pipeline configuration (StencilEnable, ColorWriteDisabled, Func).
+type mockPipeline struct {
+	tag string
+}
 
 func (p *mockPipeline) Dispose() {}
 
-type mockDevice struct{}
+type mockDevice struct {
+	// supportsStencil flips the device capability flag so tests can
+	// exercise the sprite pass's stencil routing without any real GPU.
+	supportsStencil bool
+}
 
 func (d *mockDevice) Init(_ backend.DeviceConfig) error { return nil }
 func (d *mockDevice) Dispose()                          {}
@@ -72,11 +83,23 @@ func (d *mockDevice) NewShader(_ backend.ShaderDescriptor) (backend.Shader, erro
 func (d *mockDevice) NewRenderTarget(_ backend.RenderTargetDescriptor) (backend.RenderTarget, error) {
 	return nil, nil
 }
-func (d *mockDevice) NewPipeline(_ backend.PipelineDescriptor) (backend.Pipeline, error) {
-	return &mockPipeline{}, nil
+func (d *mockDevice) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline, error) {
+	tag := "default"
+	switch {
+	case desc.StencilEnable && desc.ColorWriteDisabled && desc.Stencil.TwoSided:
+		tag = "writeNonZero"
+	case desc.StencilEnable && desc.ColorWriteDisabled:
+		tag = "writeEvenOdd"
+	case desc.StencilEnable && desc.Stencil.Func == backend.CompareNotEqual:
+		tag = "colorPass"
+	}
+	return &mockPipeline{tag: tag}, nil
 }
 func (d *mockDevice) Capabilities() backend.DeviceCapabilities {
-	return backend.DeviceCapabilities{MaxTextureSize: 4096}
+	return backend.DeviceCapabilities{
+		MaxTextureSize:  4096,
+		SupportsStencil: d.supportsStencil,
+	}
 }
 func (d *mockDevice) Encoder() backend.CommandEncoder { return nil }
 
@@ -134,8 +157,14 @@ func (e *mockEncoder) record(method string, args ...interface{}) {
 func (e *mockEncoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	e.record("BeginRenderPass", desc.Target, desc.LoadAction)
 }
-func (e *mockEncoder) EndRenderPass()                             { e.record("EndRenderPass") }
-func (e *mockEncoder) SetPipeline(_ backend.Pipeline)             { e.record("SetPipeline") }
+func (e *mockEncoder) EndRenderPass() { e.record("EndRenderPass") }
+func (e *mockEncoder) SetPipeline(p backend.Pipeline) {
+	tag := ""
+	if mp, ok := p.(*mockPipeline); ok {
+		tag = mp.tag
+	}
+	e.record("SetPipeline", tag)
+}
 func (e *mockEncoder) SetVertexBuffer(_ backend.Buffer, slot int) { e.record("SetVertexBuffer", slot) }
 func (e *mockEncoder) SetIndexBuffer(_ backend.Buffer, _ backend.IndexFormat) {
 	e.record("SetIndexBuffer")
@@ -144,8 +173,8 @@ func (e *mockEncoder) SetTexture(_ backend.Texture, slot int) { e.record("SetTex
 func (e *mockEncoder) SetTextureFilter(slot int, f backend.TextureFilter) {
 	e.record("SetTextureFilter", slot, f)
 }
-func (e *mockEncoder) SetStencil(enabled bool, desc backend.StencilDescriptor) {
-	e.record("SetStencil", enabled, desc)
+func (e *mockEncoder) SetStencilReference(ref uint32) {
+	e.record("SetStencilReference", ref)
 }
 func (e *mockEncoder) SetColorWrite(enabled bool)        { e.record("SetColorWrite", enabled) }
 func (e *mockEncoder) SetViewport(_ backend.Viewport)    {}
@@ -156,8 +185,10 @@ func (e *mockEncoder) Draw(vertexCount, instanceCount, firstVertex int) {
 func (e *mockEncoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 	e.record("DrawIndexed", indexCount, instanceCount, firstIndex)
 }
-func (e *mockEncoder) SetBlendMode(_ backend.BlendMode) {}
-func (e *mockEncoder) Flush()                           { e.record("Flush") }
+func (e *mockEncoder) SetBlendMode(mode backend.BlendMode) {
+	e.record("SetBlendMode", mode)
+}
+func (e *mockEncoder) Flush() { e.record("Flush") }
 
 // callsByMethod returns all calls with the given method name.
 func (e *mockEncoder) callsByMethod(method string) []encoderCall {
@@ -295,16 +326,22 @@ func TestSpritePassExecuteNonZero(t *testing.T) {
 	enc := &mockEncoder{}
 	sp.Execute(enc, NewPassContext(800, 600))
 
-	// NonZero: single DrawIndexed, no stencil calls.
+	// NonZero against a device that doesn't advertise stencil support:
+	// falls through to a single plain DrawIndexed. No SetStencilReference
+	// calls should fire because stencilEligible rejects on
+	// !Capabilities().SupportsStencil.
 	draws := enc.callsByMethod("DrawIndexed")
 	require.Len(t, draws, 1)
 	require.Equal(t, 3, draws[0].Args[0]) // indexCount
-
-	stencils := enc.callsByMethod("SetStencil")
-	require.Empty(t, stencils)
+	require.Empty(t, enc.callsByMethod("SetStencilReference"))
 }
 
-func TestSpritePassExecuteEvenOdd(t *testing.T) {
+func TestSpritePassExecuteEvenOddFallback(t *testing.T) {
+	// When the device reports SupportsStencil=false (default mock state),
+	// EvenOdd batches fall through to a plain DrawIndexed — same behavior
+	// as NonZero on a non-stencil backend. Pre-stencil-rewrite this test
+	// verified three SetStencil calls; that encoder method no longer
+	// exists and the sprite pass no longer issues inline stencil commands.
 	b := batch.NewBatcher(1024, 1024)
 	sp := newTestSpritePass(t, b)
 
@@ -328,60 +365,453 @@ func TestSpritePassExecuteEvenOdd(t *testing.T) {
 	enc := &mockEncoder{}
 	sp.Execute(enc, NewPassContext(800, 600))
 
-	// EvenOdd: two DrawIndexed calls (stencil pass + color pass).
 	draws := enc.callsByMethod("DrawIndexed")
-	require.Len(t, draws, 2)
+	require.Len(t, draws, 1)
+	require.Empty(t, enc.callsByMethod("SetStencilReference"))
+}
 
-	// Should have stencil calls: enable, enable (pass 2), disable.
-	stencils := enc.callsByMethod("SetStencil")
-	require.Len(t, stencils, 3)
+func TestSpritePassExecuteEvenOddStenciled(t *testing.T) {
+	// With SupportsStencil=true and ScreenHasStencil=true, an EvenOdd
+	// batch takes the two-pass stencil path: write pipe → ref → draw,
+	// color pipe → ref → draw, restore default pipe. Each DrawIndexed
+	// is preceded by a SetStencilReference(0) and bracketed by color
+	// writes off/on.
+	b := batch.NewBatcher(1024, 1024)
+	dev := &mockDevice{supportsStencil: true}
+	vbuf, err := dev.NewBuffer(backend.BufferDescriptor{Size: 1024})
+	require.NoError(t, err)
+	shader := &mockShader{uniforms: make(map[string]interface{})}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{tag: "default"},
+		Shader:      shader,
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
+	_ = vbuf
 
-	// First: enable stencil with INVERT
-	require.True(t, stencils[0].Args[0].(bool))
-	desc0 := stencils[0].Args[1].(backend.StencilDescriptor)
-	require.Equal(t, backend.CompareAlways, desc0.Func)
-	require.Equal(t, backend.StencilInvert, desc0.DPPass)
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
 
-	// Second: enable stencil with NOTEQUAL
-	require.True(t, stencils[1].Args[0].(bool))
-	desc1 := stencils[1].Args[1].(backend.StencilDescriptor)
-	require.Equal(t, backend.CompareNotEqual, desc1.Func)
+	b.Add(batch.DrawCommand{
+		Vertices:  []batch.Vertex2D{{}, {}, {}},
+		Indices:   []uint16{0, 1, 2},
+		BlendMode: backend.BlendSourceOver,
+		FillRule:  backend.FillRuleEvenOdd,
+	})
 
-	// Third: disable stencil
-	require.False(t, stencils[2].Args[0].(bool))
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenHasStencil = true
+	sp.Execute(enc, ctx)
 
-	// Color write: disabled then re-enabled.
-	colorWrites := enc.callsByMethod("SetColorWrite")
-	require.Len(t, colorWrites, 2)
-	require.False(t, colorWrites[0].Args[0].(bool))
-	require.True(t, colorWrites[1].Args[0].(bool))
+	draws := enc.callsByMethod("DrawIndexed")
+	require.Len(t, draws, 2, "EvenOdd stenciled path emits stencil-write + color draws")
+	refs := enc.callsByMethod("SetStencilReference")
+	require.Len(t, refs, 2)
+	require.Equal(t, uint32(0), refs[0].Args[0].(uint32))
+	require.Equal(t, uint32(0), refs[1].Args[0].(uint32))
+	// Color-write toggling lives on the pipelines (ColorWriteDisabled),
+	// not on encoder state — no SetColorWrite calls should fire for
+	// the stencil dance.
+	require.Empty(t, enc.callsByMethod("SetColorWrite"))
+
+	// Verify the stencil dance's pipeline identity via tagged
+	// mockPipelines. The preamble binds the default pipeline one or
+	// more times (bindDefaultShader plus a potential blend-mode-change
+	// re-bind when the batch's BlendSourceOver differs from the
+	// zero-value lastBlendMode). The last three SetPipeline calls
+	// must be writeEvenOdd → colorPass → default in that exact order,
+	// proving drawStenciled swapped to the write pipeline, the color
+	// pipeline, and restored the default in turn.
+	sets := enc.callsByMethod("SetPipeline")
+	require.GreaterOrEqual(t, len(sets), 3)
+	tail := sets[len(sets)-3:]
+	require.Equal(t, "writeEvenOdd", tail[0].Args[0].(string))
+	require.Equal(t, "colorPass", tail[1].Args[0].(string))
+	require.Equal(t, "default", tail[2].Args[0].(string))
+}
+
+// stencilFailingDevice returns a non-nil pipeline for the first
+// pipelineFailAfter pipeline creations and errors after that. Used to
+// exercise ensureStencilPipelines's partial-build cleanup.
+type stencilFailingDevice struct {
+	mockDevice
+	pipelineCount     *int
+	pipelineFailAfter int
+}
+
+func (d *stencilFailingDevice) Capabilities() backend.DeviceCapabilities {
+	return backend.DeviceCapabilities{
+		MaxTextureSize:  4096,
+		SupportsStencil: d.supportsStencil,
+	}
+}
+
+func (d *stencilFailingDevice) NewPipeline(_ backend.PipelineDescriptor) (backend.Pipeline, error) {
+	*d.pipelineCount++
+	if *d.pipelineCount > d.pipelineFailAfter {
+		return nil, errMockFail
+	}
+	return &mockPipeline{}, nil
+}
+
+func TestSpritePassEnsureStencilPipelinesFailureSafeDispose(t *testing.T) {
+	// If NewPipeline fails mid-build (e.g. the third create for the
+	// color pass), ensureStencilPipelines must dispose the already-
+	// built write pipelines and leave the SpritePass fields nil so a
+	// later Dispose() doesn't double-free. Regression guard for
+	// `stencilPipesBuilt` remaining false after a partial build.
+	b := batch.NewBatcher(1024, 1024)
+	count := 0
+	dev := &stencilFailingDevice{
+		mockDevice:        mockDevice{supportsStencil: true},
+		pipelineCount:     &count,
+		pipelineFailAfter: 2, // succeed for writeNZ + writeEO, fail for colorPipe
+	}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	b.Add(batch.DrawCommand{
+		Vertices:  []batch.Vertex2D{{}, {}, {}},
+		Indices:   []uint16{0, 1, 2},
+		BlendMode: backend.BlendSourceOver,
+		FillRule:  backend.FillRuleEvenOdd,
+	})
+
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenHasStencil = true
+	sp.Execute(enc, ctx)
+
+	// Third NewPipeline failure forced the fallback to plain DrawIndexed.
+	require.Len(t, enc.callsByMethod("DrawIndexed"), 1)
+	require.Empty(t, enc.callsByMethod("SetStencilReference"))
+	// Dispose must not panic even though two stencil pipelines were
+	// transiently created and then released inside ensureStencilPipelines.
+	require.NotPanics(t, func() { sp.Dispose() })
+}
+
+func TestSpritePassStencilThenRegularBatchInteraction(t *testing.T) {
+	// A stencil fill-rule batch followed by a regular (non-fill-rule)
+	// batch with the same default shader must not corrupt state for
+	// the second batch: drawStenciled restores sp.pipeline and sets
+	// lastBlendMode = BlendSourceOver, so the sp.lastBlendMode guard
+	// in Execute fires correctly when the second batch uses a
+	// different blend mode.
+	b := batch.NewBatcher(1024, 1024)
+	dev := &mockDevice{supportsStencil: true}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	// First: a stencil-routed EvenOdd batch.
+	b.Add(batch.DrawCommand{
+		Vertices:  []batch.Vertex2D{{}, {}, {}},
+		Indices:   []uint16{0, 1, 2},
+		BlendMode: backend.BlendSourceOver,
+		FillRule:  backend.FillRuleEvenOdd,
+	})
+	// Second: a regular batch with a DIFFERENT blend — the Execute
+	// loop's "same default shader, different blend" guard depends on
+	// sp.lastBlendMode being current after drawStenciled.
+	b.Add(batch.DrawCommand{
+		Vertices:  []batch.Vertex2D{{}, {}, {}},
+		Indices:   []uint16{0, 1, 2},
+		BlendMode: backend.BlendAdditive,
+	})
+
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenHasStencil = true
+	sp.Execute(enc, ctx)
+
+	// Stencil batch: 2 DrawIndexed; regular batch: 1 DrawIndexed. Three total.
+	require.Len(t, enc.callsByMethod("DrawIndexed"), 3)
+	// The regular batch's blend differs from the stencil pipelines'
+	// baked BlendSourceOver, so a SetBlendMode(Additive) must have
+	// fired before its draw.
+	blendCalls := enc.callsByMethod("SetBlendMode")
+	require.NotEmpty(t, blendCalls, "expected SetBlendMode for the additive batch")
+}
+
+func TestSpritePassBackToBackStencilBatches(t *testing.T) {
+	// Two consecutive fill-rule batches in the same render pass must
+	// each run the write/color pipeline pair. The color pass's
+	// DPPass=Zero op self-clears the stencil buffer as it draws so the
+	// second batch starts with stencil=0 without an explicit clear —
+	// this test guards the sequencing by verifying four DrawIndexed
+	// calls and four SetStencilReference calls alternate correctly.
+	b := batch.NewBatcher(1024, 1024)
+	dev := &mockDevice{supportsStencil: true}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	// Different TextureIDs prevent the batcher from merging these into
+	// one — we want two distinct fill-rule batches to exercise
+	// drawStenciled being called back-to-back.
+	for i := range 2 {
+		b.Add(batch.DrawCommand{
+			Vertices:  []batch.Vertex2D{{}, {}, {}},
+			Indices:   []uint16{0, 1, 2},
+			TextureID: uint32(1 + i),
+			BlendMode: backend.BlendSourceOver,
+			FillRule:  backend.FillRuleEvenOdd,
+		})
+	}
+
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenHasStencil = true
+	sp.Execute(enc, ctx)
+
+	require.Len(t, enc.callsByMethod("DrawIndexed"), 4,
+		"each fill-rule batch emits stencil-write + color draws")
+	refs := enc.callsByMethod("SetStencilReference")
+	require.Len(t, refs, 4)
+	for i, c := range refs {
+		require.Equal(t, uint32(0), c.Args[0].(uint32),
+			"SetStencilReference(%d) should be 0", i)
+	}
+}
+
+func TestSpritePassStencilFallbackNonSourceOver(t *testing.T) {
+	// A fill-rule batch with a blend other than SourceOver must skip
+	// the stencil path — the lazily-built stencil pipelines all bake
+	// BlendSourceOver, so routing a BlendAdditive batch through them
+	// would silently swap the blend. Expected behavior: fall back to
+	// a single plain DrawIndexed with no SetStencilReference calls.
+	b := batch.NewBatcher(1024, 1024)
+	dev := &mockDevice{supportsStencil: true}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	b.Add(batch.DrawCommand{
+		Vertices:  []batch.Vertex2D{{}, {}, {}},
+		Indices:   []uint16{0, 1, 2},
+		BlendMode: backend.BlendAdditive,
+		FillRule:  backend.FillRuleEvenOdd,
+	})
+
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenHasStencil = true
+	sp.Execute(enc, ctx)
+
+	require.Len(t, enc.callsByMethod("DrawIndexed"), 1)
+	require.Empty(t, enc.callsByMethod("SetStencilReference"))
+}
+
+func TestSpritePassStencilFallbackCustomShader(t *testing.T) {
+	// A fill-rule batch bound to a custom ShaderID falls back to a
+	// plain DrawIndexed — the sprite pass only builds stencil
+	// pipelines against the default shader, so custom-shader fill
+	// rules can't be routed through stencil without more pipeline
+	// variants.
+	b := batch.NewBatcher(1024, 1024)
+	dev := &mockDevice{supportsStencil: true}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+	sp.ResolveShader = func(id uint32) *ShaderInfo {
+		if id == 7 {
+			return &ShaderInfo{
+				Shader:   &mockShader{uniforms: make(map[string]interface{})},
+				Pipeline: &mockPipeline{},
+			}
+		}
+		return nil
+	}
+
+	b.Add(batch.DrawCommand{
+		Vertices:  []batch.Vertex2D{{}, {}, {}},
+		Indices:   []uint16{0, 1, 2},
+		BlendMode: backend.BlendSourceOver,
+		ShaderID:  7,
+		FillRule:  backend.FillRuleEvenOdd,
+	})
+
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenHasStencil = true
+	sp.Execute(enc, ctx)
+
+	require.Len(t, enc.callsByMethod("DrawIndexed"), 1)
+	require.Empty(t, enc.callsByMethod("SetStencilReference"))
+}
+
+func TestSpritePassExecuteNonZeroStenciled(t *testing.T) {
+	// NonZero batches also route through the stencil path when the
+	// device + target support it. Difference from EvenOdd is the write
+	// pipeline (Incr/Decr-wrap two-sided vs Invert); the emitted command
+	// shape is identical from the encoder's perspective.
+	b := batch.NewBatcher(1024, 1024)
+	dev := &mockDevice{supportsStencil: true}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
+
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	b.Add(batch.DrawCommand{
+		Vertices:  []batch.Vertex2D{{}, {}, {}},
+		Indices:   []uint16{0, 1, 2},
+		BlendMode: backend.BlendSourceOver,
+		FillRule:  backend.FillRuleNonZero,
+	})
+
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenHasStencil = true
+	sp.Execute(enc, ctx)
+
+	// Explicit FillRuleNonZero routes through the stencil pipeline pair
+	// (stencil-write + color). The zero-value FillRuleNone would bypass
+	// this; only callers that opt in (DrawTrianglesOptions.FillRule set
+	// explicitly, or future-core's vector library's FillPath) hit this
+	// path.
+	require.Len(t, enc.callsByMethod("DrawIndexed"), 2)
+	require.Len(t, enc.callsByMethod("SetStencilReference"), 2)
 }
 
 func TestSpritePassMixedFillRules(t *testing.T) {
+	// Both explicit FillRuleNonZero and FillRuleEvenOdd route through
+	// the stencil pipeline pair (stencil-write + color = 2 DrawIndexed
+	// each). Four total across the two batches.
 	b := batch.NewBatcher(1024, 1024)
-	sp := newTestSpritePass(t, b)
+	dev := &mockDevice{supportsStencil: true}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
 	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
 
-	// Add one NonZero and one EvenOdd batch.
 	b.Add(batch.DrawCommand{
 		Vertices:  []batch.Vertex2D{{}, {}, {}},
 		Indices:   []uint16{0, 1, 2},
 		TextureID: 1,
+		BlendMode: backend.BlendSourceOver,
 		FillRule:  backend.FillRuleNonZero,
 	})
 	b.Add(batch.DrawCommand{
 		Vertices:  []batch.Vertex2D{{}, {}, {}},
 		Indices:   []uint16{0, 1, 2},
 		TextureID: 1,
+		BlendMode: backend.BlendSourceOver,
 		FillRule:  backend.FillRuleEvenOdd,
 	})
 
 	enc := &mockEncoder{}
-	sp.Execute(enc, NewPassContext(800, 600))
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenHasStencil = true
+	sp.Execute(enc, ctx)
 
-	// NonZero: 1 draw, EvenOdd: 2 draws = 3 total.
-	draws := enc.callsByMethod("DrawIndexed")
-	require.Len(t, draws, 3)
+	require.Len(t, enc.callsByMethod("DrawIndexed"), 4)
+}
+
+// TestSpritePassMultipleFillRuleBatchesCompositeIndependently guards the
+// "overlapping transparent ellipses render fully opaque" regression.
+// Two independent FillRuleNonZero draws at overlapping coordinates must
+// each get their own stencil-write + color-pass pair — four DrawIndexed
+// calls total, paired with four SetStencilReference(0) calls. If the
+// batcher were to merge them (or the sprite pass were to collapse them),
+// the color pass's DPPass=Zero would cause the first shape to consume
+// the stencil in the overlap region and the second shape to silently
+// drop at those pixels.
+func TestSpritePassMultipleFillRuleBatchesCompositeIndependently(t *testing.T) {
+	b := batch.NewBatcher(1024, 1024)
+	dev := &mockDevice{supportsStencil: true}
+	sp, err := NewSpritePass(SpritePassConfig{
+		Device:      dev,
+		Batcher:     b,
+		Pipeline:    &mockPipeline{},
+		Shader:      &mockShader{uniforms: make(map[string]interface{})},
+		MaxVertices: 1024,
+		MaxIndices:  1024,
+	})
+	require.NoError(t, err)
+	defer sp.Dispose()
+	sp.ResolveTexture = func(_ uint32) backend.Texture { return &mockTexture{w: 1, h: 1} }
+
+	// Two identical-state NonZero draws, same texture, same blend. These
+	// must stay separate — the batcher's merge predicate rejects any
+	// non-None FillRule combination (see batch.go canMerge).
+	for range 2 {
+		b.Add(batch.DrawCommand{
+			Vertices:  []batch.Vertex2D{{}, {}, {}},
+			Indices:   []uint16{0, 1, 2},
+			TextureID: 1,
+			BlendMode: backend.BlendSourceOver,
+			FillRule:  backend.FillRuleNonZero,
+		})
+	}
+
+	enc := &mockEncoder{}
+	ctx := NewPassContext(800, 600)
+	ctx.ScreenHasStencil = true
+	sp.Execute(enc, ctx)
+
+	// Two independent stencil passes: write + color per batch = 4 draws,
+	// 4 SetStencilReference calls.
+	require.Len(t, enc.callsByMethod("DrawIndexed"), 4)
+	require.Len(t, enc.callsByMethod("SetStencilReference"), 4)
 }
 
 func TestSpritePassDispose(t *testing.T) {
@@ -544,13 +974,15 @@ func TestSpritePassSingleTargetOnlyOnePass(t *testing.T) {
 
 // mockRenderTarget implements backend.RenderTarget for testing.
 type mockRenderTarget struct {
-	w, h int
+	w, h       int
+	hasStencil bool
 }
 
 func (rt *mockRenderTarget) ColorTexture() backend.Texture { return &mockTexture{w: rt.w, h: rt.h} }
 func (rt *mockRenderTarget) DepthTexture() backend.Texture { return nil }
 func (rt *mockRenderTarget) Width() int                    { return rt.w }
 func (rt *mockRenderTarget) Height() int                   { return rt.h }
+func (rt *mockRenderTarget) HasStencil() bool              { return rt.hasStencil }
 func (rt *mockRenderTarget) Dispose()                      {}
 
 func TestSpritePassTargetDims(t *testing.T) {

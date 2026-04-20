@@ -17,6 +17,18 @@ type Encoder struct {
 	inRenderPass    bool
 	currentPipeline *Pipeline
 	indexFormat     backend.IndexFormat
+
+	// Cached stencil state from the most recently bound pipeline. WebGL2
+	// stencil ops are mutable per-draw (unlike WebGPU where they're
+	// baked into the pipeline), so SetPipeline applies the full state
+	// eagerly here. SetStencilReference re-issues glStencilFuncSeparate
+	// with the cached compare func + read mask and a new reference.
+	// stencilWriteMask is cached so BeginRenderPass's stencil-clear
+	// path can restore it after temporarily forcing writeMask=0xFF.
+	stencilEnabled   bool
+	stencilFunc      int
+	stencilReadMask  int
+	stencilWriteMask int
 }
 
 // BeginRenderPass begins a WebGL2 render pass.
@@ -36,6 +48,24 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		e.gl.Call("clearColor", c[0], c[1], c[2], c[3])
 		e.gl.Call("clear", e.gl.Get("COLOR_BUFFER_BIT").Int()|e.gl.Get("DEPTH_BUFFER_BIT").Int())
 	}
+	if desc.StencilLoadAction == backend.LoadActionClear {
+		e.gl.Call("clearStencil", int(desc.ClearStencil))
+		// A previous glStencilMask(front, 0) from a no-op stencil
+		// pipeline can suppress the clear; re-enable full-mask writes
+		// around the clear to guarantee the buffer is zeroed.
+		e.gl.Call("stencilMask", 0xFF)
+		e.gl.Call("clear", e.gl.Get("STENCIL_BUFFER_BIT").Int())
+		// Restore the pipeline's cached writeMask. Without this the
+		// next draw issued before SetPipeline rebinds would write
+		// stencil through the wide mask left over from the clear,
+		// even though the pipeline's baked state says narrower.
+		if e.stencilEnabled {
+			front := e.gl.Get("FRONT").Int()
+			back := e.gl.Get("BACK").Int()
+			e.gl.Call("stencilMaskSeparate", front, e.stencilWriteMask)
+			e.gl.Call("stencilMaskSeparate", back, e.stencilWriteMask)
+		}
+	}
 
 	e.inRenderPass = true
 }
@@ -48,12 +78,111 @@ func (e *Encoder) EndRenderPass() {
 	}
 }
 
-// SetPipeline applies pipeline state (blend mode, shader program, vertex attributes).
+// SetPipeline applies pipeline state (blend mode, shader program, vertex
+// attributes). Also eagerly applies pipeline-baked color write and
+// stencil state: on WebGL2 these are mutable encoder state rather than
+// compiled into the pipeline object, so we re-issue them every time a
+// pipeline is bound.
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
-	if p, ok := pipeline.(*Pipeline); ok {
-		e.currentPipeline = p
-		e.applyBlendMode(p.desc.BlendMode)
-		p.bind()
+	p, ok := pipeline.(*Pipeline)
+	if !ok {
+		return
+	}
+	e.currentPipeline = p
+	e.applyBlendMode(p.desc.BlendMode)
+	p.bind()
+
+	// Color write mask baked into the pipeline. Stencil-only passes set
+	// ColorWriteDisabled=true so the draw updates the stencil buffer
+	// without touching color. Non-stencil pipelines default back to
+	// writing all channels.
+	if p.desc.ColorWriteDisabled {
+		e.gl.Call("colorMask", false, false, false, false)
+	} else {
+		e.gl.Call("colorMask", true, true, true, true)
+	}
+
+	// Pipeline-baked stencil state. The reference value stays dynamic
+	// and is updated via SetStencilReference; here we cache the compare
+	// func and read mask so re-issuing glStencilFuncSeparate uses the
+	// same test against a new ref.
+	if p.desc.StencilEnable {
+		sd := p.desc.Stencil
+		e.gl.Call("enable", e.gl.Get("STENCIL_TEST").Int())
+		e.stencilEnabled = true
+		e.stencilFunc = glCompareFunc(e.gl, sd.Func)
+		e.stencilReadMask = int(sd.Mask)
+		front := e.gl.Get("FRONT").Int()
+		back := e.gl.Get("BACK").Int()
+		backOps := sd.Front
+		if sd.TwoSided {
+			backOps = sd.Back
+		}
+		e.gl.Call("stencilFuncSeparate", front,
+			e.stencilFunc, 0, e.stencilReadMask)
+		e.gl.Call("stencilFuncSeparate", back,
+			e.stencilFunc, 0, e.stencilReadMask)
+		e.gl.Call("stencilOpSeparate", front,
+			glStencilOp(e.gl, sd.Front.SFail),
+			glStencilOp(e.gl, sd.Front.DPFail),
+			glStencilOp(e.gl, sd.Front.DPPass))
+		e.gl.Call("stencilOpSeparate", back,
+			glStencilOp(e.gl, backOps.SFail),
+			glStencilOp(e.gl, backOps.DPFail),
+			glStencilOp(e.gl, backOps.DPPass))
+		e.stencilWriteMask = int(sd.WriteMask)
+		e.gl.Call("stencilMaskSeparate", front, e.stencilWriteMask)
+		e.gl.Call("stencilMaskSeparate", back, e.stencilWriteMask)
+	} else if e.stencilEnabled {
+		e.gl.Call("disable", e.gl.Get("STENCIL_TEST").Int())
+		e.stencilEnabled = false
+	}
+}
+
+// glCompareFunc returns the WebGL2 compare constant for a backend
+// CompareFunc. Shared between stencil and (future) depth compare.
+func glCompareFunc(gl js.Value, cf backend.CompareFunc) int {
+	switch cf {
+	case backend.CompareNever:
+		return gl.Get("NEVER").Int()
+	case backend.CompareLess:
+		return gl.Get("LESS").Int()
+	case backend.CompareLessEqual:
+		return gl.Get("LEQUAL").Int()
+	case backend.CompareEqual:
+		return gl.Get("EQUAL").Int()
+	case backend.CompareGreaterEqual:
+		return gl.Get("GEQUAL").Int()
+	case backend.CompareGreater:
+		return gl.Get("GREATER").Int()
+	case backend.CompareNotEqual:
+		return gl.Get("NOTEQUAL").Int()
+	case backend.CompareAlways:
+		return gl.Get("ALWAYS").Int()
+	default:
+		return gl.Get("ALWAYS").Int()
+	}
+}
+
+// glStencilOp returns the WebGL2 constant for a backend StencilOp.
+func glStencilOp(gl js.Value, op backend.StencilOp) int {
+	switch op {
+	case backend.StencilZero:
+		return gl.Get("ZERO").Int()
+	case backend.StencilReplace:
+		return gl.Get("REPLACE").Int()
+	case backend.StencilIncr:
+		return gl.Get("INCR").Int()
+	case backend.StencilDecr:
+		return gl.Get("DECR").Int()
+	case backend.StencilInvert:
+		return gl.Get("INVERT").Int()
+	case backend.StencilIncrWrap:
+		return gl.Get("INCR_WRAP").Int()
+	case backend.StencilDecrWrap:
+		return gl.Get("DECR_WRAP").Int()
+	default: // StencilKeep
+		return gl.Get("KEEP").Int()
 	}
 }
 
@@ -160,13 +289,20 @@ func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
 		e.gl.Get("TEXTURE_MAG_FILTER").Int(), glFilter)
 }
 
-// SetStencil configures stencil test state.
-func (e *Encoder) SetStencil(enable bool, desc backend.StencilDescriptor) {
-	if enable {
-		e.gl.Call("enable", e.gl.Get("STENCIL_TEST").Int())
-	} else {
-		e.gl.Call("disable", e.gl.Get("STENCIL_TEST").Int())
+// SetStencilReference updates the dynamic stencil reference value by
+// re-issuing glStencilFuncSeparate for both faces with the cached
+// compare func + read mask. A no-op when the current pipeline didn't
+// enable the stencil test.
+func (e *Encoder) SetStencilReference(ref uint32) {
+	if !e.stencilEnabled {
+		return
 	}
+	front := e.gl.Get("FRONT").Int()
+	back := e.gl.Get("BACK").Int()
+	e.gl.Call("stencilFuncSeparate", front,
+		e.stencilFunc, int(ref), e.stencilReadMask)
+	e.gl.Call("stencilFuncSeparate", back,
+		e.stencilFunc, int(ref), e.stencilReadMask)
 }
 
 // SetColorWrite enables or disables color writing.

@@ -43,11 +43,17 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	d.height = cfg.Height
 
 	// Create an internal screen render target so the encoder can rasterize
-	// into it when BeginRenderPass is called with Target == nil.
+	// into it when BeginRenderPass is called with Target == nil. The screen
+	// RT carries a stencil attachment because this device advertises
+	// SupportsStencil=true — the sprite pass's fill-rule routing only
+	// activates when both the capability and the bound RT's HasStencil are
+	// true, so the attachment must exist on the screen target or the
+	// routing silently falls through to a plain indexed draw.
 	rt, err := d.NewRenderTarget(backend.RenderTargetDescriptor{
 		Width:       cfg.Width,
 		Height:      cfg.Height,
 		ColorFormat: backend.TextureFormatRGBA8,
+		HasStencil:  true,
 	})
 	if err != nil {
 		return fmt.Errorf("soft: screen render target: %w", err)
@@ -96,6 +102,7 @@ func (d *Device) ResizeScreen(width, height int) {
 		Width:       width,
 		Height:      height,
 		ColorFormat: backend.TextureFormatRGBA8,
+		HasStencil:  true,
 	})
 	if err != nil {
 		return
@@ -191,11 +198,12 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 		}
 	}
 	return &RenderTarget{
-		id:       genID(),
-		color:    colorTex.(*Texture),
-		depth:    depthTex,
-		rtWidth:  desc.Width,
-		rtHeight: desc.Height,
+		id:         genID(),
+		color:      colorTex.(*Texture),
+		depth:      depthTex,
+		rtWidth:    desc.Width,
+		rtHeight:   desc.Height,
+		hasStencil: desc.HasStencil,
 	}, nil
 }
 
@@ -217,6 +225,7 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 		SupportsMSAA:      false,
 		MaxMSAASamples:    1,
 		SupportsFloat16:   true,
+		SupportsStencil:   true,
 	}
 }
 
@@ -241,6 +250,8 @@ func bytesPerPixel(f backend.TextureFormat) int {
 	case backend.TextureFormatDepth24:
 		return 4
 	case backend.TextureFormatDepth32F:
+		return 4
+	case backend.TextureFormatDepth24Stencil8:
 		return 4
 	default:
 		return 4

@@ -96,6 +96,7 @@ comparison.
 | `FUTURE_CORE_TRACE_BATCHES=N` | `internal/pipeline/trace.go` | The batcher's per-frame batch list after `Flush()`: target ID, texture ID, shader, filter, blend, vertex and index counts for each batch. Useful for confirming what the batcher actually handed to the sprite pass. |
 | `FUTURE_CORE_TRACE_PASSES=N` | `internal/pipeline/trace.go` | Every `BeginRenderPass` call the sprite pass makes, with target ID, load action, viewport, and clear color. Useful for catching "the same target is entered twice per frame" and "the load action is wrong" bugs. |
 | `FUTURE_CORE_TRACE_WEBGPU=N` | `internal/backend/webgpu/trace_js.go` | Every browser-WebGPU encoder call for the first N frames: `BeginRenderPass`, `SetPipeline` (with blend + format), `bindUniforms` (with dynamic offset and first 8 bytes of payload), `SetTexture`, `DrawIndexed`, `Flush`. WASM-only. Use when the batch/pass traces show the right sequence but pixels still look wrong — this dumps the actual WebGPU calls leaving the encoder, so you can diff against a hand-written baseline (e.g. `parity-tests/wgsl-lighting-demo/`). |
+| `FUTURE_CORE_DIAG_LOGS=N` | `internal/backend/webgpu/encoder_js.go`, `pipeline_js.go` | Per-call-site `console.log` budget (N entries total per run, shared across `BeginRenderPass`, `Flush`, and `createRenderPipeline`). Coarser than `FUTURE_CORE_TRACE_WEBGPU` — no per-frame structure — but catches early-init paths where the tracer's frame counter never advances (e.g. blank canvas, missing screen pass, silent pipeline creation). Emits to browser devtools via `console.log`. The always-on `uncapturederror` handler installed in `device_js.go:Init` catches WebGPU validation errors that would otherwise be swallowed (attachment size mismatches, pipeline/pass format incompatibility); it was how the always-on depth-stencil approach was diagnosed. |
 | `go test -v -run TestDumpPointLightWGSL ./internal/shadertranslate/` | `internal/shadertranslate/tooling_dump_wgsl_test.go` | Prints every stage of the Kage → GLSL → WGSL translation for the lighting point-light shader, plus the combined uniform layout and the final post-merge WGSL actually sent to `createShaderModule`. Use when you suspect the translator is emitting something different from what you think it is. |
 | `FUTURE_CORE_TRACE_TEXT=1` | (text package) | Logs glyph creation, draw positions, target sizes, and color scale values. Diagnoses invisible text by confirming glyphs are rasterized and DrawImage is called. |
 | `FUTURE_CORE_NO_AA=1` | (image.go) | Bypasses `drawTrianglesAA` entirely, routing all `AntiAlias=true` draws through the aliased path. Useful for confirming whether a visual bug is caused by the AA buffer lifecycle. |
@@ -234,13 +235,31 @@ library). Desktop platform code (GLFW, OpenGL) is gated by OS-based build
 constraints (`//go:build darwin || linux || freebsd || windows`) and compiles
 automatically on desktop platforms — no `-tags` flags needed.
 
-### Known CI Limitation: `make lint` Exits With Code 7
+### `make lint` Path Resolution (fixed)
 
-`golangci-lint` reports typechecking errors about directory resolution (e.g.,
-"stat .../github.com/.../internal/platform: directory not found") but finds 0
-actual lint issues. This is a pre-existing configuration issue with how the
-Makefile passes package paths. Lint violations are real; the exit code alone
-is not.
+Earlier revisions reported typechecking errors like "stat
+.../github.com/.../internal/platform: directory not found" from
+`golangci-lint` and exited with code 7. Root cause: the Makefile derived
+`MODULE` from `go list -m`, which — when a parent `go.work` is present —
+emits both `future` and `future-core`, and `$(shell …)` captured only the
+first line (`future`). The `sed` that converts `<module>/<pkg>` to
+`./<pkg>` then silently no-op'd and golangci-lint received fully
+qualified import paths it couldn't resolve. Fixed by parsing `go.mod`
+directly:
+
+```make
+MODULE := $(shell awk '/^module / {print $$2; exit}' go.mod)
+```
+
+### gopls LSP noise on android/386
+
+gopls cross-compiles against every GOOS/GOARCH combo it recognises, so
+diagnostics tagged `[android,386]` may appear in editors for files that
+import CGo-requiring deps (ebiten, x/mobile, chromedp). This project
+officially targets `android/arm64`, not `android/386` — neither `make`,
+`make build-android`, CI, nor any committed build step touches android/386.
+The diagnostics are IDE-only noise: ignore them unless you are
+intentionally adding android/386 support.
 
 ### Known CI Limitation: Audio Packages Excluded
 

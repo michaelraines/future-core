@@ -350,12 +350,18 @@ func (s *shader) PackCurrentUniforms() []byte { return nil }
 func (s *shader) Dispose()                    { gl.DeleteProgram(s.program) }
 
 type renderTarget struct {
-	fbo      uint32
-	color    *texture
-	depth    *texture
-	rtWidth  int
-	rtHeight int
+	fbo        uint32
+	color      *texture
+	depth      *texture
+	rtWidth    int
+	rtHeight   int
+	hasStencil bool
 }
+
+// HasStencil reports whether a stencil attachment was requested. OpenGL
+// stencil wiring is tracked under the eager-pipeline migration; the RT
+// currently carries the flag for routing purposes only.
+func (rt *renderTarget) HasStencil() bool { return rt.hasStencil }
 
 func (rt *renderTarget) ColorTexture() backend.Texture {
 	return rt.color

@@ -274,6 +274,20 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 }
 
 // NewPipeline creates a Metal render pipeline state.
+//
+// TODO(metal-native): this just stores the descriptor today — no
+// MTLRenderPipelineState / MTLDepthStencilState is created. When native
+// graphics rendering lands, build both objects from the descriptor
+// including:
+//   - MTLDepthStencilDescriptor.frontFaceStencil/backFaceStencil from
+//     desc.Stencil when desc.StencilEnable is true
+//   - depthAttachmentPixelFormat + stencilAttachmentPixelFormat set to
+//     MTLPixelFormatDepth32Float_Stencil8 (macOS) or Depth24Stencil8
+//     (iOS/tvOS)
+//   - MTLRenderPipelineColorAttachmentDescriptor.writeMask = 0 when
+//     desc.ColorWriteDisabled is true
+//
+// Then flip Capabilities.SupportsStencil=true.
 func (d *Device) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline, error) {
 	return &Pipeline{
 		dev:  d,
