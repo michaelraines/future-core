@@ -6,11 +6,17 @@ import "github.com/michaelraines/future-core/internal/backend"
 
 // RenderTarget implements backend.RenderTarget for Metal.
 type RenderTarget struct {
-	dev      *Device
-	colorTex *Texture
-	depthTex backend.Texture
-	w, h     int
+	dev        *Device
+	colorTex   *Texture
+	depthTex   backend.Texture
+	w, h       int
+	hasStencil bool
 }
+
+// HasStencil reports whether a stencil attachment was requested. Metal
+// encoder-side stencil wiring is follow-up work; the RT tracks the flag
+// for consistency with other backends.
+func (rt *RenderTarget) HasStencil() bool { return rt.hasStencil }
 
 // InnerRenderTarget returns nil for GPU render targets (no soft delegation).
 func (rt *RenderTarget) InnerRenderTarget() backend.RenderTarget { return nil }

@@ -135,7 +135,13 @@ func (d *Device) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline,
 	return &Pipeline{Pipeline: inner, desc: desc}, nil
 }
 
-// Capabilities returns Metal device capabilities.
+// Capabilities returns Metal device capabilities. Stencil is advertised
+// on the soft-delegating path so conformance exercises stencil routing
+// through the software rasterizer in CI. The native GPU path
+// (device_gpu.go) leaves SupportsStencil=false until the
+// MTLDepthStencilState + setStencilReferenceValue: wiring lands — see
+// TODO(metal-stencil) in device_gpu.go's NewPipeline and
+// encoder_gpu.go's SetStencilReference.
 func (d *Device) Capabilities() backend.DeviceCapabilities {
 	return backend.DeviceCapabilities{
 		MaxTextureSize:    16384,
@@ -145,6 +151,7 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 		SupportsMSAA:      true,
 		MaxMSAASamples:    8,
 		SupportsFloat16:   true,
+		SupportsStencil:   true,
 	}
 }
 

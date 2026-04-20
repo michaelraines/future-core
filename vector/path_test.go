@@ -127,10 +127,13 @@ func TestAppendVerticesAndIndicesForStrokeClosed(t *testing.T) {
 	var verts []futurerender.Vertex
 	var idxs []uint16
 	verts, idxs = p.AppendVerticesAndIndicesForStroke(verts, idxs, &StrokeOptions{Width: 2})
-	// Miter joins share vertices at corners: 3 points × 2 = 6 vertices.
-	// 3 edges × 6 indices = 18 indices.
-	require.Equal(t, 6, len(verts))
-	require.Equal(t, 18, len(idxs))
+	// Per-segment quads (ebiten-style): 3 segments × 4 verts = 12 quad
+	// vertices + 3 miter joins × 4 verts (center + outer shoulder +
+	// miter corner + next shoulder) = 12 join vertices → 24 total.
+	// Quad indices: 3 × 6 = 18; miter fan indices: 3 joins × 2 triangles
+	// × 3 = 18 → 36 total.
+	require.Equal(t, 24, len(verts))
+	require.Equal(t, 36, len(idxs))
 }
 
 func TestStrokeDefaultWidth(t *testing.T) {
@@ -239,8 +242,10 @@ func TestAllSubPathsEmpty(t *testing.T) {
 }
 
 func TestStrokeMiterJoinRect(t *testing.T) {
-	// A closed rectangle should produce 8 vertices (4 corners × 2) with
-	// miter joins, ensuring all corners are covered without gaps.
+	// A closed rectangle stroked at width=2 produces 4 per-segment quads
+	// (4×4=16 verts, 4×6=24 indices) plus 4 miter joins — each join is
+	// a fan of (center, outer shoulder, miter corner, next shoulder) =
+	// 4 vertices / 2 triangles = 6 indices. Total: 32 verts, 48 indices.
 	var p Path
 	p.MoveTo(10, 10)
 	p.LineTo(110, 10)
@@ -252,27 +257,27 @@ func TestStrokeMiterJoinRect(t *testing.T) {
 	var idxs []uint16
 	verts, idxs = p.AppendVerticesAndIndicesForStroke(verts, idxs, &StrokeOptions{Width: 2})
 
-	// 4 points × 2 vertices = 8 vertices, 4 edges × 6 indices = 24 indices.
-	require.Equal(t, 8, len(verts))
-	require.Equal(t, 24, len(idxs))
+	require.Equal(t, 32, len(verts))
+	require.Equal(t, 48, len(idxs))
 
-	// At the top-left corner (10,10), miter offset should be (1,1) for width=2.
-	// Inner vertex: (11, 11), Outer vertex: (9, 9).
-	require.InDelta(t, float32(11), verts[0].DstX, 0.01)
-	require.InDelta(t, float32(11), verts[0].DstY, 0.01)
-	require.InDelta(t, float32(9), verts[1].DstX, 0.01)
+	// First segment (10,10) → (110,10): dx=100, dy=0, ext=(0, -1)*half.
+	// rect[0] = start+ext = (10, 9).
+	// rect[1] = end+ext   = (110, 9).
+	// rect[2] = start-ext = (10, 11).
+	// rect[3] = end-ext   = (110, 11).
+	require.InDelta(t, float32(10), verts[0].DstX, 0.01)
+	require.InDelta(t, float32(9), verts[0].DstY, 0.01)
+	require.InDelta(t, float32(110), verts[1].DstX, 0.01)
 	require.InDelta(t, float32(9), verts[1].DstY, 0.01)
-
-	// At the top-right corner (110,10), miter offset should be (-1,1).
-	// Inner vertex: (109, 11), Outer vertex: (111, 9).
-	require.InDelta(t, float32(109), verts[2].DstX, 0.01)
+	require.InDelta(t, float32(10), verts[2].DstX, 0.01)
 	require.InDelta(t, float32(11), verts[2].DstY, 0.01)
-	require.InDelta(t, float32(111), verts[3].DstX, 0.01)
-	require.InDelta(t, float32(9), verts[3].DstY, 0.01)
+	require.InDelta(t, float32(110), verts[3].DstX, 0.01)
+	require.InDelta(t, float32(11), verts[3].DstY, 0.01)
 }
 
 func TestStrokeMiterJoinOpenPolyline(t *testing.T) {
-	// Open polyline: endpoints use segment normals, middle uses miter.
+	// Open polyline: 2 segments × 4 quad verts + 1 miter join × 4 verts
+	// = 12 verts. Indices: 2 × 6 quad + 1 × 6 miter fan = 18.
 	var p Path
 	p.MoveTo(0, 0)
 	p.LineTo(50, 0)
@@ -282,22 +287,19 @@ func TestStrokeMiterJoinOpenPolyline(t *testing.T) {
 	var idxs []uint16
 	verts, idxs = p.AppendVerticesAndIndicesForStroke(verts, idxs, &StrokeOptions{Width: 2})
 
-	// 3 points × 2 vertices = 6, 2 segments × 6 indices = 12.
-	require.Equal(t, 6, len(verts))
-	require.Equal(t, 12, len(idxs))
+	require.Equal(t, 12, len(verts))
+	require.Equal(t, 18, len(idxs))
 
-	// First point (0,0): butt cap with segment normal (0,1).
+	// First segment (0,0) → (50,0): dx=50, dy=0, ext=(0, -1)*half.
+	// rect[0] = (0, -1), rect[1] = (50, -1), rect[2] = (0, 1), rect[3] = (50, 1).
 	require.InDelta(t, float32(0), verts[0].DstX, 0.01)
-	require.InDelta(t, float32(1), verts[0].DstY, 0.01)
-	require.InDelta(t, float32(0), verts[1].DstX, 0.01)
+	require.InDelta(t, float32(-1), verts[0].DstY, 0.01)
+	require.InDelta(t, float32(50), verts[1].DstX, 0.01)
 	require.InDelta(t, float32(-1), verts[1].DstY, 0.01)
-
-	// Middle point (50,0): miter of horizontal and vertical segments.
-	// Should offset by (-1, 1) direction scaled by half*sqrt(2).
-	require.InDelta(t, float32(49), verts[2].DstX, 0.01)
+	require.InDelta(t, float32(0), verts[2].DstX, 0.01)
 	require.InDelta(t, float32(1), verts[2].DstY, 0.01)
-	require.InDelta(t, float32(51), verts[3].DstX, 0.01)
-	require.InDelta(t, float32(-1), verts[3].DstY, 0.01)
+	require.InDelta(t, float32(50), verts[3].DstX, 0.01)
+	require.InDelta(t, float32(1), verts[3].DstY, 0.01)
 }
 
 func TestSegmentNormal(t *testing.T) {
@@ -399,7 +401,9 @@ func TestStrokeLineCapRound(t *testing.T) {
 }
 
 func TestStrokeLineJoinBevel(t *testing.T) {
-	// L-shape: two segments meeting at 90°.
+	// L-shape stroked with a bevel join: 2 segments × 4 quad verts = 8,
+	// 1 bevel join = 3 verts (center + two shoulders) → 11 verts. Indices:
+	// 2 × 6 quad + 1 × 3 bevel = 15.
 	var p Path
 	p.MoveTo(0, 0)
 	p.LineTo(50, 0)
@@ -412,17 +416,21 @@ func TestStrokeLineJoinBevel(t *testing.T) {
 		LineJoin: LineJoinBevel,
 	})
 
-	// 3 points × 2 vertices = 6, 2 segments × 6 = 12.
-	require.Equal(t, 6, len(verts))
-	require.Equal(t, 12, len(idxs))
+	require.Equal(t, 11, len(verts))
+	require.Equal(t, 15, len(idxs))
 
-	// Bevel join at (50,0): the middle vertices use the first segment's
-	// normal, not the miter point. With miter, the outer vertex would be
-	// at (52, -2). With bevel, it should be at (50, -2) — just the
-	// segment normal applied to the point.
-	// Vertex at index 2 (outer of join): should NOT have the miter extension.
-	require.InDelta(t, float32(50), verts[2].DstX, 0.5,
-		"bevel join should not extend like miter")
+	// The bevel join sits between the two segments at (50, 0). Its
+	// vertices are the join center (50, 0), the prior segment's outer
+	// shoulder (50, -2), and the next segment's outer shoulder (52, 0).
+	// A miter would instead place a spike corner at (52, -2) — assert
+	// no vertex sits there.
+	hasSpike := false
+	for _, v := range verts {
+		if v.DstX > 51.5 && v.DstY < -1.5 {
+			hasSpike = true
+		}
+	}
+	require.False(t, hasSpike, "bevel join should not produce a miter-corner spike")
 }
 
 func TestStrokeLineJoinRound(t *testing.T) {

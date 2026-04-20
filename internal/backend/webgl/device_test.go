@@ -218,7 +218,10 @@ func TestDefaultContextAttributes(t *testing.T) {
 	require.True(t, attrs.Depth)
 	require.True(t, attrs.Antialias)
 	require.True(t, attrs.PremultipliedAlpha)
-	require.False(t, attrs.Stencil)
+	// Stencil is requested by default now so the canvas framebuffer
+	// carries a stencil buffer; the sprite pass routes fill-rule batches
+	// through stencil when the device reports SupportsStencil=true.
+	require.True(t, attrs.Stencil)
 	require.False(t, attrs.PreserveDrawingBuffer)
 	require.Equal(t, "default", attrs.PowerPreference)
 }
@@ -238,7 +241,7 @@ func TestEncoderSetTextureFilter(t *testing.T) {
 		ClearColor: [4]float32{0, 0, 0, 1},
 	})
 	enc.SetTextureFilter(0, backend.FilterLinear)
-	enc.SetStencil(false, backend.StencilDescriptor{})
+	enc.SetStencilReference(0)
 	enc.SetColorWrite(true)
 	enc.SetViewport(backend.Viewport{X: 0, Y: 0, Width: 32, Height: 32})
 	enc.SetScissor(nil)

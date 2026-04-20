@@ -337,9 +337,11 @@ func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
 	}
 }
 
-// SetStencil configures stencil test state.
-// In WebGPU, stencil state is baked into the pipeline at creation time.
-func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {}
+// SetStencilReference is a no-op pending wgpu-native bindings for
+// wgpuRenderPassEncoderSetStencilReference. Native GPU stencil is not yet
+// wired up; Capabilities().SupportsStencil stays false so the sprite pass
+// never routes through the stencil path on this backend.
+func (e *Encoder) SetStencilReference(_ uint32) {}
 
 // SetColorWrite enables or disables color writing.
 // In WebGPU, the color write mask is baked into the pipeline at creation time.

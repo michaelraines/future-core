@@ -179,6 +179,7 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 		SupportsMSAA:      true,
 		MaxMSAASamples:    d.physicalDevice.MaxSamples,
 		SupportsFloat16:   true,
+		SupportsStencil:   true,
 	}
 }
 

@@ -58,20 +58,19 @@ uniform vec4 uColorTranslation;
 out vec4 fragColor;
 
 void main() {
+    // Standard premultiplied-alpha sprite shader: sample texture,
+    // modulate by vertex color, apply color matrix. No rgb-vs-alpha
+    // clamp — callers are responsible for supplying correctly
+    // premultiplied vertex colors (ColorScale.ScaleAlpha now scales
+    // all four channels, matching Ebitengine; the vector package
+    // either passes through premultiplied vertex colors or lets
+    // DrawTriangles premultiply straight ones). An earlier revision
+    // did rgb=min(rgb,a) here to compensate for a broken
+    // ScaleAlpha, which silently clamped any channel where straight
+    // RGB exceeded scaled A — turning bright stroke colors into
+    // dim-gray garbage. Removed once ScaleAlpha was fixed at the
+    // source.
     vec4 c = texture(uTexture, vTexCoord) * vColor;
-    // Clamp RGB to alpha. Vertex-color scales of the form (1,1,1,<1),
-    // which DrawImage and DrawTriangles produce when the caller does
-    // ColorScale.ScaleAlpha(<1), would otherwise yield invalid
-    // premultiplied output: SourceOver (One, OneMinusSrcAlpha) would
-    // composite 1 + dst * 0.5 and blow out to white. This min() makes
-    // the result correctly premultiplied. Matches Ebitengines default
-    // sprite shader (internal/builtinshader, min(clr.rgb, clr.a)).
-    //
-    // We reconstruct the vec4 in one expression instead of assigning
-    // to c.rgb directly: WGSL rejects swizzle assignment (c.rgb = ...
-    // errors with "cannot assign to swizzle"), while GLSL allows it.
-    // The reconstruct form compiles cleanly through both backends.
-    c = vec4(min(c.rgb, vec3(c.a)), c.a);
     fragColor = uColorBody * c + uColorTranslation;
 }
 `
@@ -461,6 +460,7 @@ func (e *engine) frame() {
 	}
 	ctx := pipeline.NewPassContext(e.fbW, e.fbH)
 	ctx.ScreenClearEnabled = IsScreenClearedEveryFrame()
+	ctx.ScreenHasStencil = e.device.Capabilities().SupportsStencil
 	e.renderPipeline.Execute(e.encoder, ctx)
 	var execDur time.Duration
 	if frameTiming {

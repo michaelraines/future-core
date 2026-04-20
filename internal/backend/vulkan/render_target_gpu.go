@@ -9,15 +9,20 @@ import (
 
 // RenderTarget implements backend.RenderTarget for Vulkan.
 type RenderTarget struct {
-	dev      *Device
-	colorTex *Texture
-	depthTex backend.Texture
-	w, h     int
+	dev        *Device
+	colorTex   *Texture
+	depthTex   backend.Texture
+	w, h       int
+	hasStencil bool
 
 	// Vulkan resources for this render target.
 	renderPass  vk.RenderPass
 	framebuffer vk.Framebuffer
 }
+
+// HasStencil reports whether the render target was created with a stencil
+// attachment.
+func (rt *RenderTarget) HasStencil() bool { return rt.hasStencil }
 
 // InnerRenderTarget returns nil for GPU render targets (no soft delegation).
 func (rt *RenderTarget) InnerRenderTarget() backend.RenderTarget { return nil }

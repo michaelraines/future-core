@@ -502,6 +502,11 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 	// via `color.RGBA{...}` or `applyOpacity` which yields RGB unscaled
 	// relative to A (the "invalid premultiplied"/"straight-ish" form);
 	// those work correctly only with this premultiply step.
+	// ColorScaleMode gates the RGB*A premultiplication. Default
+	// (StraightAlpha) premultiplies here; PremultipliedAlpha passes the
+	// vertex color through unchanged to match the ebiten vector-util
+	// convention that produces vivid strokes.
+	premultiply := opts == nil || opts.ColorScaleMode != ColorScaleModePremultipliedAlpha
 	batchVerts := rend.batcher.AllocVertices(len(vertices))
 	for i, v := range vertices {
 		texU, texV := v.SrcX, v.SrcY
@@ -509,15 +514,21 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 			texU = u0 + (v.SrcX/srcW)*(u1-u0)
 			texV = v0 + (v.SrcY/srcH)*(v1-v0)
 		}
+		r, g, b, a := v.ColorR, v.ColorG, v.ColorB, v.ColorA
+		if premultiply {
+			r *= a
+			g *= a
+			b *= a
+		}
 		batchVerts[i] = batch.Vertex2D{
 			PosX: v.DstX,
 			PosY: v.DstY,
 			TexU: texU,
 			TexV: texV,
-			R:    v.ColorR * v.ColorA,
-			G:    v.ColorG * v.ColorA,
-			B:    v.ColorB * v.ColorA,
-			A:    v.ColorA,
+			R:    r,
+			G:    g,
+			B:    b,
+			A:    a,
 		}
 	}
 	batchIdx := rend.batcher.AllocIndices(len(indices))
@@ -526,7 +537,7 @@ func (img *Image) DrawTriangles(vertices []Vertex, indices []uint16, src *Image,
 	texID := rend.whiteTextureID
 	blend := backend.BlendSourceOver
 	filter := backend.FilterNearest
-	fillRule := backend.FillRuleNonZero
+	fillRule := backend.FillRuleNone
 	if src != nil {
 		texID = src.textureID
 	}
@@ -984,7 +995,42 @@ type DrawTrianglesOptions struct {
 	// AntiAlias indicates whether anti-aliasing should be applied to
 	// triangle edges. This matches ebiten.DrawTrianglesOptions.AntiAlias.
 	AntiAlias bool
+
+	// ColorScaleMode selects how the per-vertex RGBA is interpreted by
+	// the renderer. Matches Ebitengine's
+	// `ebiten.DrawTrianglesOptions.ColorScaleMode`.
+	//
+	// The default (zero value = ColorScaleModeStraightAlpha) premultiplies
+	// the vertex RGB by the vertex alpha before the shader runs. That is
+	// the right thing for callers that construct vertices as straight
+	// colors (common case — e.g. `color.RGBA{R,G,B,A}` where the user
+	// picks a hex color and scales alpha with `applyOpacity`).
+	//
+	// Set ColorScaleModePremultipliedAlpha when the caller has already
+	// packed the "ebiten vector-util" form — straight RGB + scaled A
+	// (technically an "invalid premultiplied" value where rgb is not
+	// actually multiplied by a). That's what ebiten's vector package
+	// emits (see ebiten/vector/util.go's drawVerticesForUtil) and what
+	// produces the vivid strokes the vector-showcase relies on:
+	// multiplying RGB by A a second time here collapses thin low-alpha
+	// strokes to ~half intensity. The blend engine uses the shader
+	// output as "premultiplied" for the SourceOver equation regardless.
+	ColorScaleMode ColorScaleMode
 }
+
+// ColorScaleMode specifies how vertex colors are interpreted by
+// DrawTriangles.
+type ColorScaleMode int
+
+// ColorScaleMode constants.
+const (
+	// ColorScaleModeStraightAlpha (default, zero value) premultiplies
+	// vertex RGB by vertex A before the shader.
+	ColorScaleModeStraightAlpha ColorScaleMode = iota
+	// ColorScaleModePremultipliedAlpha passes vertex colors through
+	// unchanged.
+	ColorScaleModePremultipliedAlpha
+)
 
 // DrawRectShaderOptions holds options for DrawRectShader.
 type DrawRectShaderOptions struct {
@@ -1317,13 +1363,29 @@ func (cs *ColorScale) Scale(r, g, b, a float32) {
 	cs.a *= a
 }
 
-// ScaleAlpha multiplies the alpha component only.
+// ScaleAlpha multiplies ALL four channels by a. This produces a
+// correctly-premultiplied color scale for the common "fade this image
+// by N%" use case. Matches Ebitengine's ColorScale.ScaleAlpha
+// (colorscale.go:102-107), which intentionally scales RGB along with A
+// so that the downstream premultiplied-alpha blend equation produces
+// the expected fade rather than a blown-out overlay.
+//
+// An earlier revision scaled only the alpha channel, which left RGB at
+// 1 while A dropped below 1 — an "invalid premultiplied" value that the
+// sprite shader had to band-aid with an rgb = min(rgb, a) clamp. That
+// clamp silently destroyed bright vector-stroke colors whose straight
+// R or B channel exceeded the scaled alpha (e.g. yellow #FFD93D at
+// opacity 0.5: R=1 was clamped to A=0.5, turning yellow into olive-
+// gray). Scaling correctly here removes the need for the clamp.
 func (cs *ColorScale) ScaleAlpha(a float32) {
 	if !cs.set {
-		cs.r, cs.g, cs.b, cs.a = 1, 1, 1, a
+		cs.r, cs.g, cs.b, cs.a = a, a, a, a
 		cs.set = true
 		return
 	}
+	cs.r *= a
+	cs.g *= a
+	cs.b *= a
 	cs.a *= a
 }
 
@@ -1472,8 +1534,19 @@ const (
 type FillRule int
 
 // FillRule constants.
+//
+// FillRuleNone is the zero-value default: the tessellator's triangles are
+// drawn directly, with no stencil pass. This matches Ebitengine's behavior
+// for callers whose triangulation already produces non-overlapping fill
+// geometry. FillRuleNonZero and FillRuleEvenOdd opt into the stencil
+// pipeline pair, which is required on future-core's naive fan tessellator
+// whenever a path has opposite-winding subpaths (e.g. an outer rectangle
+// with an inner counter-wound rectangle to cut a hole) — without the
+// stencil path, both fans fill their entire rect and the result is a
+// solid square instead of a frame.
 const (
-	FillRuleNonZero FillRule = iota
+	FillRuleNone FillRule = iota
+	FillRuleNonZero
 	FillRuleEvenOdd
 )
 
@@ -1595,10 +1668,12 @@ func filterToBackend(f Filter) backend.TextureFilter {
 // fillRuleToBackend maps a public FillRule to a backend FillRule.
 func fillRuleToBackend(f FillRule) backend.FillRule {
 	switch f {
+	case FillRuleNonZero:
+		return backend.FillRuleNonZero
 	case FillRuleEvenOdd:
 		return backend.FillRuleEvenOdd
 	default:
-		return backend.FillRuleNonZero
+		return backend.FillRuleNone
 	}
 }
 

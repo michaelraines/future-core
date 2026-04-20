@@ -185,13 +185,14 @@ type TextureFormat int
 
 // TextureFormat constants.
 const (
-	TextureFormatRGBA8    TextureFormat = iota // 4x uint8, standard
-	TextureFormatRGB8                          // 3x uint8, no alpha
-	TextureFormatR8                            // 1x uint8 (grayscale/alpha)
-	TextureFormatRGBA16F                       // 4x float16, HDR
-	TextureFormatRGBA32F                       // 4x float32, HDR
-	TextureFormatDepth24                       // 24-bit depth
-	TextureFormatDepth32F                      // 32-bit float depth
+	TextureFormatRGBA8           TextureFormat = iota // 4x uint8, standard
+	TextureFormatRGB8                                 // 3x uint8, no alpha
+	TextureFormatR8                                   // 1x uint8 (grayscale/alpha)
+	TextureFormatRGBA16F                              // 4x float16, HDR
+	TextureFormatRGBA32F                              // 4x float32, HDR
+	TextureFormatDepth24                              // 24-bit depth
+	TextureFormatDepth32F                             // 32-bit float depth
+	TextureFormatDepth24Stencil8                      // 24-bit depth + 8-bit stencil (packed)
 )
 
 // TextureFilter specifies the filtering mode for texture sampling.
@@ -217,9 +218,20 @@ const (
 type FillRule int
 
 // FillRule constants.
+//
+// Zero value is FillRuleNone so DrawCommands that don't opt into stencil
+// (e.g. DrawImage, particle emitters, any tessellator whose triangles
+// don't overlap) stay on the plain indexed-draw path. Path-fill callers
+// that need opposite-winding compositing set FillRuleNonZero or
+// FillRuleEvenOdd explicitly; the sprite pass routes those through the
+// stencil pipeline pair. This ordering matters: previously NonZero was
+// iota 0, which meant every default-initialized batch qualified for
+// stencil routing and the sprite pass drew the whole canvas blank on
+// backends where the stencil attachment wasn't set up yet.
 const (
-	FillRuleNonZero FillRule = iota // Default: all fragments drawn
-	FillRuleEvenOdd                 // Odd-overlap regions visible (stencil-based XOR)
+	FillRuleNone    FillRule = iota // Default: plain indexed draw, no stencil compositing
+	FillRuleNonZero                 // Stencil-based non-zero winding rule (opposite windings cancel)
+	FillRuleEvenOdd                 // Stencil-based XOR (odd-overlap regions visible)
 )
 
 // StencilOp specifies what happens to stencil buffer values.
@@ -237,14 +249,24 @@ const (
 	StencilDecrWrap                  // Decrement (wrap)
 )
 
-// StencilDescriptor describes stencil test configuration.
+// StencilFaceOps describes the stencil operations for a single triangle face.
+type StencilFaceOps struct {
+	SFail  StencilOp // stencil test fails
+	DPFail StencilOp // stencil passes, depth fails
+	DPPass StencilOp // both pass
+}
+
+// StencilDescriptor describes stencil test configuration. Ops, Func, and
+// masks are baked into the pipeline at creation on backends where stencil
+// state is part of the pipeline object (WebGPU, Vulkan, Metal, DX12). Only
+// the reference value is dynamic and is updated via
+// CommandEncoder.SetStencilReference.
 type StencilDescriptor struct {
 	Func      CompareFunc
-	Ref       int
-	Mask      uint32
-	SFail     StencilOp // stencil test fails
-	DPFail    StencilOp // depth test fails
-	DPPass    StencilOp // both pass
+	Mask      uint32         // read mask (applied in compare)
+	Front     StencilFaceOps // operations for front-facing triangles
+	Back      StencilFaceOps // operations for back-facing triangles (used only when TwoSided)
+	TwoSided  bool           // false = Front applied to both faces
 	WriteMask uint32
 }
 

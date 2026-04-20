@@ -175,8 +175,10 @@ const (
 
 // VkImageAspectFlags.
 const (
-	ImageAspectColor = 0x00000001
-	ImageAspectDepth = 0x00000002
+	ImageAspectColor        = 0x00000001
+	ImageAspectDepth        = 0x00000002
+	ImageAspectStencil      = 0x00000004
+	ImageAspectDepthStencil = ImageAspectDepth | ImageAspectStencil
 )
 
 // VkSharingMode.
@@ -287,8 +289,28 @@ const (
 
 // VkDynamicState.
 const (
-	DynamicStateViewport = 0
-	DynamicStateScissor  = 1
+	DynamicStateViewport         = 0
+	DynamicStateScissor          = 1
+	DynamicStateStencilReference = 8
+)
+
+// VkStencilFaceFlagBits.
+const (
+	StencilFaceFront        = 0x1
+	StencilFaceBack         = 0x2
+	StencilFaceFrontAndBack = 0x3
+)
+
+// VkStencilOp.
+const (
+	StencilOpKeep              = 0
+	StencilOpZero              = 1
+	StencilOpReplace           = 2
+	StencilOpIncrementAndClamp = 3
+	StencilOpDecrementAndClamp = 4
+	StencilOpInvert            = 5
+	StencilOpIncrementAndWrap  = 6
+	StencilOpDecrementAndWrap  = 7
 )
 
 // VkShaderStageFlags.
@@ -1235,20 +1257,21 @@ var (
 	fnUpdateDescriptorSets       func(device Device, writeCount uint32, pWrites uintptr, copyCount uint32, pCopies uintptr)
 
 	// Command buffer recording.
-	fnCmdBeginRenderPass    func(cmd CommandBuffer, pBeginInfo uintptr, contents uint32)
-	fnCmdEndRenderPass      func(cmd CommandBuffer)
-	fnCmdBindPipeline       func(cmd CommandBuffer, bindPoint uint32, pipeline Pipeline)
-	fnCmdBindVertexBuffers  func(cmd CommandBuffer, firstBinding, bindingCount uint32, pBuffers uintptr, pOffsets uintptr)
-	fnCmdBindIndexBuffer    func(cmd CommandBuffer, buffer Buffer, offset uint64, indexType uint32)
-	fnCmdBindDescriptorSets func(cmd CommandBuffer, bindPoint uint32, layout PipelineLayout, firstSet, count uint32, pSets uintptr, dynamicOffsetCount uint32, pDynamicOffsets uintptr)
-	fnCmdDraw               func(cmd CommandBuffer, vertexCount, instanceCount, firstVertex, firstInstance uint32)
-	fnCmdDrawIndexed        func(cmd CommandBuffer, indexCount, instanceCount, firstIndex uint32, vertexOffset int32, firstInstance uint32)
-	fnCmdSetViewport        func(cmd CommandBuffer, firstViewport, viewportCount uint32, pViewports uintptr)
-	fnCmdSetScissor         func(cmd CommandBuffer, firstScissor, scissorCount uint32, pScissors uintptr)
-	fnCmdCopyBufferToImage  func(cmd CommandBuffer, srcBuffer Buffer, dstImage Image, dstImageLayout uint32, regionCount uint32, pRegions uintptr)
-	fnCmdCopyImageToBuffer  func(cmd CommandBuffer, srcImage Image, srcImageLayout uint32, dstBuffer Buffer, regionCount uint32, pRegions uintptr)
-	fnCmdPipelineBarrier    func(cmd CommandBuffer, srcStageMask, dstStageMask, dependencyFlags uint32, memBarrierCount uint32, pMemBarriers uintptr, bufBarrierCount uint32, pBufBarriers uintptr, imgBarrierCount uint32, pImgBarriers uintptr)
-	fnCmdPushConstants      func(cmd CommandBuffer, layout PipelineLayout, stageFlags, offset, size uint32, pValues uintptr)
+	fnCmdBeginRenderPass     func(cmd CommandBuffer, pBeginInfo uintptr, contents uint32)
+	fnCmdEndRenderPass       func(cmd CommandBuffer)
+	fnCmdBindPipeline        func(cmd CommandBuffer, bindPoint uint32, pipeline Pipeline)
+	fnCmdBindVertexBuffers   func(cmd CommandBuffer, firstBinding, bindingCount uint32, pBuffers uintptr, pOffsets uintptr)
+	fnCmdBindIndexBuffer     func(cmd CommandBuffer, buffer Buffer, offset uint64, indexType uint32)
+	fnCmdBindDescriptorSets  func(cmd CommandBuffer, bindPoint uint32, layout PipelineLayout, firstSet, count uint32, pSets uintptr, dynamicOffsetCount uint32, pDynamicOffsets uintptr)
+	fnCmdDraw                func(cmd CommandBuffer, vertexCount, instanceCount, firstVertex, firstInstance uint32)
+	fnCmdDrawIndexed         func(cmd CommandBuffer, indexCount, instanceCount, firstIndex uint32, vertexOffset int32, firstInstance uint32)
+	fnCmdSetViewport         func(cmd CommandBuffer, firstViewport, viewportCount uint32, pViewports uintptr)
+	fnCmdSetScissor          func(cmd CommandBuffer, firstScissor, scissorCount uint32, pScissors uintptr)
+	fnCmdSetStencilReference func(cmd CommandBuffer, faceMask, reference uint32)
+	fnCmdCopyBufferToImage   func(cmd CommandBuffer, srcBuffer Buffer, dstImage Image, dstImageLayout uint32, regionCount uint32, pRegions uintptr)
+	fnCmdCopyImageToBuffer   func(cmd CommandBuffer, srcImage Image, srcImageLayout uint32, dstBuffer Buffer, regionCount uint32, pRegions uintptr)
+	fnCmdPipelineBarrier     func(cmd CommandBuffer, srcStageMask, dstStageMask, dependencyFlags uint32, memBarrierCount uint32, pMemBarriers uintptr, bufBarrierCount uint32, pBufBarriers uintptr, imgBarrierCount uint32, pImgBarriers uintptr)
+	fnCmdPushConstants       func(cmd CommandBuffer, layout PipelineLayout, stageFlags, offset, size uint32, pValues uintptr)
 
 	// vkGetInstanceProcAddr — loaded from the Vulkan library directly.
 	fnGetInstanceProcAddr func(instance Instance, pName uintptr) uintptr
@@ -1775,6 +1798,15 @@ func CmdSetScissor(cmd CommandBuffer, rect Rect2D) {
 	fnCmdSetScissor(cmd, 0, 1, uintptr(unsafe.Pointer(&rect)))
 }
 
+// CmdSetStencilReference wraps vkCmdSetStencilReference. The pipeline must
+// include VK_DYNAMIC_STATE_STENCIL_REFERENCE (DynamicStateStencilReference)
+// in its dynamic states for this command to take effect; otherwise the
+// reference value baked into the pipeline is used and this call is
+// silently ignored.
+func CmdSetStencilReference(cmd CommandBuffer, faceMask, reference uint32) {
+	fnCmdSetStencilReference(cmd, faceMask, reference)
+}
+
 // CmdCopyBufferToImage wraps vkCmdCopyBufferToImage.
 func CmdCopyBufferToImage(cmd CommandBuffer, srcBuffer Buffer, dstImage Image, dstLayout uint32, region BufferImageCopy) {
 	fnCmdCopyBufferToImage(cmd, srcBuffer, dstImage, dstLayout, 1, uintptr(unsafe.Pointer(&region)))
@@ -2058,6 +2090,7 @@ func Init() error {
 		{&fnCmdDrawIndexed, "vkCmdDrawIndexed"},
 		{&fnCmdSetViewport, "vkCmdSetViewport"},
 		{&fnCmdSetScissor, "vkCmdSetScissor"},
+		{&fnCmdSetStencilReference, "vkCmdSetStencilReference"},
 		{&fnCmdCopyBufferToImage, "vkCmdCopyBufferToImage"},
 		{&fnCmdCopyImageToBuffer, "vkCmdCopyImageToBuffer"},
 		{&fnCmdPipelineBarrier, "vkCmdPipelineBarrier"},

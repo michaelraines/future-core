@@ -29,6 +29,14 @@ type PassContext struct {
 	// frame. When false, the previous frame's content is preserved (LoadActionLoad).
 	ScreenClearEnabled bool
 
+	// ScreenHasStencil reports whether the backend's screen render target
+	// (the target bound for targetID=0) carries a stencil attachment. The
+	// sprite pass uses this together with DeviceCapabilities.SupportsStencil
+	// to decide whether fill-rule batches targeting the screen can be
+	// routed through the stencil draw path. Offscreen targets are queried
+	// directly via RenderTarget.HasStencil().
+	ScreenHasStencil bool
+
 	// Resources holds named resources shared between passes.
 	Resources map[string]any
 }

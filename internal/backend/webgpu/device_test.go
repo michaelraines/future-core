@@ -186,7 +186,7 @@ func TestEncoderFullPass(t *testing.T) {
 		Target: rt, LoadAction: backend.LoadActionClear, ClearColor: [4]float32{0, 0, 0, 1},
 	})
 	enc.SetTextureFilter(0, backend.FilterLinear)
-	enc.SetStencil(false, backend.StencilDescriptor{})
+	enc.SetStencilReference(0)
 	enc.SetColorWrite(true)
 	enc.SetViewport(backend.Viewport{X: 0, Y: 0, Width: 32, Height: 32})
 	enc.SetScissor(nil)

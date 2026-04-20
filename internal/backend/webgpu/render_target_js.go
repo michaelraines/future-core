@@ -6,9 +6,10 @@ import "github.com/michaelraines/future-core/internal/backend"
 
 // RenderTarget implements backend.RenderTarget for WebGPU via the browser JS API.
 type RenderTarget struct {
-	colorTex *Texture
-	depthTex backend.Texture
-	w, h     int
+	colorTex   *Texture
+	depthTex   backend.Texture
+	hasStencil bool
+	w, h       int
 }
 
 // InnerRenderTarget returns nil for GPU render targets (no soft delegation).
@@ -25,6 +26,9 @@ func (rt *RenderTarget) Width() int { return rt.w }
 
 // Height returns the render target height.
 func (rt *RenderTarget) Height() int { return rt.h }
+
+// HasStencil reports whether this render target carries a stencil attachment.
+func (rt *RenderTarget) HasStencil() bool { return rt.hasStencil }
 
 // Dispose releases the render target's textures.
 func (rt *RenderTarget) Dispose() {

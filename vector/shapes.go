@@ -17,6 +17,9 @@ func DrawFilledRect(dst *futurerender.Image, x, y, width, height float32, clr co
 		{DstX: x, DstY: y + height, ColorR: r, ColorG: g, ColorB: b, ColorA: a},
 	}
 	indices := []uint16{0, 1, 2, 0, 2, 3}
+	// Rect fill uses the default StraightAlpha premultiplication to
+	// avoid the ebiten-style sunburst artifact that over-saturates
+	// overlapping fan triangles under PremultipliedAlpha.
 	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
 		AntiAlias: antialias,
 	})
@@ -40,7 +43,8 @@ func StrokeRect(dst *futurerender.Image, x, y, width, height, strokeWidth float3
 		vertices[i].ColorA = a
 	}
 	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
-		AntiAlias: antialias,
+		ColorScaleMode: futurerender.ColorScaleModePremultipliedAlpha,
+		AntiAlias:      antialias,
 	})
 }
 
@@ -69,6 +73,8 @@ func DrawFilledCircle(dst *futurerender.Image, cx, cy, radius float32, clr color
 		}
 	}
 
+	// Circle fill uses default StraightAlpha for smooth semi-transparent
+	// fills — see DrawFilledRect for the rationale.
 	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
 		AntiAlias: antialias,
 	})
@@ -99,7 +105,8 @@ func StrokeCircle(dst *futurerender.Image, cx, cy, radius, strokeWidth float32, 
 		vertices[i].ColorA = a
 	}
 	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
-		AntiAlias: antialias,
+		ColorScaleMode: futurerender.ColorScaleModePremultipliedAlpha,
+		AntiAlias:      antialias,
 	})
 }
 
@@ -118,7 +125,8 @@ func StrokeLine(dst *futurerender.Image, x0, y0, x1, y1, strokeWidth float32, cl
 		vertices[i].ColorA = a
 	}
 	dst.DrawTriangles(vertices, indices, nil, &futurerender.DrawTrianglesOptions{
-		AntiAlias: antialias,
+		ColorScaleMode: futurerender.ColorScaleModePremultipliedAlpha,
+		AntiAlias:      antialias,
 	})
 }
 

@@ -190,10 +190,18 @@ func (d *Device) NewShader(desc backend.ShaderDescriptor) (backend.Shader, error
 }
 
 // NewRenderTarget creates a WebGL2 framebuffer object.
+//
+// Every offscreen RT on this backend carries a packed DEPTH24_STENCIL8
+// renderbuffer — otherwise offscreen fill-rule draws would silently fall
+// back to plain DrawIndexed (sprite pass gates on RT.HasStencil). This
+// mirrors the WebGPU backend's "always-on stencil" policy so the sprite
+// pass's routing rules behave identically across browser backends.
 func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.RenderTarget, error) {
 	if desc.Width <= 0 || desc.Height <= 0 {
 		return nil, fmt.Errorf("webgl: invalid render target dimensions %dx%d", desc.Width, desc.Height)
 	}
+
+	hasStencil := desc.HasStencil || d.Capabilities().SupportsStencil
 
 	colorFmt := desc.ColorFormat
 	if colorFmt == 0 {
@@ -209,8 +217,16 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 		return nil, fmt.Errorf("webgl: render target color: %w", err)
 	}
 
+	// When HasStencil is set, a packed DEPTH24_STENCIL8 renderbuffer
+	// covers BOTH depth and stencil via GL_DEPTH_STENCIL_ATTACHMENT —
+	// WebGL2 forbids mixing a separate depth attachment with the packed
+	// depth-stencil attachment on the same FBO (FRAMEBUFFER_INCOMPLETE
+	// on conformant drivers). Skip the depth-only path whenever stencil
+	// is requested; callers that need a readable depth texture without
+	// stencil should leave HasStencil false and use the separate depth
+	// attachment below.
 	var depthTex backend.Texture
-	if desc.HasDepth {
+	if desc.HasDepth && !hasStencil {
 		depthFmt := desc.DepthFormat
 		if depthFmt == 0 {
 			depthFmt = backend.TextureFormatDepth24
@@ -243,15 +259,36 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 			depthTex.(*Texture).handle, 0)
 	}
 
+	// Packed depth24+stencil8 renderbuffer, attached to
+	// GL_DEPTH_STENCIL_ATTACHMENT. Carries both halves even when
+	// HasDepth wasn't requested — the depth half is simply unused in
+	// that case. WebGL2 has no API for a stencil-only attachment.
+	stencilRB := js.Null()
+	if hasStencil {
+		stencilRB = d.gl.Call("createRenderbuffer")
+		d.gl.Call("bindRenderbuffer", d.gl.Get("RENDERBUFFER").Int(), stencilRB)
+		d.gl.Call("renderbufferStorage",
+			d.gl.Get("RENDERBUFFER").Int(),
+			d.gl.Get("DEPTH24_STENCIL8").Int(),
+			desc.Width, desc.Height)
+		d.gl.Call("framebufferRenderbuffer",
+			d.gl.Get("FRAMEBUFFER").Int(),
+			d.gl.Get("DEPTH_STENCIL_ATTACHMENT").Int(),
+			d.gl.Get("RENDERBUFFER").Int(), stencilRB)
+		d.gl.Call("bindRenderbuffer", d.gl.Get("RENDERBUFFER").Int(), js.Null())
+	}
+
 	d.gl.Call("bindFramebuffer", d.gl.Get("FRAMEBUFFER").Int(), js.Null())
 
 	return &RenderTarget{
-		gl:       d.gl,
-		fbo:      fbo,
-		colorTex: colorTex.(*Texture),
-		depthTex: depthTex,
-		w:        desc.Width,
-		h:        desc.Height,
+		gl:         d.gl,
+		fbo:        fbo,
+		stencilRB:  stencilRB,
+		colorTex:   colorTex.(*Texture),
+		depthTex:   depthTex,
+		w:          desc.Width,
+		h:          desc.Height,
+		hasStencil: hasStencil,
 	}, nil
 }
 
@@ -273,6 +310,7 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 		SupportsMSAA:      true,
 		MaxMSAASamples:    4,
 		SupportsFloat16:   false,
+		SupportsStencil:   true,
 	}
 }
 

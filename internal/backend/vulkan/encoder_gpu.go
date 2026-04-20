@@ -29,8 +29,26 @@ type Encoder struct {
 }
 
 // BeginRenderPass begins a Vulkan render pass.
+//
+// Note on load ops: Vulkan bakes AttachmentLoadOp into the VkRenderPass
+// object at creation, so desc.StencilLoadAction is ignored on this
+// backend — the shared depth-stencil attachment always clears on load
+// (see createSwapchain / createDefaultRenderTarget). The sprite pass's
+// color-pass pipeline self-clears the stencil buffer via DPPass=Zero so
+// successive fill-rule batches within a pass still start clean, and
+// today no caller sets StencilLoadAction=LoadActionLoad on a Vulkan
+// target. When that changes, switch to render-pass variants keyed on
+// (stencilLoadOp, stencilStoreOp) instead of the single shared object.
 func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
-	clearColor := vk.ClearValue{Color: desc.ClearColor}
+	// Vulkan render passes on this backend always declare color +
+	// depth-stencil attachments, so every vkCmdBeginRenderPass needs
+	// two matching clear values. The second slot reuses ClearValue's
+	// 16-byte union: first 4 bytes = depth float32, next 4 = stencil
+	// uint32.
+	clearValues := [2]vk.ClearValue{
+		{Color: desc.ClearColor},
+		makeDepthStencilClearValue(1.0, desc.ClearStencil),
+	}
 
 	rp := e.dev.defaultRenderPass
 	fb := e.dev.defaultFramebuffer
@@ -62,11 +80,11 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		Framebuffer_:    fb,
 		RenderAreaW:     w,
 		RenderAreaH:     h,
-		ClearValueCount: 1,
-		PClearValues:    uintptr(unsafe.Pointer(&clearColor)),
+		ClearValueCount: 2,
+		PClearValues:    uintptr(unsafe.Pointer(&clearValues[0])),
 	}
 	vk.CmdBeginRenderPass(e.cmd, &rpBegin)
-	runtime.KeepAlive(clearColor)
+	runtime.KeepAlive(clearValues)
 	e.inRenderPass = true
 	e.currentRenderPass = rp
 
@@ -78,6 +96,22 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		MaxDepth: 1,
 	})
 	e.colorWriteOn = true
+}
+
+// makeDepthStencilClearValue packs a depth float32 and stencil uint32
+// into a vk.ClearValue. Vulkan's VkClearValue is a union of
+// [4]float32 color and {float32 depth, uint32 stencil}; both share the
+// same 16-byte storage, and the Go binding models the color side as
+// [4]float32. We overlay the first 8 bytes with a ClearValueDepthStencil
+// struct — a single typed pointer conversion rather than raw uintptr
+// arithmetic, so intent is explicit and tooling stays quiet.
+func makeDepthStencilClearValue(depth float32, stencil uint32) vk.ClearValue {
+	var cv vk.ClearValue
+	*(*vk.ClearValueDepthStencil)(unsafe.Pointer(&cv)) = vk.ClearValueDepthStencil{
+		Depth:   depth,
+		Stencil: stencil,
+	}
+	return cv
 }
 
 // EndRenderPass ends the current render pass.
@@ -162,10 +196,15 @@ func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
 	_ = filter
 }
 
-// SetStencil configures stencil test state.
-func (e *Encoder) SetStencil(_ bool, _ backend.StencilDescriptor) {
-	// Stencil state is baked into the VkPipeline in Vulkan.
-	// A full implementation would require pipeline variants per stencil config.
+// SetStencilReference updates the dynamic stencil reference value.
+// Stencil ops/func/masks are baked into the VkPipeline; the pipeline must
+// include VK_DYNAMIC_STATE_STENCIL_REFERENCE in its dynamic states for
+// this command to take effect.
+func (e *Encoder) SetStencilReference(ref uint32) {
+	if e.cmd == 0 {
+		return
+	}
+	vk.CmdSetStencilReference(e.cmd, vk.StencilFaceFrontAndBack, ref)
 }
 
 // SetColorWrite enables or disables writing to the color buffer.

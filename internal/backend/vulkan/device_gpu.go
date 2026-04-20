@@ -32,7 +32,17 @@ type Device struct {
 	defaultColorImage  vk.Image
 	defaultColorView   vk.ImageView
 	defaultColorMem    vk.DeviceMemory
-	width, height      int
+
+	// Default depth-stencil attachment: D24_UNORM_S8_UINT image + view
+	// allocated alongside the default color attachment. Used by both
+	// the offscreen default RT and the swapchain RT so every render
+	// pass has a matching depth-stencil attachment for pipelines that
+	// declare stencil state.
+	defaultDepthStencilImage vk.Image
+	defaultDepthStencilView  vk.ImageView
+	defaultDepthStencilMem   vk.DeviceMemory
+
+	width, height int
 
 	// Staging buffer for texture uploads/readbacks.
 	stagingBuffer vk.Buffer
@@ -433,6 +443,89 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	return nil
 }
 
+// createDepthStencilTexture allocates a D24_UNORM_S8_UINT image at the
+// given dimensions with a matching image view. Memory lifetime is
+// device-owned; callers pass the handles back in to a later
+// destroyDepthStencilTexture call. Returned triple is (image, memory,
+// view); on error the partially-allocated resources are freed before
+// returning.
+func (d *Device) createDepthStencilTexture(width, height uint32) (vk.Image, vk.DeviceMemory, vk.ImageView, error) {
+	imgCI := vk.ImageCreateInfo{
+		SType:       vk.StructureTypeImageCreateInfo,
+		ImageType:   vk.ImageType2D,
+		Format:      vk.FormatD24UNormS8UInt,
+		ExtentWidth: width, ExtentHeight: height, ExtentDepth: 1,
+		MipLevels: 1, ArrayLayers: 1,
+		Samples:       vk.SampleCount1,
+		Tiling:        vk.ImageTilingOptimal,
+		Usage:         uint32(vk.ImageUsageDepthStencilAttach),
+		SharingMode:   vk.SharingModeExclusive,
+		InitialLayout: vk.ImageLayoutUndefined,
+	}
+	img, err := vk.CreateImageRaw(d.device, &imgCI)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	memReq := vk.GetImageMemoryRequirements(d.device, img)
+	memIdx, err := vk.FindMemoryType(d.memProps, memReq.MemoryTypeBits, vk.MemoryPropertyDeviceLocal)
+	if err != nil {
+		vk.DestroyImage(d.device, img)
+		return 0, 0, 0, err
+	}
+	allocInfo := vk.MemoryAllocateInfo{
+		SType:           vk.StructureTypeMemoryAllocateInfo,
+		AllocationSize:  memReq.Size,
+		MemoryTypeIndex: memIdx,
+	}
+	mem, err := vk.AllocateMemory(d.device, &allocInfo)
+	if err != nil {
+		vk.DestroyImage(d.device, img)
+		return 0, 0, 0, err
+	}
+	if err := vk.BindImageMemory(d.device, img, mem, 0); err != nil {
+		vk.FreeMemory(d.device, mem)
+		vk.DestroyImage(d.device, img)
+		return 0, 0, 0, err
+	}
+
+	viewCI := vk.ImageViewCreateInfo{
+		SType:            vk.StructureTypeImageViewCreateInfo,
+		Image:            img,
+		ViewType:         vk.ImageViewType2D,
+		Format:           vk.FormatD24UNormS8UInt,
+		ComponentR:       vk.ComponentSwizzleIdentity,
+		ComponentG:       vk.ComponentSwizzleIdentity,
+		ComponentB:       vk.ComponentSwizzleIdentity,
+		ComponentA:       vk.ComponentSwizzleIdentity,
+		SubresAspectMask: vk.ImageAspectDepthStencil,
+		SubresBaseMip:    0, SubresLevelCount: 1,
+		SubresBaseLayer: 0, SubresLayerCount: 1,
+	}
+	view, err := vk.CreateImageViewRaw(d.device, &viewCI)
+	if err != nil {
+		vk.FreeMemory(d.device, mem)
+		vk.DestroyImage(d.device, img)
+		return 0, 0, 0, err
+	}
+	return img, mem, view, nil
+}
+
+// destroyDepthStencilTexture releases a depth-stencil texture triple
+// previously allocated by createDepthStencilTexture. Safe to call with
+// zero handles.
+func (d *Device) destroyDepthStencilTexture(img vk.Image, mem vk.DeviceMemory, view vk.ImageView) {
+	if view != 0 {
+		vk.DestroyImageView(d.device, view)
+	}
+	if img != 0 {
+		vk.DestroyImage(d.device, img)
+	}
+	if mem != 0 {
+		vk.FreeMemory(d.device, mem)
+	}
+}
+
 // createDefaultRenderTarget creates the offscreen color attachment.
 func (d *Device) createDefaultRenderTarget() error {
 	imgCI := vk.ImageCreateInfo{
@@ -493,25 +586,54 @@ func (d *Device) createDefaultRenderTarget() error {
 	}
 	d.defaultColorView = view
 
-	// Create render pass.
-	colorAttach := vk.AttachmentDescription{
-		Format:         vk.FormatR8G8B8A8UNorm,
-		Samples:        vk.SampleCount1,
-		LoadOp:         vk.AttachmentLoadOpClear,
-		StoreOp:        vk.AttachmentStoreOpStore,
-		StencilLoadOp:  vk.AttachmentLoadOpDontCare,
-		StencilStoreOp: vk.AttachmentStoreOpDontCare,
-		InitialLayout:  vk.ImageLayoutUndefined,
-		FinalLayout:    vk.ImageLayoutColorAttachmentOptimal,
+	// Depth-stencil attachment so pipelines that declare stencil state
+	// (sprite pass fill-rule routing, etc.) can run against the offscreen
+	// default target. Matches the format baked into the render pass's
+	// second attachment below.
+	dsImg, dsMem, dsView, err := d.createDepthStencilTexture(uint32(d.width), uint32(d.height))
+	if err != nil {
+		return err
+	}
+	d.defaultDepthStencilImage = dsImg
+	d.defaultDepthStencilMem = dsMem
+	d.defaultDepthStencilView = dsView
+
+	// Create render pass with color + depth-stencil attachments.
+	attachments := [2]vk.AttachmentDescription{
+		{
+			Format:         vk.FormatR8G8B8A8UNorm,
+			Samples:        vk.SampleCount1,
+			LoadOp:         vk.AttachmentLoadOpClear,
+			StoreOp:        vk.AttachmentStoreOpStore,
+			StencilLoadOp:  vk.AttachmentLoadOpDontCare,
+			StencilStoreOp: vk.AttachmentStoreOpDontCare,
+			InitialLayout:  vk.ImageLayoutUndefined,
+			FinalLayout:    vk.ImageLayoutColorAttachmentOptimal,
+		},
+		{
+			Format:         vk.FormatD24UNormS8UInt,
+			Samples:        vk.SampleCount1,
+			LoadOp:         vk.AttachmentLoadOpClear,
+			StoreOp:        vk.AttachmentStoreOpStore,
+			StencilLoadOp:  vk.AttachmentLoadOpClear,
+			StencilStoreOp: vk.AttachmentStoreOpStore,
+			InitialLayout:  vk.ImageLayoutUndefined,
+			FinalLayout:    vk.ImageLayoutDepthStencilAttachOptimal,
+		},
 	}
 	colorRef := vk.AttachmentReference{
 		Attachment: 0,
 		Layout:     vk.ImageLayoutColorAttachmentOptimal,
 	}
+	depthRef := vk.AttachmentReference{
+		Attachment: 1,
+		Layout:     vk.ImageLayoutDepthStencilAttachOptimal,
+	}
 	subpass := vk.SubpassDescription{
-		PipelineBindPoint:    vk.PipelineBindPointGraphics,
-		ColorAttachmentCount: 1,
-		PColorAttachments:    uintptr(unsafe.Pointer(&colorRef)),
+		PipelineBindPoint:       vk.PipelineBindPointGraphics,
+		ColorAttachmentCount:    1,
+		PColorAttachments:       uintptr(unsafe.Pointer(&colorRef)),
+		PDepthStencilAttachment: uintptr(unsafe.Pointer(&depthRef)),
 	}
 	dependency := vk.SubpassDependency{
 		SrcSubpass:    0xFFFFFFFF, // VK_SUBPASS_EXTERNAL
@@ -522,30 +644,33 @@ func (d *Device) createDefaultRenderTarget() error {
 	}
 	rpCI := vk.RenderPassCreateInfo{
 		SType:           vk.StructureTypeRenderPassCreateInfo,
-		AttachmentCount: 1,
-		PAttachments:    uintptr(unsafe.Pointer(&colorAttach)),
+		AttachmentCount: 2,
+		PAttachments:    uintptr(unsafe.Pointer(&attachments[0])),
 		SubpassCount:    1,
 		PSubpasses:      uintptr(unsafe.Pointer(&subpass)),
 		DependencyCount: 1,
 		PDependencies:   uintptr(unsafe.Pointer(&dependency)),
 	}
 	rp, err := vk.CreateRenderPass(d.device, &rpCI)
+	runtime.KeepAlive(attachments)
 	if err != nil {
 		return err
 	}
 	d.defaultRenderPass = rp
 
-	// Create framebuffer.
+	// Create framebuffer with both attachments.
+	fbViews := [2]vk.ImageView{d.defaultColorView, d.defaultDepthStencilView}
 	fbCI := vk.FramebufferCreateInfo{
 		SType:           vk.StructureTypeFramebufferCreateInfo,
 		RenderPass_:     rp,
-		AttachmentCount: 1,
-		PAttachments:    uintptr(unsafe.Pointer(&d.defaultColorView)),
+		AttachmentCount: 2,
+		PAttachments:    uintptr(unsafe.Pointer(&fbViews[0])),
 		Width:           uint32(d.width),
 		Height:          uint32(d.height),
 		Layers:          1,
 	}
 	fb, err := vk.CreateFramebuffer(d.device, &fbCI)
+	runtime.KeepAlive(fbViews)
 	if err != nil {
 		return err
 	}
@@ -1172,6 +1297,18 @@ func (d *Device) NewShader(desc backend.ShaderDescriptor) (backend.Shader, error
 }
 
 // NewRenderTarget creates a VkFramebuffer with color (and optional depth) attachments.
+//
+// The current implementation stores color + optional depth textures but
+// does not create a per-RT render pass or framebuffer; encoder.
+// BeginRenderPass falls back to the device's default render pass and
+// framebuffer when rt.renderPass/framebuffer are zero. That default
+// render pass carries a depth-stencil attachment (see
+// createSwapchain / createDefaultRenderTarget), so rendering through
+// this RT effectively uses the device's shared stencil buffer — good
+// enough for the sprite pass's fill-rule routing. If/when true per-RT
+// framebuffers are wired (so offscreen targets render independently),
+// allocate a per-RT depth-stencil image here and build a 2-attachment
+// render pass + framebuffer matching the device's layout.
 func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.RenderTarget, error) {
 	if desc.Width <= 0 || desc.Height <= 0 {
 		return nil, fmt.Errorf("vulkan: invalid render target dimensions %dx%d", desc.Width, desc.Height)
@@ -1208,6 +1345,15 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 		depthTex: depthTex,
 		w:        desc.Width,
 		h:        desc.Height,
+		// hasStencil is false here because the encoder's BeginRenderPass
+		// falls back to the device's default render pass + framebuffer
+		// when rt.renderPass == 0 (see encoder_gpu.go). That fallback
+		// draws into the default/swapchain attachment — not this RT's
+		// color texture — so reporting HasStencil=true would make the
+		// sprite pass route fill-rule batches through stencil against
+		// the wrong framebuffer. Once per-RT render-pass+framebuffer
+		// wiring lands (see TODO above), flip this to true.
+		hasStencil: false,
 	}, nil
 }
 
@@ -1237,6 +1383,7 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 		SupportsMSAA:      true,
 		MaxMSAASamples:    maxSamples,
 		SupportsFloat16:   true,
+		SupportsStencil:   true,
 	}
 }
 
@@ -1362,25 +1509,54 @@ func (d *Device) createSwapchain() error {
 		d.swapchainViews[i] = view
 	}
 
+	// Depth-stencil attachment shared across swapchain images. The engine
+	// uses a single-frame-in-flight model (one fence / semaphore pair) so
+	// a shared D24_UNORM_S8_UINT texture is safe. Clear-on-load on every
+	// pass means no cross-frame data dependency either.
+	dsImg, dsMem, dsView, err := d.createDepthStencilTexture(extent[0], extent[1])
+	if err != nil {
+		return err
+	}
+	d.defaultDepthStencilImage = dsImg
+	d.defaultDepthStencilMem = dsMem
+	d.defaultDepthStencilView = dsView
+
 	// Create render pass for swapchain (final layout = PresentSrcKHR).
-	colorAttach := vk.AttachmentDescription{
-		Format:         chosenFmt.Format,
-		Samples:        vk.SampleCount1,
-		LoadOp:         vk.AttachmentLoadOpClear,
-		StoreOp:        vk.AttachmentStoreOpStore,
-		StencilLoadOp:  vk.AttachmentLoadOpDontCare,
-		StencilStoreOp: vk.AttachmentStoreOpDontCare,
-		InitialLayout:  vk.ImageLayoutUndefined,
-		FinalLayout:    vk.ImageLayoutPresentSrcKHR,
+	attachments := [2]vk.AttachmentDescription{
+		{
+			Format:         chosenFmt.Format,
+			Samples:        vk.SampleCount1,
+			LoadOp:         vk.AttachmentLoadOpClear,
+			StoreOp:        vk.AttachmentStoreOpStore,
+			StencilLoadOp:  vk.AttachmentLoadOpDontCare,
+			StencilStoreOp: vk.AttachmentStoreOpDontCare,
+			InitialLayout:  vk.ImageLayoutUndefined,
+			FinalLayout:    vk.ImageLayoutPresentSrcKHR,
+		},
+		{
+			Format:         vk.FormatD24UNormS8UInt,
+			Samples:        vk.SampleCount1,
+			LoadOp:         vk.AttachmentLoadOpClear,
+			StoreOp:        vk.AttachmentStoreOpStore,
+			StencilLoadOp:  vk.AttachmentLoadOpClear,
+			StencilStoreOp: vk.AttachmentStoreOpStore,
+			InitialLayout:  vk.ImageLayoutUndefined,
+			FinalLayout:    vk.ImageLayoutDepthStencilAttachOptimal,
+		},
 	}
 	colorRef := vk.AttachmentReference{
 		Attachment: 0,
 		Layout:     vk.ImageLayoutColorAttachmentOptimal,
 	}
+	depthRef := vk.AttachmentReference{
+		Attachment: 1,
+		Layout:     vk.ImageLayoutDepthStencilAttachOptimal,
+	}
 	subpass := vk.SubpassDescription{
-		PipelineBindPoint:    vk.PipelineBindPointGraphics,
-		ColorAttachmentCount: 1,
-		PColorAttachments:    uintptr(unsafe.Pointer(&colorRef)),
+		PipelineBindPoint:       vk.PipelineBindPointGraphics,
+		ColorAttachmentCount:    1,
+		PColorAttachments:       uintptr(unsafe.Pointer(&colorRef)),
+		PDepthStencilAttachment: uintptr(unsafe.Pointer(&depthRef)),
 	}
 	dependency := vk.SubpassDependency{
 		SrcSubpass:    0xFFFFFFFF,
@@ -1391,32 +1567,35 @@ func (d *Device) createSwapchain() error {
 	}
 	rpCI := vk.RenderPassCreateInfo{
 		SType:           vk.StructureTypeRenderPassCreateInfo,
-		AttachmentCount: 1,
-		PAttachments:    uintptr(unsafe.Pointer(&colorAttach)),
+		AttachmentCount: 2,
+		PAttachments:    uintptr(unsafe.Pointer(&attachments[0])),
 		SubpassCount:    1,
 		PSubpasses:      uintptr(unsafe.Pointer(&subpass)),
 		DependencyCount: 1,
 		PDependencies:   uintptr(unsafe.Pointer(&dependency)),
 	}
 	rp, err := vk.CreateRenderPass(d.device, &rpCI)
+	runtime.KeepAlive(attachments)
 	if err != nil {
 		return err
 	}
 	d.swapchainRenderPass = rp
 
-	// Create framebuffers.
+	// Create framebuffers with color + shared depth-stencil attachments.
 	d.swapchainFBs = make([]vk.Framebuffer, len(images))
 	for i := range images {
+		fbViews := [2]vk.ImageView{d.swapchainViews[i], d.defaultDepthStencilView}
 		fbCI := vk.FramebufferCreateInfo{
 			SType:           vk.StructureTypeFramebufferCreateInfo,
 			RenderPass_:     rp,
-			AttachmentCount: 1,
-			PAttachments:    uintptr(unsafe.Pointer(&d.swapchainViews[i])),
+			AttachmentCount: 2,
+			PAttachments:    uintptr(unsafe.Pointer(&fbViews[0])),
 			Width:           extent[0],
 			Height:          extent[1],
 			Layers:          1,
 		}
 		fb, ferr := vk.CreateFramebuffer(d.device, &fbCI)
+		runtime.KeepAlive(fbViews)
 		if ferr != nil {
 			return ferr
 		}
@@ -1447,6 +1626,17 @@ func (d *Device) destroySwapchain() {
 	}
 	d.swapchainViews = nil
 	d.swapchainImages = nil
+
+	// Release the shared depth-stencil attachment. Safe to call
+	// unconditionally — destroyDepthStencilTexture handles zero handles.
+	d.destroyDepthStencilTexture(
+		d.defaultDepthStencilImage,
+		d.defaultDepthStencilMem,
+		d.defaultDepthStencilView,
+	)
+	d.defaultDepthStencilImage = 0
+	d.defaultDepthStencilMem = 0
+	d.defaultDepthStencilView = 0
 
 	if d.swapchain != 0 {
 		vk.DestroySwapchainKHR(d.device, d.swapchain)

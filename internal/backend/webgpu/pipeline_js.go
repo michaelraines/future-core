@@ -111,7 +111,11 @@ func (p *Pipeline) createPipeline() {
 		targetFormat = "rgba8unorm"
 	}
 	target.Set("format", targetFormat)
-	target.Set("writeMask", 0xF)
+	if p.desc.ColorWriteDisabled {
+		target.Set("writeMask", 0)
+	} else {
+		target.Set("writeMask", 0xF)
+	}
 
 	blend := jsBlendState(p.desc.BlendMode)
 	if !blend.IsUndefined() {
@@ -136,14 +140,27 @@ func (p *Pipeline) createPipeline() {
 	pipeDesc.Set("fragment", fragment)
 	pipeDesc.Set("primitive", primitive)
 
-	// Depth/stencil.
+	// Depth/stencil is declared unconditionally on the browser backend
+	// because every render pass — including screen passes — attaches a
+	// depth24plus-stencil8 view (device_js.go allocates a screen-wide one
+	// and offscreen RTs always carry one). WebGPU requires the pipeline's
+	// declared depth-stencil format to exactly match the render pass's
+	// attachment, so pipelines that don't otherwise care about depth or
+	// stencil get an "always"/"keep" no-op state here.
+	depthStencil := js.Global().Get("Object").New()
+	depthStencil.Set("format", "depth24plus-stencil8")
+	depthStencil.Set("depthWriteEnabled", p.desc.DepthWrite)
 	if p.desc.DepthTest {
-		depthStencil := js.Global().Get("Object").New()
-		depthStencil.Set("format", "depth24plus")
-		depthStencil.Set("depthWriteEnabled", p.desc.DepthWrite)
 		depthStencil.Set("depthCompare", jsCompareFunc(p.desc.DepthFunc))
-		pipeDesc.Set("depthStencil", depthStencil)
+	} else {
+		depthStencil.Set("depthCompare", "always")
 	}
+	if p.desc.StencilEnable {
+		jsApplyStencilState(depthStencil, p.desc.Stencil)
+	} else {
+		jsApplyStencilNoop(depthStencil)
+	}
+	pipeDesc.Set("depthStencil", depthStencil)
 
 	// Multisample.
 	multisample := js.Global().Get("Object").New()
@@ -151,6 +168,23 @@ func (p *Pipeline) createPipeline() {
 	pipeDesc.Set("multisample", multisample)
 
 	p.handle = p.dev.device.Call("createRenderPipeline", pipeDesc)
+	if p.handle.IsUndefined() || p.handle.IsNull() {
+		js.Global().Get("console").Call("error", "[webgpu] createRenderPipeline returned null/undefined")
+	} else if diagLogAllow(&pipelineLogCount) {
+		js.Global().Get("console").Call("log", "[webgpu] createRenderPipeline OK: format="+targetFormat+
+			" depthTest="+boolStr(p.desc.DepthTest)+
+			" stencilEnable="+boolStr(p.desc.StencilEnable)+
+			" colorWriteDisabled="+boolStr(p.desc.ColorWriteDisabled))
+	}
+}
+
+var pipelineLogCount int
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // createBindGroupLayouts creates uniform (group 0) and texture (group 1) layouts.
@@ -213,6 +247,83 @@ func jsVertexFormat(f backend.AttributeFormat) string {
 		return "unorm8x4"
 	default:
 		return "float32x4"
+	}
+}
+
+// jsApplyStencilNoop sets stencilFront/Back to compare=always, ops=keep so
+// the stencil test is effectively transparent. Used by pipelines that
+// declare a depth24plus-stencil8 attachment (required for format
+// compatibility with the render pass) but don't actually use stencil.
+func jsApplyStencilNoop(ds js.Value) {
+	face := js.Global().Get("Object").New()
+	face.Set("compare", "always")
+	face.Set("failOp", "keep")
+	face.Set("depthFailOp", "keep")
+	face.Set("passOp", "keep")
+	ds.Set("stencilFront", face)
+	ds.Set("stencilBack", face)
+	ds.Set("stencilReadMask", 0xFF)
+	ds.Set("stencilWriteMask", 0)
+}
+
+// jsApplyStencilState writes front/back face ops and masks for a pipeline
+// with stencil enabled. Reference value is dynamic; set via the encoder's
+// SetStencilReference call. Matches the invariants baked into the
+// sprite pass's stencil-write and color pipelines.
+func jsApplyStencilState(ds js.Value, s backend.StencilDescriptor) {
+	frontOps := s.Front
+	backOps := s.Back
+	if !s.TwoSided {
+		backOps = s.Front
+	}
+	front := js.Global().Get("Object").New()
+	front.Set("compare", jsCompareFunc(s.Func))
+	front.Set("failOp", jsStencilOp(frontOps.SFail))
+	front.Set("depthFailOp", jsStencilOp(frontOps.DPFail))
+	front.Set("passOp", jsStencilOp(frontOps.DPPass))
+
+	back := js.Global().Get("Object").New()
+	back.Set("compare", jsCompareFunc(s.Func))
+	back.Set("failOp", jsStencilOp(backOps.SFail))
+	back.Set("depthFailOp", jsStencilOp(backOps.DPFail))
+	back.Set("passOp", jsStencilOp(backOps.DPPass))
+
+	ds.Set("stencilFront", front)
+	ds.Set("stencilBack", back)
+	readMask := uint32(s.Mask)
+	if readMask == 0 {
+		readMask = 0xFF
+	}
+	writeMask := s.WriteMask
+	if writeMask == 0 {
+		writeMask = 0xFF
+	}
+	ds.Set("stencilReadMask", int(readMask))
+	ds.Set("stencilWriteMask", int(writeMask))
+}
+
+// jsStencilOp maps a backend StencilOp to the WebGPU string value.
+// https://www.w3.org/TR/webgpu/#enumdef-gpustenciloperation
+func jsStencilOp(op backend.StencilOp) string {
+	switch op {
+	case backend.StencilKeep:
+		return "keep"
+	case backend.StencilZero:
+		return "zero"
+	case backend.StencilReplace:
+		return "replace"
+	case backend.StencilInvert:
+		return "invert"
+	case backend.StencilIncr:
+		return "increment-clamp"
+	case backend.StencilDecr:
+		return "decrement-clamp"
+	case backend.StencilIncrWrap:
+		return "increment-wrap"
+	case backend.StencilDecrWrap:
+		return "decrement-wrap"
+	default:
+		return "keep"
 	}
 }
 

@@ -27,11 +27,17 @@ type Encoder struct {
 	pipelineBound bool
 	viewport      backend.Viewport
 	scissor       *backend.ScissorRect
-	stencil       bool
+	stencilRef    uint32
 	colorWrite    bool
 
 	// Depth buffer persists across draw calls within a render pass.
 	depthBuf []float32
+
+	// Stencil buffer (one byte per pixel) when the current render pass's
+	// target was created with HasStencil=true. Lives on the encoder for
+	// the same reason depthBuf does — render-pass lifetime, reused
+	// allocation across passes.
+	stencilBuf []uint8
 
 	// Bound state for rasterization.
 	boundVertexBuf *Buffer
@@ -90,6 +96,27 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 				}
 			}
 		}
+
+		// Allocate or reset the stencil buffer when the target carries a
+		// stencil attachment. Unlike depth, stencil is not a depth-buffer
+		// derivative — it's an independent uint8-per-pixel plane written
+		// by stencil ops and compared against a dynamic reference value.
+		if rt.hasStencil {
+			size := rt.rtWidth * rt.rtHeight
+			if cap(e.stencilBuf) >= size {
+				e.stencilBuf = e.stencilBuf[:size]
+			} else {
+				e.stencilBuf = make([]uint8, size)
+			}
+			if desc.StencilLoadAction == backend.LoadActionClear {
+				clearVal := uint8(desc.ClearStencil & 0xFF)
+				for i := range e.stencilBuf {
+					e.stencilBuf[i] = clearVal
+				}
+			}
+		} else {
+			e.stencilBuf = nil
+		}
 	}
 }
 
@@ -97,13 +124,19 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 func (e *Encoder) EndRenderPass() {
 	e.inPass = false
 	e.depthBuf = nil
+	e.stencilBuf = nil
 }
 
-// SetPipeline binds a render pipeline and its shader.
+// SetPipeline binds a render pipeline and its shader. Pipeline-baked color
+// write state applies eagerly: ColorWriteDisabled overrides any prior
+// SetColorWrite call for the duration this pipeline is bound. Consumers
+// that still want runtime color-write toggling can call SetColorWrite
+// after SetPipeline.
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	e.pipelineBound = true
 	if p, ok := pipeline.(*Pipeline); ok {
 		e.boundPipeline = p
+		e.colorWrite = !p.desc.ColorWriteDisabled
 		if p.desc.Shader != nil {
 			if s, ok := p.desc.Shader.(*Shader); ok {
 				e.boundShader = s
@@ -139,9 +172,12 @@ func (e *Encoder) SetTextureFilter(_ int, filter backend.TextureFilter) {
 	e.boundFilter = filter
 }
 
-// SetStencil configures stencil test state.
-func (e *Encoder) SetStencil(enabled bool, _ backend.StencilDescriptor) {
-	e.stencil = enabled
+// SetStencilReference updates the dynamic stencil reference value. The
+// enabled flag, ops, compare func, and masks are baked into the pipeline
+// and read from sp.boundStencil on SetPipeline. The reference value is
+// used on every stencil test against the bound pipeline's Func.
+func (e *Encoder) SetStencilReference(ref uint32) {
+	e.stencilRef = ref
 }
 
 // SetColorWrite enables or disables color writing.
@@ -297,6 +333,37 @@ func (e *Encoder) buildRasterizer(rt *RenderTarget) *rasterizer {
 	}
 	if r.depthTest && e.depthBuf != nil {
 		r.depthBuf = e.depthBuf
+	}
+
+	// Stencil state from pipeline. Ops, compare func, and masks are baked
+	// into the pipeline; the reference value is dynamic on the encoder.
+	// The rasterizer reads these copies; the hot loop short-circuits when
+	// stencilEnable is false so the zero-stencil case is almost free.
+	//
+	// A stencil-enabled pipeline bound against an RT without a stencil
+	// attachment (stencilBuf == nil) is a caller bug — the draw would
+	// silently produce no pixels (write pass has ColorWriteDisabled,
+	// color pass's NotEqual ref=0 test reads zeros from the missing
+	// buffer and rejects everything). Panic with a precise message so
+	// the misconfiguration is visible rather than invisibly broken.
+	if e.boundPipeline != nil && e.boundPipeline.desc.StencilEnable {
+		if e.stencilBuf == nil {
+			panic("soft: stencil pipeline bound to render target without HasStencil; " +
+				"set RenderTargetDescriptor.HasStencil=true or gate via DeviceCapabilities.SupportsStencil")
+		}
+		sd := e.boundPipeline.desc.Stencil
+		r.stencilBuf = e.stencilBuf
+		r.stencilEnable = true
+		r.stencilFunc = sd.Func
+		r.stencilMask = uint8(sd.Mask & 0xFF)
+		r.stencilWriteMask = uint8(sd.WriteMask & 0xFF)
+		r.stencilRef = uint8(e.stencilRef & 0xFF)
+		r.stencilFront = sd.Front
+		if sd.TwoSided {
+			r.stencilBack = sd.Back
+		} else {
+			r.stencilBack = sd.Front
+		}
 	}
 
 	// Blend mode from pipeline.

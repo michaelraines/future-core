@@ -145,7 +145,12 @@ func (d *Device) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline,
 	return &Pipeline{Pipeline: inner, desc: desc}, nil
 }
 
-// Capabilities returns DirectX 12 device capabilities.
+// Capabilities returns DirectX 12 device capabilities. Stencil is
+// advertised here (soft-delegating path) so the sprite pass exercises
+// stencil routing through the software rasterizer in CI. The native
+// DX12 GPU path (device_gpu.go) leaves SupportsStencil=false until the
+// PSO + DSV + OMSetStencilRef wiring lands — see TODO(dx12-stencil) in
+// encoder_gpu.go.
 func (d *Device) Capabilities() backend.DeviceCapabilities {
 	return backend.DeviceCapabilities{
 		MaxTextureSize:    16384,
@@ -155,6 +160,7 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 		SupportsMSAA:      true,
 		MaxMSAASamples:    8,
 		SupportsFloat16:   true,
+		SupportsStencil:   true,
 	}
 }
 
