@@ -153,8 +153,9 @@ void main() {
 	if err != nil {
 		t.Fatalf("Pipeline creation failed: %v", err)
 	}
-	require.NotZero(t, p.vkPipeline, "VkPipeline should be created")
-	fmt.Printf("VkPipeline created: %v\n", p.vkPipeline)
+	pip2 := p.pipelineFor(dev.defaultRenderPass)
+	require.NotZero(t, pip2, "VkPipeline should be created for default render pass")
+	fmt.Printf("VkPipeline created: %v\n", pip2)
 }
 
 func TestVulkanGPUDrawGreenQuad(t *testing.T) {

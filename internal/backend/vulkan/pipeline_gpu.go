@@ -12,10 +12,27 @@ import (
 )
 
 // Pipeline implements backend.Pipeline for Vulkan with a real VkPipeline.
+//
+// A single Pipeline object may be bound across multiple render passes
+// (e.g. the sprite pass's default pipeline is used for offscreen RT
+// passes AND the final screen/swapchain pass). Vulkan bakes the render
+// pass into VkGraphicsPipelineCreateInfo, and pipelines are only
+// compatible with their creation-time render pass (or a compatible
+// one — same attachment descriptions). The offscreen RT and swapchain
+// render passes have DIFFERENT color formats (RGBA8 vs swapchain
+// format, typically BGRA8 on macOS via MoltenVK), so a pipeline baked
+// for one produces undefined output when bound inside the other —
+// this is what caused the "blank white screen" on the future app,
+// which always renders to an offscreen RT first and then composites
+// to the swapchain.
+//
+// Fix: cache a VkPipeline PER render pass. First bind creates the
+// pipeline for the current render pass; subsequent binds reuse it.
+// Dispose destroys every cached pipeline.
 type Pipeline struct {
 	dev            *Device
 	desc           backend.PipelineDescriptor
-	vkPipeline     vk.Pipeline
+	pipelines      map[vk.RenderPass]vk.Pipeline
 	pipelineLayout vk.PipelineLayout
 	descSetLayout  vk.DescriptorSetLayout
 }
@@ -23,14 +40,27 @@ type Pipeline struct {
 // InnerPipeline returns nil for GPU pipelines (no soft delegation).
 func (p *Pipeline) InnerPipeline() backend.Pipeline { return nil }
 
-// Dispose releases the VkPipeline and associated resources.
+// pipelineFor returns the cached VkPipeline compiled against renderPass,
+// or 0 if none has been built yet.
+func (p *Pipeline) pipelineFor(renderPass vk.RenderPass) vk.Pipeline {
+	if p.pipelines == nil {
+		return 0
+	}
+	return p.pipelines[renderPass]
+}
+
+// Dispose releases every cached VkPipeline plus the shared layout +
+// descriptor set layout.
 func (p *Pipeline) Dispose() {
 	if p.dev == nil || p.dev.device == 0 {
 		return
 	}
-	if p.vkPipeline != 0 {
-		vk.DestroyPipeline(p.dev.device, p.vkPipeline)
+	for _, pip := range p.pipelines {
+		if pip != 0 {
+			vk.DestroyPipeline(p.dev.device, pip)
+		}
 	}
+	p.pipelines = nil
 	if p.pipelineLayout != 0 {
 		vk.DestroyPipelineLayout(p.dev.device, p.pipelineLayout)
 	}
@@ -40,9 +70,13 @@ func (p *Pipeline) Dispose() {
 }
 
 // createVkPipeline creates the actual VkPipeline from the stored descriptor.
-// This is called lazily on first bind since the render pass must be known.
+// This is called lazily on first bind per render pass since the render
+// pass must be known at pipeline creation time.
 func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
-	if p.vkPipeline != 0 {
+	if p.pipelines == nil {
+		p.pipelines = make(map[vk.RenderPass]vk.Pipeline)
+	}
+	if p.pipelines[renderPass] != 0 {
 		return nil
 	}
 
@@ -271,7 +305,7 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 	if err != nil {
 		return err
 	}
-	p.vkPipeline = pip
+	p.pipelines[renderPass] = pip
 	return nil
 }
 

@@ -411,6 +411,50 @@ Follow this cycle for every change:
 - **Never assume local `make` passing is sufficient.** The CI uses
   `-tags soft` which changes which files are compiled.
 
+### 5b. Cross-Backend Regression Check (MANDATORY for anything that
+touches rendering)
+
+Any change that touches the rendering pipeline — `internal/backend/*`,
+`internal/pipeline/*`, `internal/batch/*`, `image.go`, `renderer.go`,
+the sprite shaders, the vector package, or any ColorScale / blend /
+premultiplication path — **must be verified to not regress any
+backend the change didn't intend to affect.** A fix for WebGPU that
+silently breaks Vulkan is a worse outcome than no fix at all.
+
+Required verification before commit:
+
+```bash
+# 1. Soft backend conformance (10-scene golden-image suite, CI-equivalent)
+cd future-core && make TAGS=soft test
+
+# 2. Native backend conformance on the host platform (GPU-hardware tests)
+go test ./internal/backend/webgpu/... ./internal/backend/vulkan/... \
+       ./internal/backend/metal/...   ./internal/backend/opengl/... \
+       ./internal/backend/webgl/...   ./internal/backend/dx12/...
+
+# 3. Cross-backend parity on the future app (broadest visual signal)
+cd .. && node parity-tests/native/runner.mjs
+```
+
+The native parity runner at `parity-tests/native/runner.mjs` orchestrates
+the `future` desktop binary across backends with WebGPU as the
+reference. Scenarios live in `parity-tests/native/scenarios/`. A
+backend that was previously passing must continue to pass — if your
+change drops a previously-green backend, treat it as a ship-blocker
+unless the drop is the explicit intent and documented in the PR.
+
+**When a backend you didn't touch regresses:** stop, revert the last
+change, and investigate. Rendering changes have non-local effects via
+shared abstractions (ColorScale / blend / FillRule / stencil state).
+The cost of shipping a silent cross-backend regression (debugging it
+later, blame landing on an unrelated PR) vastly outweighs the cost of
+re-running the parity suite before pushing.
+
+If a backend in the parity matrix is known-broken on the dev host
+(e.g. DX12 on macOS, OpenGL in a headless container), note that in the
+PR description and rely on CI to cover it — but don't skip the
+backends the host *can* run.
+
 ### 6. Update Docs
 - Update `ROADMAP.md` when completing milestone tasks
 - Don't create new markdown files unless explicitly asked

@@ -241,17 +241,41 @@ func (t *Texture) Height() int { return t.h }
 func (t *Texture) Format() backend.TextureFormat { return t.format }
 
 // Dispose releases the VkImage, VkImageView, and VkDeviceMemory.
+//
+// Safe to call multiple times: each handle is zeroed after destruction,
+// and a zeroed or nil-device Texture is a no-op. The renderer's
+// deferred-dispose queue and the engine's frame-end flush can both
+// touch the same texture in the same frame (e.g. an AA buffer that
+// was swapped mid-frame), and Vulkan's vkDestroyImageView on a stale
+// handle SIGSEGVs rather than returning cleanly — so idempotency here
+// is a correctness requirement, not a defensive nicety.
+//
+// This also waits for the device to go idle before destroying any
+// resources. Vulkan's deferred execution means the GPU may still be
+// reading from the image/view even after the command buffer that
+// references it has been submitted; destroying the handle while the
+// GPU is still using it is undefined behaviour. For the headless
+// capture workflow (and for engine teardown in general) the stall is
+// acceptable — a per-frame recycle queue would be the right answer
+// in the hot path, but this code runs on explicit disposal only.
 func (t *Texture) Dispose() {
-	if t.dev == nil || t.dev.device == 0 {
+	if t == nil || t.dev == nil || t.dev.device == 0 {
 		return
 	}
+	if t.view == 0 && t.image == 0 && t.memory == 0 {
+		return
+	}
+	vk.DeviceWaitIdle(t.dev.device)
 	if t.view != 0 {
 		vk.DestroyImageView(t.dev.device, t.view)
+		t.view = 0
 	}
 	if t.image != 0 {
 		vk.DestroyImage(t.dev.device, t.image)
+		t.image = 0
 	}
 	if t.memory != 0 {
 		vk.FreeMemory(t.dev.device, t.memory)
+		t.memory = 0
 	}
 }

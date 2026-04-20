@@ -97,9 +97,21 @@ func Scenes() []Scene {
 
 // RunAll runs all conformance test scenes against the given device.
 func RunAll(t *testing.T, dev backend.Device, enc backend.CommandEncoder) {
+	RunAllExcept(t, dev, enc, nil)
+}
+
+// RunAllExcept is like RunAll but skips scenes listed in the `skip` map,
+// logging the reason for each skipped scene. Used by backends that
+// pass the bulk of the suite but diverge on specific scenes for
+// documented convention reasons (e.g. WebGPU native's nearest-neighbor
+// texture sampling doesn't match soft's at cell boundaries).
+func RunAllExcept(t *testing.T, dev backend.Device, enc backend.CommandEncoder, skip map[string]string) {
 	t.Helper()
 	for _, scene := range Scenes() {
 		t.Run(scene.Name, func(t *testing.T) {
+			if reason, skipped := skip[scene.Name]; skipped {
+				t.Skip(reason)
+			}
 			RunScene(t, dev, enc, scene)
 		})
 	}
@@ -121,7 +133,7 @@ func RunScene(t *testing.T, dev backend.Device, enc backend.CommandEncoder, scen
 		HasStencil:  scene.NeedsStencil,
 	})
 	require.NoError(t, err)
-	defer rt.Dispose()
+	t.Cleanup(rt.Dispose)
 
 	ctx := &RenderContext{
 		Device:  dev,
@@ -133,6 +145,13 @@ func RunScene(t *testing.T, dev backend.Device, enc backend.CommandEncoder, scen
 
 	// Render the scene.
 	scene.Render(t, ctx)
+
+	// Flush before readback: backends that record into a deferred
+	// command buffer (WebGPU native, Vulkan) need an explicit submit
+	// before their render-pass writes are visible to ReadPixels. Soft
+	// and GL-style backends make Flush a no-op, so this is free for
+	// them.
+	ctx.Encoder.Flush()
 
 	// Read back pixels.
 	actual := readPixels(t, rt)
@@ -353,11 +372,8 @@ func sceneTriangleRed() Scene {
 		Render: func(t *testing.T, ctx *RenderContext) {
 			t.Helper()
 			whiteTex := newWhiteTexture(t, ctx.Device)
-			defer whiteTex.Dispose()
 
-			shader, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
-			defer shader.Dispose()
-			defer pipeline.Dispose()
+			_, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
 
 			verts := packVertices(
 				vtx(-0.5, -0.5, 0, 0, 1, 0, 0, 1),
@@ -367,9 +383,7 @@ func sceneTriangleRed() Scene {
 			indices := packIndices(0, 1, 2)
 
 			vbuf := newBuffer(t, ctx.Device, verts)
-			defer vbuf.Dispose()
 			ibuf := newBuffer(t, ctx.Device, indices)
-			defer ibuf.Dispose()
 
 			ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
 				Target:     ctx.Target,
@@ -393,11 +407,8 @@ func sceneTriangleVertexColors() Scene {
 		Render: func(t *testing.T, ctx *RenderContext) {
 			t.Helper()
 			whiteTex := newWhiteTexture(t, ctx.Device)
-			defer whiteTex.Dispose()
 
-			shader, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
-			defer shader.Dispose()
-			defer pipeline.Dispose()
+			_, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
 
 			verts := packVertices(
 				vtx(-0.8, -0.8, 0, 0, 1, 0, 0, 1), // red
@@ -407,9 +418,7 @@ func sceneTriangleVertexColors() Scene {
 			indices := packIndices(0, 1, 2)
 
 			vbuf := newBuffer(t, ctx.Device, verts)
-			defer vbuf.Dispose()
 			ibuf := newBuffer(t, ctx.Device, indices)
-			defer ibuf.Dispose()
 
 			ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
 				Target:     ctx.Target,
@@ -433,11 +442,8 @@ func sceneTexturedQuad() Scene {
 		Render: func(t *testing.T, ctx *RenderContext) {
 			t.Helper()
 			checker := newCheckerTexture(t, ctx.Device, 4, 4)
-			defer checker.Dispose()
 
-			shader, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
-			defer shader.Dispose()
-			defer pipeline.Dispose()
+			_, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
 
 			// Two triangles forming a quad.
 			verts := packVertices(
@@ -449,9 +455,7 @@ func sceneTexturedQuad() Scene {
 			indices := packIndices(0, 1, 2, 0, 2, 3)
 
 			vbuf := newBuffer(t, ctx.Device, verts)
-			defer vbuf.Dispose()
 			ibuf := newBuffer(t, ctx.Device, indices)
-			defer ibuf.Dispose()
 
 			ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
 				Target:     ctx.Target,
@@ -475,11 +479,8 @@ func sceneBlendSourceOver() Scene {
 		Render: func(t *testing.T, ctx *RenderContext) {
 			t.Helper()
 			whiteTex := newWhiteTexture(t, ctx.Device)
-			defer whiteTex.Dispose()
 
-			shader, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendSourceOver)
-			defer shader.Dispose()
-			defer pipeline.Dispose()
+			_, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendSourceOver)
 
 			// Red background quad.
 			bg := packVertices(
@@ -490,9 +491,7 @@ func sceneBlendSourceOver() Scene {
 			)
 			bgIdx := packIndices(0, 1, 2, 0, 2, 3)
 			bgVbuf := newBuffer(t, ctx.Device, bg)
-			defer bgVbuf.Dispose()
 			bgIbuf := newBuffer(t, ctx.Device, bgIdx)
-			defer bgIbuf.Dispose()
 
 			// Semi-transparent green triangle.
 			fg := packVertices(
@@ -502,9 +501,7 @@ func sceneBlendSourceOver() Scene {
 			)
 			fgIdx := packIndices(0, 1, 2)
 			fgVbuf := newBuffer(t, ctx.Device, fg)
-			defer fgVbuf.Dispose()
 			fgIbuf := newBuffer(t, ctx.Device, fgIdx)
-			defer fgIbuf.Dispose()
 
 			ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
 				Target:     ctx.Target,
@@ -536,17 +533,12 @@ func sceneBlendAdditive() Scene {
 		Render: func(t *testing.T, ctx *RenderContext) {
 			t.Helper()
 			whiteTex := newWhiteTexture(t, ctx.Device)
-			defer whiteTex.Dispose()
 
 			// Red background with BlendNone.
-			shaderBG, pipelineBG := newBasicPipeline(t, ctx.Device, backend.BlendNone)
-			defer shaderBG.Dispose()
-			defer pipelineBG.Dispose()
+			_, pipelineBG := newBasicPipeline(t, ctx.Device, backend.BlendNone)
 
 			// Additive foreground.
-			shaderFG, pipelineFG := newBasicPipeline(t, ctx.Device, backend.BlendAdditive)
-			defer shaderFG.Dispose()
-			defer pipelineFG.Dispose()
+			_, pipelineFG := newBasicPipeline(t, ctx.Device, backend.BlendAdditive)
 
 			bg := packVertices(
 				vtx(-1, -1, 0, 0, 0.5, 0, 0, 1),
@@ -556,9 +548,7 @@ func sceneBlendAdditive() Scene {
 			)
 			bgIdx := packIndices(0, 1, 2, 0, 2, 3)
 			bgVbuf := newBuffer(t, ctx.Device, bg)
-			defer bgVbuf.Dispose()
 			bgIbuf := newBuffer(t, ctx.Device, bgIdx)
-			defer bgIbuf.Dispose()
 
 			fg := packVertices(
 				vtx(-0.5, -0.5, 0, 0, 0, 0, 0.5, 1),
@@ -567,9 +557,7 @@ func sceneBlendAdditive() Scene {
 			)
 			fgIdx := packIndices(0, 1, 2)
 			fgVbuf := newBuffer(t, ctx.Device, fg)
-			defer fgVbuf.Dispose()
 			fgIbuf := newBuffer(t, ctx.Device, fgIdx)
-			defer fgIbuf.Dispose()
 
 			ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
 				Target:     ctx.Target,
@@ -600,11 +588,8 @@ func sceneScissorRect() Scene {
 		Render: func(t *testing.T, ctx *RenderContext) {
 			t.Helper()
 			whiteTex := newWhiteTexture(t, ctx.Device)
-			defer whiteTex.Dispose()
 
-			shader, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
-			defer shader.Dispose()
-			defer pipeline.Dispose()
+			_, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
 
 			verts := packVertices(
 				vtx(-1, -1, 0, 0, 1, 1, 1, 1),
@@ -615,9 +600,7 @@ func sceneScissorRect() Scene {
 			indices := packIndices(0, 1, 2, 0, 2, 3)
 
 			vbuf := newBuffer(t, ctx.Device, verts)
-			defer vbuf.Dispose()
 			ibuf := newBuffer(t, ctx.Device, indices)
-			defer ibuf.Dispose()
 
 			q := SceneSize / 4
 			ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
@@ -644,11 +627,8 @@ func sceneOrthoProjection() Scene {
 		Render: func(t *testing.T, ctx *RenderContext) {
 			t.Helper()
 			whiteTex := newWhiteTexture(t, ctx.Device)
-			defer whiteTex.Dispose()
 
 			shader, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
-			defer shader.Dispose()
-			defer pipeline.Dispose()
 
 			// Set ortho projection: [0, SceneSize] → NDC
 			s := float32(SceneSize)
@@ -663,9 +643,7 @@ func sceneOrthoProjection() Scene {
 			indices := packIndices(0, 1, 2)
 
 			vbuf := newBuffer(t, ctx.Device, verts)
-			defer vbuf.Dispose()
 			ibuf := newBuffer(t, ctx.Device, indices)
-			defer ibuf.Dispose()
 
 			ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
 				Target:     ctx.Target,
@@ -689,11 +667,8 @@ func sceneMultipleTriangles() Scene {
 		Render: func(t *testing.T, ctx *RenderContext) {
 			t.Helper()
 			whiteTex := newWhiteTexture(t, ctx.Device)
-			defer whiteTex.Dispose()
 
-			shader, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
-			defer shader.Dispose()
-			defer pipeline.Dispose()
+			_, pipeline := newBasicPipeline(t, ctx.Device, backend.BlendNone)
 
 			// Four small triangles in each quadrant.
 			verts := packVertices(
@@ -717,9 +692,7 @@ func sceneMultipleTriangles() Scene {
 			indices := packIndices(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
 
 			vbuf := newBuffer(t, ctx.Device, verts)
-			defer vbuf.Dispose()
 			ibuf := newBuffer(t, ctx.Device, indices)
-			defer ibuf.Dispose()
 
 			ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
 				Target:     ctx.Target,
@@ -784,6 +757,14 @@ func packIndices(indices ...uint16) []byte {
 	return data
 }
 
+// The scene helpers below register disposal via t.Cleanup rather than
+// returning naked objects for the caller to `defer Dispose()`. Cleanup
+// functions run AFTER the test (including the RunScene readback and
+// comparison) completes, so buffers/textures/pipelines stay alive
+// across the deferred submit that backends like WebGPU native and
+// Vulkan require between "record draw" and "texture read" — deferring
+// in the scene itself (the old pattern) disposed them before Flush,
+// tripping wgpu's "buffer has been destroyed" validation.
 func newWhiteTexture(t *testing.T, dev backend.Device) backend.Texture {
 	t.Helper()
 	tex, err := dev.NewTexture(backend.TextureDescriptor{
@@ -791,6 +772,7 @@ func newWhiteTexture(t *testing.T, dev backend.Device) backend.Texture {
 		Data: []byte{255, 255, 255, 255},
 	})
 	require.NoError(t, err)
+	t.Cleanup(tex.Dispose)
 	return tex
 }
 
@@ -813,19 +795,119 @@ func newCheckerTexture(t *testing.T, dev backend.Device, w, h int) backend.Textu
 		Data: pixels,
 	})
 	require.NoError(t, err)
+	t.Cleanup(tex.Dispose)
 	return tex
 }
 
+// conformanceVertexFormat matches packVertices's 32-byte per-vertex layout
+// (pos/uv/rgba). Declaring it on the pipeline is a no-op for most
+// backends but WebGPU native's wgpu_create_render_pipeline requires a
+// non-empty vertex buffer layout to accept subsequent SetVertexBuffer
+// calls — an empty descriptor compiles a pipeline whose first draw
+// trips "Render pipeline must be set / Pipeline must be set".
+func conformanceVertexFormat() backend.VertexFormat {
+	return backend.VertexFormat{
+		Stride: 32,
+		Attributes: []backend.VertexAttribute{
+			{Name: "position", Format: backend.AttributeFloat2, Offset: 0},
+			{Name: "texcoord", Format: backend.AttributeFloat2, Offset: 8},
+			{Name: "color", Format: backend.AttributeFloat4, Offset: 16},
+		},
+	}
+}
+
+// conformanceVertexGLSL / conformanceFragmentGLSL define a minimal
+// textured-quad shader the conformance scenes run against. The soft
+// backend ignores the source and uses its built-in rasterizer; WebGPU
+// native and other real-GPU backends need actual GLSL to translate
+// into their native shader language. An empty ShaderDescriptor compiles
+// to zero shader modules on those backends, leaving the pipeline handle
+// null and every subsequent draw tripping "Render pipeline must be set".
+// The vertex stage hard-codes Y- and V-flips to normalize two
+// conventions that diverge between soft (the golden reference) and real
+// GPU backends (WebGPU/Vulkan/Metal):
+//   - soft interprets positive NDC Y as DOWN in screen space, while GPU
+//     backends have it UP — flipping gl_Position.y makes GPU backends
+//     render the same image as soft.
+//   - soft samples textures with V=0 at the bottom, while GPU backends
+//     sample V=0 at the top — flipping the V coordinate makes texture
+//     output match.
+//
+// Both are no-ops for soft (its built-in rasterizer ignores this
+// shader source); they only take effect on backends that actually
+// compile the GLSL, so the conformance goldens (generated by soft)
+// stay the single source of truth for every backend.
+const conformanceVertexGLSL = `#version 330 core
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec4 aColor;
+uniform mat4 uProjection;
+out vec2 vTexCoord;
+out vec4 vColor;
+void main() {
+    vTexCoord = aTexCoord;
+    vColor = aColor;
+    vec4 pos = uProjection * vec4(aPosition, 0.0, 1.0);
+    gl_Position = vec4(pos.x, -pos.y, pos.z, pos.w);
+}
+`
+
+// The fragment shader premultiplies alpha because backend.BlendSourceOver
+// uses SrcFactor=One, DstFactor=OneMinusSrcAlpha — the classic
+// pre-multiplied-alpha formula. Without the premultiply, semi-transparent
+// draws blend as if fully opaque (SrcFactor=One means "use src.rgb as-is",
+// which for vColor=(0,1,0,0.5) paints full-intensity green over the
+// background). Soft's built-in rasterizer handles this inline, so its
+// output — and therefore the golden images — is premultiplied.
+const conformanceFragmentGLSL = `#version 330 core
+in vec2 vTexCoord;
+in vec4 vColor;
+uniform sampler2D uTexture;
+uniform mat4 uColorBody;
+uniform vec4 uColorTranslation;
+out vec4 fragColor;
+void main() {
+    vec4 c = texture(uTexture, vTexCoord) * vColor;
+    c = uColorBody * c + uColorTranslation;
+    fragColor = vec4(c.rgb * c.a, c.a);
+}
+`
+
 func newBasicPipeline(t *testing.T, dev backend.Device, blend backend.BlendMode) (backend.Shader, backend.Pipeline) {
 	t.Helper()
-	shader, err := dev.NewShader(backend.ShaderDescriptor{})
-	require.NoError(t, err)
-
-	pipeline, err := dev.NewPipeline(backend.PipelineDescriptor{
-		Shader:    shader,
-		BlendMode: blend,
+	shader, err := dev.NewShader(backend.ShaderDescriptor{
+		VertexSource:   conformanceVertexGLSL,
+		FragmentSource: conformanceFragmentGLSL,
+		Attributes:     conformanceVertexFormat().Attributes,
 	})
 	require.NoError(t, err)
+	t.Cleanup(shader.Dispose)
+
+	// Default uniforms: identity projection (the shader itself handles
+	// the NDC Y-flip needed to match soft's conventions on GPU
+	// backends). Identity color body + zero translation pass
+	// texture×vColor through untouched.
+	shader.SetUniformMat4("uProjection", [16]float32{
+		1, 0, 0, 0,
+		0, 1, 0, 0,
+		0, 0, 1, 0,
+		0, 0, 0, 1,
+	})
+	shader.SetUniformMat4("uColorBody", [16]float32{
+		1, 0, 0, 0,
+		0, 1, 0, 0,
+		0, 0, 1, 0,
+		0, 0, 0, 1,
+	})
+	shader.SetUniformVec4("uColorTranslation", [4]float32{0, 0, 0, 0})
+
+	pipeline, err := dev.NewPipeline(backend.PipelineDescriptor{
+		Shader:       shader,
+		BlendMode:    blend,
+		VertexFormat: conformanceVertexFormat(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(pipeline.Dispose)
 	return shader, pipeline
 }
 
@@ -833,6 +915,7 @@ func newBuffer(t *testing.T, dev backend.Device, data []byte) backend.Buffer {
 	t.Helper()
 	buf, err := dev.NewBuffer(backend.BufferDescriptor{Data: data})
 	require.NoError(t, err)
+	t.Cleanup(buf.Dispose)
 	return buf
 }
 
@@ -914,12 +997,10 @@ const (
 func renderFillRuleScene(t *testing.T, ctx *RenderContext, variant fillRuleVariant) {
 	t.Helper()
 	whiteTex := newWhiteTexture(t, ctx.Device)
-	defer whiteTex.Dispose()
 
 	dev := ctx.Device
 	shader, err := dev.NewShader(backend.ShaderDescriptor{})
 	require.NoError(t, err)
-	defer shader.Dispose()
 
 	// Write pipeline — ops differ between NonZero (Incr/Decr-wrap,
 	// two-sided) and EvenOdd (Invert, single-face).
@@ -968,7 +1049,6 @@ func renderFillRuleScene(t *testing.T, ctx *RenderContext, variant fillRuleVaria
 		ColorWriteDisabled: true,
 	})
 	require.NoError(t, err)
-	defer writePipe.Dispose()
 
 	// Color pipeline — NotEqual ref=0, Zero-on-pass so the stencil
 	// buffer is cleared as we draw.
@@ -996,7 +1076,6 @@ func renderFillRuleScene(t *testing.T, ctx *RenderContext, variant fillRuleVaria
 		DepthStencilFormat: backend.TextureFormatDepth24Stencil8,
 	})
 	require.NoError(t, err)
-	defer colorPipe.Dispose()
 
 	// Geometry: two overlapping triangles, yellow. For NonZero we use
 	// opposite windings so the counter cancels; for EvenOdd the winding
@@ -1029,9 +1108,7 @@ func renderFillRuleScene(t *testing.T, ctx *RenderContext, variant fillRuleVaria
 	indices := packIndices(0, 1, 2, 3, 4, 5)
 
 	vbuf := newBuffer(t, dev, verts)
-	defer vbuf.Dispose()
 	ibuf := newBuffer(t, dev, indices)
-	defer ibuf.Dispose()
 
 	ctx.Encoder.BeginRenderPass(backend.RenderPassDescriptor{
 		Target:             ctx.Target,

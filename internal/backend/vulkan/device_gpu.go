@@ -27,11 +27,12 @@ type Device struct {
 	encoder        *Encoder
 
 	// Default render pass for the screen target.
-	defaultRenderPass  vk.RenderPass
-	defaultFramebuffer vk.Framebuffer
-	defaultColorImage  vk.Image
-	defaultColorView   vk.ImageView
-	defaultColorMem    vk.DeviceMemory
+	defaultRenderPass     vk.RenderPass // LoadOp=Clear
+	defaultRenderPassLoad vk.RenderPass // LoadOp=Load (for screen re-entries)
+	defaultFramebuffer    vk.Framebuffer
+	defaultColorImage     vk.Image
+	defaultColorView      vk.ImageView
+	defaultColorMem       vk.DeviceMemory
 
 	// Default depth-stencil attachment: D24_UNORM_S8_UINT image + view
 	// allocated alongside the default color attachment. Used by both
@@ -69,19 +70,20 @@ type Device struct {
 	debugEnabled       bool
 
 	// Swapchain state (populated when presenting directly to a surface).
-	surfaceFactory      func(uintptr) (uintptr, error)
-	surface             vk.SurfaceKHR
-	swapchain           vk.SwapchainKHR
-	swapchainImages     []vk.Image
-	swapchainViews      []vk.ImageView
-	swapchainFormat     uint32
-	swapchainExtent     [2]uint32
-	swapchainFBs        []vk.Framebuffer
-	swapchainRenderPass vk.RenderPass
-	currentImageIndex   uint32
-	hasSwapchain        bool
-	imageAvailableSem   vk.Semaphore
-	renderFinishedSem   vk.Semaphore
+	surfaceFactory          func(uintptr) (uintptr, error)
+	surface                 vk.SurfaceKHR
+	swapchain               vk.SwapchainKHR
+	swapchainImages         []vk.Image
+	swapchainViews          []vk.ImageView
+	swapchainFormat         uint32
+	swapchainExtent         [2]uint32
+	swapchainFBs            []vk.Framebuffer
+	swapchainRenderPass     vk.RenderPass // LoadOp=Clear
+	swapchainRenderPassLoad vk.RenderPass // LoadOp=Load (for sprite-pass screen re-entries)
+	currentImageIndex       uint32
+	hasSwapchain            bool
+	imageAvailableSem       vk.Semaphore
+	renderFinishedSem       vk.Semaphore
 }
 
 // ensureDefaultSampler creates a default nearest-filter sampler if needed.
@@ -385,8 +387,15 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("vulkan: staging: %w", err)
 	}
 
-	// Create shared uniform buffer for UBO descriptors (16 KB, persistently mapped).
-	if err := d.createUniformBuffer(16 * 1024); err != nil {
+	// Create shared uniform buffer for UBO descriptors (1 MB, persistently
+	// mapped). Sized to comfortably absorb a worst-case multi-RT frame:
+	// scene-selector records ~100 sprite-pass batches per frame, each
+	// consuming vtxAligned+fragAligned = 512 bytes of uniform space — so
+	// 16 KB (the original size) wraps ~3 times mid-frame and overwrites
+	// uniforms the GPU is still reading for earlier draws, silently
+	// corrupting them and rendering the final composite blank.
+	// 1 MB fits ~2000 draws and is still trivial on any desktop GPU.
+	if err := d.createUniformBuffer(1024 * 1024); err != nil {
 		return fmt.Errorf("vulkan: uniform buffer: %w", err)
 	}
 
@@ -658,6 +667,27 @@ func (d *Device) createDefaultRenderTarget() error {
 	}
 	d.defaultRenderPass = rp
 
+	// Load variant: same attachments, LoadOp=Load on color, so screen
+	// re-entries within a frame preserve accumulated content. Without
+	// this, the sprite pass's multi-composite pattern (draw offscreen
+	// RT → composite to screen → draw another RT → composite again)
+	// wipes prior composites on every screen re-entry, leaving only the
+	// final composite visible. Framebuffer is render-pass-compatible
+	// with both variants since attachment formats and counts match.
+	// InitialLayout must match the prior pass's FinalLayout; for the
+	// default offscreen target that's ColorAttachmentOptimal.
+	attachmentsLoad := attachments
+	attachmentsLoad[0].LoadOp = vk.AttachmentLoadOpLoad
+	attachmentsLoad[0].InitialLayout = vk.ImageLayoutColorAttachmentOptimal
+	rpCILoad := rpCI
+	rpCILoad.PAttachments = uintptr(unsafe.Pointer(&attachmentsLoad[0]))
+	rpLoad, err := vk.CreateRenderPass(d.device, &rpCILoad)
+	runtime.KeepAlive(attachmentsLoad)
+	if err != nil {
+		return err
+	}
+	d.defaultRenderPassLoad = rpLoad
+
 	// Create framebuffer with both attachments.
 	fbViews := [2]vk.ImageView{d.defaultColorView, d.defaultDepthStencilView}
 	fbCI := vk.FramebufferCreateInfo{
@@ -811,6 +841,9 @@ func (d *Device) Dispose() {
 	}
 	if d.defaultRenderPass != 0 {
 		vk.DestroyRenderPass(d.device, d.defaultRenderPass)
+	}
+	if d.defaultRenderPassLoad != 0 {
+		vk.DestroyRenderPass(d.device, d.defaultRenderPassLoad)
 	}
 	if d.defaultColorView != 0 {
 		vk.DestroyImageView(d.device, d.defaultColorView)
@@ -1296,25 +1329,28 @@ func (d *Device) NewShader(desc backend.ShaderDescriptor) (backend.Shader, error
 	}, nil
 }
 
-// NewRenderTarget creates a VkFramebuffer with color (and optional depth) attachments.
+// NewRenderTarget creates a VkFramebuffer with color + depth-stencil
+// attachments and two render passes (Clear/Load) bound to that layout.
 //
-// The current implementation stores color + optional depth textures but
-// does not create a per-RT render pass or framebuffer; encoder.
-// BeginRenderPass falls back to the device's default render pass and
-// framebuffer when rt.renderPass/framebuffer are zero. That default
-// render pass carries a depth-stencil attachment (see
-// createSwapchain / createDefaultRenderTarget), so rendering through
-// this RT effectively uses the device's shared stencil buffer — good
-// enough for the sprite pass's fill-rule routing. If/when true per-RT
-// framebuffers are wired (so offscreen targets render independently),
-// allocate a per-RT depth-stencil image here and build a 2-attachment
-// render pass + framebuffer matching the device's layout.
+// The color attachment reuses the VkImageView already created by
+// NewTexture (which sets `ImageUsageColorAttachment` when
+// `RenderTarget: true`). The depth-stencil attachment is allocated
+// privately per-RT so fill-rule stencil work on one RT doesn't spill
+// into another.
+//
+// Two render passes are created — one with LoadOp=Clear and
+// InitialLayout=Undefined for the first batch entering the RT in a
+// frame, and one with LoadOp=Load and InitialLayout=ShaderReadOnlyOptimal
+// for subsequent re-entries that must preserve accumulated content.
+// The encoder picks between them based on the caller's LoadAction.
+// FinalLayout on both is ShaderReadOnlyOptimal so later passes can
+// sample the RT's color texture directly without an explicit barrier.
 func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.RenderTarget, error) {
 	if desc.Width <= 0 || desc.Height <= 0 {
 		return nil, fmt.Errorf("vulkan: invalid render target dimensions %dx%d", desc.Width, desc.Height)
 	}
 
-	// Create color texture.
+	// Create color texture with ColorAttachment usage.
 	colorTex, err := d.NewTexture(backend.TextureDescriptor{
 		Width: desc.Width, Height: desc.Height,
 		Format:       desc.ColorFormat,
@@ -1323,38 +1359,171 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 	if err != nil {
 		return nil, err
 	}
+	color := colorTex.(*Texture)
 
-	// Create optional depth texture.
+	// Create optional depth texture (backend-owned texture; not attached
+	// to our per-RT framebuffer — it exists for callers that want to
+	// read depth, which the sprite pass does not do yet).
 	var depthTex backend.Texture
 	if desc.HasDepth {
-		dt, err := d.NewTexture(backend.TextureDescriptor{
+		dt, nterr := d.NewTexture(backend.TextureDescriptor{
 			Width: desc.Width, Height: desc.Height,
 			Format:       desc.DepthFormat,
 			RenderTarget: true,
 		})
-		if err != nil {
+		if nterr != nil {
 			colorTex.Dispose()
-			return nil, err
+			return nil, nterr
 		}
 		depthTex = dt
 	}
 
+	// Private depth-stencil attachment for this RT's framebuffer.
+	dsImg, dsMem, dsView, err := d.createDepthStencilTexture(uint32(desc.Width), uint32(desc.Height))
+	if err != nil {
+		if depthTex != nil {
+			depthTex.Dispose()
+		}
+		colorTex.Dispose()
+		return nil, fmt.Errorf("vulkan: rt depth-stencil: %w", err)
+	}
+
+	colorFmt := uint32(vkFormatFromTextureFormat(desc.ColorFormat))
+	rpClear, err := d.createOffscreenRenderPass(colorFmt, vk.AttachmentLoadOpClear, vk.ImageLayoutUndefined)
+	if err != nil {
+		d.destroyDepthStencilTexture(dsImg, dsMem, dsView)
+		if depthTex != nil {
+			depthTex.Dispose()
+		}
+		colorTex.Dispose()
+		return nil, fmt.Errorf("vulkan: rt rp(clear): %w", err)
+	}
+	rpLoad, err := d.createOffscreenRenderPass(colorFmt, vk.AttachmentLoadOpLoad, vk.ImageLayoutShaderReadOnlyOptimal)
+	if err != nil {
+		vk.DestroyRenderPass(d.device, rpClear)
+		d.destroyDepthStencilTexture(dsImg, dsMem, dsView)
+		if depthTex != nil {
+			depthTex.Dispose()
+		}
+		colorTex.Dispose()
+		return nil, fmt.Errorf("vulkan: rt rp(load): %w", err)
+	}
+
+	// Framebuffer is render-pass-compatible with both RPs (same attachments).
+	fbViews := [2]vk.ImageView{color.view, dsView}
+	fbCI := vk.FramebufferCreateInfo{
+		SType:           vk.StructureTypeFramebufferCreateInfo,
+		RenderPass_:     rpClear,
+		AttachmentCount: 2,
+		PAttachments:    uintptr(unsafe.Pointer(&fbViews[0])),
+		Width:           uint32(desc.Width),
+		Height:          uint32(desc.Height),
+		Layers:          1,
+	}
+	fb, err := vk.CreateFramebuffer(d.device, &fbCI)
+	runtime.KeepAlive(fbViews)
+	if err != nil {
+		vk.DestroyRenderPass(d.device, rpLoad)
+		vk.DestroyRenderPass(d.device, rpClear)
+		d.destroyDepthStencilTexture(dsImg, dsMem, dsView)
+		if depthTex != nil {
+			depthTex.Dispose()
+		}
+		colorTex.Dispose()
+		return nil, fmt.Errorf("vulkan: rt framebuffer: %w", err)
+	}
+
 	return &RenderTarget{
-		dev:      d,
-		colorTex: colorTex.(*Texture),
-		depthTex: depthTex,
-		w:        desc.Width,
-		h:        desc.Height,
-		// hasStencil is false here because the encoder's BeginRenderPass
-		// falls back to the device's default render pass + framebuffer
-		// when rt.renderPass == 0 (see encoder_gpu.go). That fallback
-		// draws into the default/swapchain attachment — not this RT's
-		// color texture — so reporting HasStencil=true would make the
-		// sprite pass route fill-rule batches through stencil against
-		// the wrong framebuffer. Once per-RT render-pass+framebuffer
-		// wiring lands (see TODO above), flip this to true.
-		hasStencil: false,
+		dev:            d,
+		colorTex:       color,
+		depthTex:       depthTex,
+		w:              desc.Width,
+		h:              desc.Height,
+		hasStencil:     true,
+		renderPass:     rpClear,
+		renderPassLoad: rpLoad,
+		framebuffer:    fb,
+		dsImage:        dsImg,
+		dsMem:          dsMem,
+		dsView:         dsView,
 	}, nil
+}
+
+// createOffscreenRenderPass builds a 2-attachment (color + D24S8) render
+// pass with the requested color LoadOp and InitialLayout. FinalLayout
+// on the color attachment is always ShaderReadOnlyOptimal so subsequent
+// passes can sample the RT without an explicit barrier. Two subpass
+// dependencies frame the pass: an external→0 dependency ensures prior
+// fragment-shader reads finish before we start writing, and a 0→external
+// dependency flushes our writes before the next shader read.
+func (d *Device) createOffscreenRenderPass(colorFormat, colorLoadOp, colorInitialLayout uint32) (vk.RenderPass, error) {
+	attachments := [2]vk.AttachmentDescription{
+		{
+			Format:         colorFormat,
+			Samples:        vk.SampleCount1,
+			LoadOp:         colorLoadOp,
+			StoreOp:        vk.AttachmentStoreOpStore,
+			StencilLoadOp:  vk.AttachmentLoadOpDontCare,
+			StencilStoreOp: vk.AttachmentStoreOpDontCare,
+			InitialLayout:  colorInitialLayout,
+			FinalLayout:    vk.ImageLayoutShaderReadOnlyOptimal,
+		},
+		{
+			Format:         vk.FormatD24UNormS8UInt,
+			Samples:        vk.SampleCount1,
+			LoadOp:         vk.AttachmentLoadOpClear,
+			StoreOp:        vk.AttachmentStoreOpDontCare,
+			StencilLoadOp:  vk.AttachmentLoadOpClear,
+			StencilStoreOp: vk.AttachmentStoreOpDontCare,
+			InitialLayout:  vk.ImageLayoutUndefined,
+			FinalLayout:    vk.ImageLayoutDepthStencilAttachOptimal,
+		},
+	}
+	colorRef := vk.AttachmentReference{
+		Attachment: 0,
+		Layout:     vk.ImageLayoutColorAttachmentOptimal,
+	}
+	depthRef := vk.AttachmentReference{
+		Attachment: 1,
+		Layout:     vk.ImageLayoutDepthStencilAttachOptimal,
+	}
+	subpass := vk.SubpassDescription{
+		PipelineBindPoint:       vk.PipelineBindPointGraphics,
+		ColorAttachmentCount:    1,
+		PColorAttachments:       uintptr(unsafe.Pointer(&colorRef)),
+		PDepthStencilAttachment: uintptr(unsafe.Pointer(&depthRef)),
+	}
+	dependencies := [2]vk.SubpassDependency{
+		{
+			SrcSubpass:    0xFFFFFFFF, // VK_SUBPASS_EXTERNAL
+			DstSubpass:    0,
+			SrcStageMask:  vk.PipelineStageFragmentShader,
+			DstStageMask:  vk.PipelineStageColorAttachmentOutput,
+			SrcAccessMask: vk.AccessShaderRead,
+			DstAccessMask: vk.AccessColorAttachmentWrite,
+		},
+		{
+			SrcSubpass:    0,
+			DstSubpass:    0xFFFFFFFF,
+			SrcStageMask:  vk.PipelineStageColorAttachmentOutput,
+			DstStageMask:  vk.PipelineStageFragmentShader,
+			SrcAccessMask: vk.AccessColorAttachmentWrite,
+			DstAccessMask: vk.AccessShaderRead,
+		},
+	}
+	rpCI := vk.RenderPassCreateInfo{
+		SType:           vk.StructureTypeRenderPassCreateInfo,
+		AttachmentCount: 2,
+		PAttachments:    uintptr(unsafe.Pointer(&attachments[0])),
+		SubpassCount:    1,
+		PSubpasses:      uintptr(unsafe.Pointer(&subpass)),
+		DependencyCount: 2,
+		PDependencies:   uintptr(unsafe.Pointer(&dependencies[0])),
+	}
+	rp, err := vk.CreateRenderPass(d.device, &rpCI)
+	runtime.KeepAlive(attachments)
+	runtime.KeepAlive(dependencies)
+	return rp, err
 }
 
 // NewPipeline creates a VkPipeline (currently stores descriptor for deferred creation).
@@ -1581,6 +1750,25 @@ func (d *Device) createSwapchain() error {
 	}
 	d.swapchainRenderPass = rp
 
+	// A second render pass with LoadOp=Load + InitialLayout=PresentSrcKHR
+	// is needed for screen re-entries within a frame (e.g. the sprite
+	// pass composites multiple offscreen RTs onto the screen in back-to-
+	// back render passes). Without this variant, every screen re-entry
+	// clears the swapchain image and only the final composite survives.
+	// Both render passes are compatible with the same swapchain FBs
+	// since attachment formats and counts match.
+	attachmentsLoad := attachments
+	attachmentsLoad[0].LoadOp = vk.AttachmentLoadOpLoad
+	attachmentsLoad[0].InitialLayout = vk.ImageLayoutPresentSrcKHR
+	rpCILoad := rpCI
+	rpCILoad.PAttachments = uintptr(unsafe.Pointer(&attachmentsLoad[0]))
+	rpLoad, err := vk.CreateRenderPass(d.device, &rpCILoad)
+	runtime.KeepAlive(attachmentsLoad)
+	if err != nil {
+		return err
+	}
+	d.swapchainRenderPassLoad = rpLoad
+
 	// Create framebuffers with color + shared depth-stencil attachments.
 	d.swapchainFBs = make([]vk.Framebuffer, len(images))
 	for i := range images {
@@ -1617,6 +1805,10 @@ func (d *Device) destroySwapchain() {
 	if d.swapchainRenderPass != 0 {
 		vk.DestroyRenderPass(d.device, d.swapchainRenderPass)
 		d.swapchainRenderPass = 0
+	}
+	if d.swapchainRenderPassLoad != 0 {
+		vk.DestroyRenderPass(d.device, d.swapchainRenderPassLoad)
+		d.swapchainRenderPassLoad = 0
 	}
 
 	for _, v := range d.swapchainViews {
