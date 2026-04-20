@@ -387,8 +387,15 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("vulkan: staging: %w", err)
 	}
 
-	// Create shared uniform buffer for UBO descriptors (16 KB, persistently mapped).
-	if err := d.createUniformBuffer(16 * 1024); err != nil {
+	// Create shared uniform buffer for UBO descriptors (1 MB, persistently
+	// mapped). Sized to comfortably absorb a worst-case multi-RT frame:
+	// scene-selector records ~100 sprite-pass batches per frame, each
+	// consuming vtxAligned+fragAligned = 512 bytes of uniform space — so
+	// 16 KB (the original size) wraps ~3 times mid-frame and overwrites
+	// uniforms the GPU is still reading for earlier draws, silently
+	// corrupting them and rendering the final composite blank.
+	// 1 MB fits ~2000 draws and is still trivial on any desktop GPU.
+	if err := d.createUniformBuffer(1024 * 1024); err != nil {
 		return fmt.Errorf("vulkan: uniform buffer: %w", err)
 	}
 
