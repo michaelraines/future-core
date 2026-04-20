@@ -50,6 +50,16 @@ type Encoder struct {
 	width  int
 	height int
 
+	// Dimensions of the current render target (updated each BeginRenderPass).
+	// SetScissor(nil) defaults to these, matching the active attachment;
+	// using e.width/e.height would leak the device's default (canvas) size
+	// into passes rendering to smaller offscreen RTs and trip WebGPU's
+	// "Scissor rect is not contained in the render target" validation
+	// (observed in the browser orb-drop demo: canvas 2048×1536 with RT
+	// 1024×768).
+	currentW int
+	currentH int
+
 	inRenderPass    bool
 	currentPipeline *Pipeline
 	passEncoder     js.Value
@@ -162,6 +172,8 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 
 	e.passEncoder = e.cmdEncoder.Call("beginRenderPass", rpDesc)
 	e.inRenderPass = true
+	e.currentW = w
+	e.currentH = h
 	if diagLogAllow(&beginPassLogCount) {
 		js.Global().Get("console").Call("log",
 			fmt.Sprintf("[webgpu] BeginRenderPass target=%v format=%s w=%d h=%d depthView=%v hasStencil=%v loadOp=%s",
@@ -452,12 +464,16 @@ func (e *Encoder) SetViewport(vp backend.Viewport) {
 }
 
 // SetScissor sets the scissor rectangle.
+// A nil rect defaults to the current render target's bounds (tracked in
+// BeginRenderPass). Using e.width/e.height here would exceed smaller
+// offscreen RT dimensions and trip WebGPU's "Scissor rect not contained
+// in the render target" validation on multi-RT frames.
 func (e *Encoder) SetScissor(rect *backend.ScissorRect) {
 	if !e.inRenderPass {
 		return
 	}
 	if rect == nil {
-		e.passEncoder.Call("setScissorRect", 0, 0, e.width, e.height)
+		e.passEncoder.Call("setScissorRect", 0, 0, e.currentW, e.currentH)
 		return
 	}
 	e.passEncoder.Call("setScissorRect", rect.X, rect.Y, rect.Width, rect.Height)

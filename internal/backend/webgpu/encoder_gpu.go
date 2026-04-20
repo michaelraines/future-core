@@ -22,6 +22,12 @@ type Encoder struct {
 	cmdEncoder      wgpu.CommandEncoder
 	boundTexture    *Texture
 
+	// Dimensions of the current render target (updated each BeginRenderPass).
+	// SetScissor(nil) defaults to these, matching the active attachment.
+	// Distinct from width/height which track the device's default target.
+	currentW uint32
+	currentH uint32
+
 	// Format of the current render target (set in BeginRenderPass).
 	targetFormat wgpu.TextureFormat
 
@@ -102,6 +108,8 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	runtime.KeepAlive(colorAttachment)
 	runtime.KeepAlive(depthAttach)
 	e.inRenderPass = true
+	e.currentW = w
+	e.currentH = h
 
 	// Set default viewport.
 	wgpu.RenderPassSetViewport(e.passEncoder, 0, 0, float32(w), float32(h), 0, 1)
@@ -356,10 +364,13 @@ func (e *Encoder) SetViewport(vp backend.Viewport) {
 }
 
 // SetScissor sets the scissor rectangle.
+// A nil rect defaults to the current render target's bounds (tracked in
+// BeginRenderPass); using e.width/e.height here would leak the device's
+// default target size into passes that target smaller offscreen RTs and
+// trip wgpu's "scissor not contained in render target" validation.
 func (e *Encoder) SetScissor(rect *backend.ScissorRect) {
 	if rect == nil {
-		wgpu.RenderPassSetScissorRect(e.passEncoder,
-			0, 0, uint32(e.width), uint32(e.height))
+		wgpu.RenderPassSetScissorRect(e.passEncoder, 0, 0, e.currentW, e.currentH)
 		return
 	}
 	wgpu.RenderPassSetScissorRect(e.passEncoder,

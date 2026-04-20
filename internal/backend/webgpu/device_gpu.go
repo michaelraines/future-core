@@ -54,6 +54,13 @@ type Device struct {
 	// Default 1x1 white texture used as a placeholder for bind group 1
 	// when SetTexture has not been called before a draw call.
 	defaultWhiteTex *Texture
+
+	// Cached encoder so Texture.ReadPixels can flush pending render work
+	// before its own readback command buffer runs. Without this, a render
+	// pass that writes to an RT then immediately reads the RT's color
+	// texture returns uninitialized memory because the render-pass's
+	// command buffer was never submitted.
+	encoder *Encoder
 }
 
 // New creates a new WebGPU device.
@@ -332,9 +339,17 @@ func (d *Device) Dispose() {
 }
 
 // ReadScreen copies the default color texture pixels into dst.
+//
+// Flushes any pending render work on the cached encoder before reading
+// so tests and headless callers that do Clear/Draw → ReadScreen without
+// an explicit Flush see the rendered output (WebGPU native doesn't
+// auto-submit on EndRenderPass).
 func (d *Device) ReadScreen(dst []byte) bool {
 	if d.defaultColorTex == 0 || d.device == 0 || d.queue == 0 || len(dst) == 0 {
 		return false
+	}
+	if d.encoder != nil {
+		d.encoder.Flush()
 	}
 
 	bpp := 4 // RGBA8
@@ -694,12 +709,20 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 }
 
 // Encoder returns the command encoder.
+//
+// The encoder is cached on first call and reused across the device's
+// lifetime so Texture.ReadPixels can flush pending render work through
+// it before issuing its own copy-texture-to-buffer command — the
+// conformance suite's render-then-read-RT pattern relies on this.
 func (d *Device) Encoder() backend.CommandEncoder {
-	return &Encoder{
-		dev:    d,
-		width:  d.width,
-		height: d.height,
+	if d.encoder == nil {
+		d.encoder = &Encoder{
+			dev:    d,
+			width:  d.width,
+			height: d.height,
+		}
 	}
+	return d.encoder
 }
 
 // wgpuTextureFormatEnum maps backend format to wgpu TextureFormat.

@@ -77,6 +77,10 @@ func (t *Texture) UploadRegion(data []byte, x, y, w, h, mipLevel int) {
 }
 
 // ReadPixels reads texture data back to CPU via copy-to-buffer + map.
+//
+// Callers must ensure any in-flight render work has been flushed (via
+// CommandEncoder.Flush) before calling — WebGPU native doesn't submit
+// command buffers automatically on EndRenderPass.
 func (t *Texture) ReadPixels(dst []byte) {
 	if len(dst) == 0 || t.dev.device == 0 || t.dev.queue == 0 {
 		return
