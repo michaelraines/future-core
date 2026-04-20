@@ -50,7 +50,14 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		makeDepthStencilClearValue(1.0, desc.ClearStencil),
 	}
 
+	// Default offscreen target (used when no swapchain exists — desktop
+	// builds use GL presenter + ReadScreen from the default color image
+	// rather than a VkSwapchain). Pick Clear vs Load variant so screen
+	// re-entries preserve prior composites.
 	rp := e.dev.defaultRenderPass
+	if desc.LoadAction == backend.LoadActionLoad && e.dev.defaultRenderPassLoad != 0 {
+		rp = e.dev.defaultRenderPassLoad
+	}
 	fb := e.dev.defaultFramebuffer
 	w := uint32(e.dev.width)
 	h := uint32(e.dev.height)
@@ -59,7 +66,13 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		if rt, ok := desc.Target.(*RenderTarget); ok {
 			w = uint32(rt.w)
 			h = uint32(rt.h)
-			if rt.renderPass != 0 {
+			// Pick the render-pass variant matching the load action. Vulkan
+			// bakes LoadOp into the VkRenderPass, so we carry a Clear and
+			// Load pair on each RT and pick the right one here. The
+			// framebuffer is render-pass-compatible with both.
+			if desc.LoadAction == backend.LoadActionLoad && rt.renderPassLoad != 0 {
+				rp = rt.renderPassLoad
+			} else if rt.renderPass != 0 {
 				rp = rt.renderPass
 			}
 			if rt.framebuffer != 0 {
@@ -68,7 +81,18 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		}
 	} else if e.dev.hasSwapchain {
 		// Rendering to the screen — use swapchain render pass and framebuffer.
-		rp = e.dev.swapchainRenderPass
+		// Pick Clear vs Load variant to match the caller's LoadAction.
+		// The sprite pass composites multiple offscreen RTs onto the
+		// screen in back-to-back render passes within a single frame;
+		// without a Load variant every re-entry clears the swapchain and
+		// only the final composite survives. Both variants share the
+		// same framebuffers (render-pass-compatible: same attachment
+		// formats and counts, just different LoadOp/InitialLayout).
+		if desc.LoadAction == backend.LoadActionLoad && e.dev.swapchainRenderPassLoad != 0 {
+			rp = e.dev.swapchainRenderPassLoad
+		} else {
+			rp = e.dev.swapchainRenderPass
+		}
 		fb = e.dev.swapchainFBs[e.dev.currentImageIndex]
 		w = e.dev.swapchainExtent[0]
 		h = e.dev.swapchainExtent[1]
@@ -140,21 +164,24 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 		e.boundShader = s
 	}
 
-	// Create the VkPipeline lazily using the current render pass.
-	if p.vkPipeline == 0 {
-		rp := e.currentRenderPass
-		if rp == 0 {
-			rp = e.dev.defaultRenderPass
-		}
+	// Pipelines are baked against a specific VkRenderPass at creation
+	// time. A single `Pipeline` abstract object serves every render
+	// pass (offscreen RTs, screen swapchain) the sprite pass walks
+	// through in a frame, so cache a VkPipeline per VkRenderPass and
+	// create on demand.
+	rp := e.currentRenderPass
+	if rp == 0 {
+		rp = e.dev.defaultRenderPass
+	}
+	pip := p.pipelineFor(rp)
+	if pip == 0 {
 		if err := p.createVkPipeline(rp); err != nil {
-			// Pipeline creation failed — skip binding. Draw calls will
-			// be no-ops since vkPipeline remains 0.
 			return
 		}
+		pip = p.pipelineFor(rp)
 	}
-
-	if p.vkPipeline != 0 {
-		vk.CmdBindPipeline(e.cmd, p.vkPipeline)
+	if pip != 0 {
+		vk.CmdBindPipeline(e.cmd, pip)
 	}
 }
 
