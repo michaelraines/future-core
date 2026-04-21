@@ -128,6 +128,15 @@ func writeUniformValue(dst []byte, v interface{}) {
 	case [2]float32:
 		binary.LittleEndian.PutUint32(dst[0:4], math.Float32bits(val[0]))
 		binary.LittleEndian.PutUint32(dst[4:8], math.Float32bits(val[1]))
+	case [3]float32:
+		// vec3 writes 12 bytes; the trailing 4 bytes of its 16-byte
+		// std140 slot stay zero from the make([]byte, ...) in
+		// packUniformBuffer. Without this case, SetUniformVec3 on
+		// Vulkan was a silent no-op, rendering point-light LightColor
+		// as (0,0,0) and the whole lighting demo black.
+		for i := 0; i < 3; i++ {
+			binary.LittleEndian.PutUint32(dst[i*4:(i+1)*4], math.Float32bits(val[i]))
+		}
 	case [4]float32:
 		for i := 0; i < 4; i++ {
 			binary.LittleEndian.PutUint32(dst[i*4:(i+1)*4], math.Float32bits(val[i]))
@@ -162,12 +171,24 @@ func parseUniformLayout(glsl string) []uniformField {
 		if size == 0 {
 			continue
 		}
-		// std140 alignment: 16 for mat4/vec4/mat3, 8 for vec2, 4 otherwise.
+		// std140 alignment rules for the implicit UBO that shaderc's
+		// `auto_bind_uniforms` wraps bare uniforms into:
+		//   float, int  → align  4, consume  4
+		//   vec2        → align  8, consume  8
+		//   vec3        → align 16, consume 12 (tail left unused by us)
+		//   vec4        → align 16, consume 16
+		//   mat3, mat4  → align 16, consume 48 / 64
+		// Treating vec3 as 4-byte aligned (its size) was the original
+		// bug: the SPIR-V reads LightColor.rgb at offset 16 while
+		// packUniformBuffer wrote it at offset 8 (after a vec2), so
+		// every uniform after the vec3 read garbage. Point-light
+		// shaders then pulled the wrong Intensity/Radius/FalloffType.
 		align := 4
-		if size >= 16 {
-			align = 16
-		} else if size == 8 {
+		switch typ {
+		case "vec2":
 			align = 8
+		case "vec3", "vec4", "mat3", "mat4":
+			align = 16
 		}
 		if offset%align != 0 {
 			offset += align - (offset % align)
