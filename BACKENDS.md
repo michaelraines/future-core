@@ -7,6 +7,98 @@ Last updated: 2026-03-30
 
 ---
 
+## Parity Triage Workflow
+
+This is the repeatable loop for catching a GPU backend up to WebGPU
+parity against the `future` demo app. Apply it in order — each step
+narrows the search space. Patterns established for Vulkan transfer
+directly to Metal, DX12, and anything else that joins the family.
+
+**Tools**: all in the workspace root, not this repo:
+- `scripts/capture.sh` — single-backend headless PNG capture
+- `scripts/parity-diff.sh` — pairwise pixel-diff with WebGPU reference
+- Tracers: `FUTURE_CORE_TRACE_BATCHES`, `FUTURE_CORE_TRACE_PASSES`
+  (see "Debugging the Sprite Pass" in [CLAUDE.md](CLAUDE.md))
+
+### 1. Baseline the backend
+
+```sh
+scripts/capture.sh --backend <name> --scene scene-selector --frames 3
+scripts/capture.sh --backend webgpu --scene scene-selector --frames 3
+scripts/parity-diff.sh --scene scene-selector --ref webgpu --test <name>
+```
+
+If the PNG is far smaller than the WebGPU reference, the backend is
+producing a uniform image (solid color). `parity-diff.sh` flags
+"blank capture" before attempting a diff — that's the first signal.
+
+### 2. Confirm the batcher + pass layers match
+
+```sh
+scripts/capture.sh --backend <name>  --scene scene-selector --frames 2 \
+  --trace-passes 2 --trace-batches 2 --trace-log /tmp/<name>-trace.log
+scripts/capture.sh --backend webgpu --scene scene-selector --frames 2 \
+  --trace-passes 2 --trace-batches 2 --trace-log /tmp/webgpu-trace.log
+diff /tmp/<name>-trace.log /tmp/webgpu-trace.log
+```
+
+If `diff` is empty, the pipeline / batcher / sprite-pass layers are
+producing identical command streams — the divergence is inside the
+backend's encoder or below. If `diff` is non-empty, start there — the
+bug is in a higher layer responding to some backend-specific capability
+flag.
+
+### 3. Localize: conformance vs demo-app
+
+Run the backend's conformance suite in isolation:
+
+```sh
+go test ./internal/backend/<name>/... -v -run TestConformance
+```
+
+If conformance passes, the basic render-pass / draw / readback path is
+sound. The demo-app bug is specific to the `future` engine's usage
+pattern (multi-RT composite, AA buffer lifecycle, atlas texture sampling,
+etc.).
+
+### 4. Instrument `ReadScreen`
+
+Add a temporary `fmt.Fprintf` in the backend's `ReadScreen` that prints
+first + center pixel of the staging buffer (gated by an env var so
+it's zero-cost when unset). This cheaply tells you whether the bug is
+in rendering (image contents are wrong) or in readback (image is fine,
+readback is broken). For Vulkan it was the former.
+
+### 5. Isolate offscreen-RT content
+
+The sprite pass composites offscreen RTs onto the screen. Add readbacks
+on each offscreen RT mid-frame via the device's `Texture.ReadPixels` to
+see which target's content is wrong. Common patterns:
+
+- **All white**: composite is sampling without the expected alpha mask
+  or blending config is off (blend factors mapped wrong)
+- **All black**: clear is landing but draws aren't reaching the attachment
+  (pipeline not bound, viewport/scissor wrong, command buffer not
+  recording)
+- **Wrong colors**: channel swizzle mismatch, format mismatch between
+  pipeline and attachment, or swapchain format confusion
+
+### 6. Validation layers (Vulkan-specific, but the principle generalizes)
+
+MoltenVK is permissive. Run the backend under a strict driver with
+validation layers enabled — for Vulkan that's `scripts/capture.sh` run
+from inside the lavapipe container (future-core `make
+docker-vulkan-test`). Every `VUID-*` error is a likely bug MoltenVK
+tolerated.
+
+### 7. Document what you found
+
+Update this file — the backend's "Known Issues" table stays honest
+about what passes, what fails, and which root causes are identified vs
+suspected.
+
+---
+
 ## Overview
 
 All seven backends implement `backend.Device` and `backend.CommandEncoder`.
@@ -89,59 +181,71 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 ## Vulkan
 
 **Package**: `internal/backend/vulkan/`
-**Status**: GPU bindings in progress — clear works, draw pipeline broken
+**Status**: Unit + conformance green; demo-app parity with WebGPU broken
 **Platform**: macOS (MoltenVK), Linux, Windows
 **Bindings**: `internal/vk/vk.go` — 91 purego-bound Vulkan functions
 **Shader**: `internal/shaderc/shaderc.go` — GLSL→SPIR-V via purego libshaderc
-**GPU Tests**: `vulkan_gpu_test.go`
+**GPU Tests**: `vulkan_gpu_test.go`, `internal/backend/conformance`
 
 ### Implemented (GPU mode)
-- Vulkan instance creation with extension enumeration
-- Physical device selection (prefers discrete GPU)
-- Logical device + graphics queue
+- Instance creation with extension enumeration (conditional on availability)
+- Physical device selection, logical device + graphics queue
 - Command pool + command buffer management
-- Swapchain (`VkSwapchainKHR`) with image acquisition and presentation
+- Swapchain with image acquisition/presentation; `VK_ERROR_OUT_OF_DATE_KHR` recovery
 - Surface creation: `vkCreateMetalSurfaceEXT` (macOS), `vkCreateWin32SurfaceKHR` (Windows)
-- Texture creation (`VkImage` + `VkImageView` + `VkDeviceMemory`)
-- Texture upload via staging buffer with layout transitions
-- Texture readback via staging buffer with barriers
-- Buffer creation (`VkBuffer` + `VkDeviceMemory`) with map/unmap
-- Shader compilation: GLSL→SPIR-V via shaderc, `VkShaderModule` creation
-- Uniform storage and binding (float, vec2, vec4, mat4, int)
-- Descriptor set layout with 3 bindings (sampler, fragment UBO, vertex UBO)
-- Descriptor pool allocation and updates
-- Render pass management (begin/end with clear values)
-- Viewport and scissor (dynamic state)
-- Draw and DrawIndexed command recording
-- Fence-based synchronization
-- Default sampler (nearest-neighbor)
-- Frame lifecycle (BeginFrame/EndFrame with swapchain acquire/present)
-
-### Known Issues
-- **`vkCreateGraphicsPipelines` SIGSEGVs** — the full graphics pipeline
-  creation crashes. Likely a struct layout or pointer lifetime issue in the
-  pipeline create info chain. This blocks all sprite/geometry rendering.
-  Clear-only rendering works (background color renders correctly).
-- MoltenVK on macOS: `VK_KHR_portability_enumeration` may not be available;
-  extension availability is now checked before requesting.
+- Texture create / upload / readback via staging, with barriers
+- Idempotent `Texture.Dispose` with DeviceWaitIdle (fixes cross-frame SIGSEGV)
+- Buffer ring-buffer with 1 MB host-visible uniform pool (grown from 16 KB)
+- GLSL→SPIR-V compilation + `VkShaderModule`
+- Descriptor set layout (sampler + fragment UBO + vertex UBO), pool reset in `resetFrame()`
+- Render pass cache with dual Clear/Load variants per render target
+- Per-RT `VkFramebuffer` with D24S8 depth-stencil attachment
+- Graphics pipeline cache keyed by render pass (pipelines are bound at creation)
+- Dynamic viewport / scissor / stencil reference
+- Fence-based BeginFrame/EndFrame lifecycle
+- Conformance suite (12 scenes) passing on soft-delegation path
 
 ### What Works End-to-End
-- Window opens with Vulkan presentation (no GL involvement)
-- Background clear color renders correctly
-- Swapchain acquire/present cycle runs without crashes
-- Shader compilation (GLSL→SPIR-V) succeeds
-- Texture upload/readback via staging buffer
+- Full conformance suite (including fill-rule stencil scenes)
+- `TestVulkanGPUDrawGreenQuad`, `TestVulkanGPUDrawWithSubmit` — unit path round-trips through ReadScreen correctly
+- Single-triangle render + readback: green on black, pixel-level correct
 
-### What Doesn't Work Yet
-- Sprite rendering (blocked by pipeline SIGSEGV)
-- Any geometry drawing (same blocker)
+### Known Issues (demo-app parity)
+These fail the `scripts/parity-diff.sh --test vulkan --ref webgpu` triage
+loop on macOS MoltenVK; captured via `scripts/capture.sh` in a headless
+window. WebGPU and Metal render the same scenes correctly — the divergence
+is Vulkan-specific.
+
+| Scene | Vulkan output | Expected (WebGPU/Metal) | Likely cause |
+|---|---|---|---|
+| `scene-selector` | solid white (255,255,255,255) | tile grid on dark bg | Offscreen-RT → screen composite reads as all-ones |
+| `bubble-pop` | solid black (0,0,0,255) | game bubbles on dark bg | Clear lands; direct screen draws never reach attachment |
+
+In both cases the batcher + sprite-pass layers produce identical command
+streams to WebGPU (verified: `FUTURE_CORE_TRACE_BATCHES` + `TRACE_PASSES`
+diff is empty between backends). The divergence is below the encoder
+trace in the Vulkan-specific submit / layout / sample path.
+
+`ReadScreen` staging buffer debug confirms the all-white content is
+already in `defaultColorImage` post-submit — readback itself is correct,
+something in the render pass / draw / composite path writes white.
+
+Two related items surfaced under lavapipe + Khronos validation layers
+(see follow-up branch): missing `VkImageMemoryBarrier.sType` fields on
+some paths (MoltenVK silently tolerates), and missing
+`VK_BUFFER_USAGE_INDEX_BUFFER_BIT` on index streams. Neither is
+confirmed as the scene-selector root cause but both are on the list.
 
 ### Roadmap
-1. **Fix `vkCreateGraphicsPipelines` SIGSEGV** — debug struct alignment,
-   pointer lifetimes in pipeline create info. This is the critical blocker.
-2. Validate full sprite rendering pipeline end-to-end
-3. Run conformance suite against GPU mode
-4. Implement resize handling (swapchain recreation)
+1. Fix scene-selector white-screen composite (split offscreen RT draw
+   from screen composite, check each image's ReadPixels individually
+   to localize which pass produces wrong content)
+2. Fix bubble-pop direct-to-screen draw (verify pipeline binding state
+   on default framebuffer vs offscreen RT; confirm index buffer usage
+   flags include `INDEX_BUFFER_BIT`)
+3. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
+   (see `docker-compose.yml` for expected failures)
+4. Resize handling (swapchain recreation; partially working)
 5. Multi-frame-in-flight synchronization (currently single-buffered)
 6. Device-local memory for vertex/index buffers (currently host-visible)
 
