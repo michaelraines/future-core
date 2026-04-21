@@ -210,44 +210,79 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 - `TestVulkanGPUDrawGreenQuad`, `TestVulkanGPUDrawWithSubmit` — unit path round-trips through ReadScreen correctly
 - Single-triangle render + readback: green on black, pixel-level correct
 
-### Known Issues (demo-app parity)
-These fail the `scripts/parity-diff.sh --test vulkan --ref webgpu` triage
-loop on macOS MoltenVK; captured via `scripts/capture.sh` in a headless
-window. WebGPU and Metal render the same scenes correctly — the divergence
-is Vulkan-specific.
+### Demo-app parity status
 
-| Scene | Vulkan output | Expected (WebGPU/Metal) | Likely cause |
-|---|---|---|---|
-| `scene-selector` | solid white (255,255,255,255) | tile grid on dark bg | Offscreen-RT → screen composite reads as all-ones |
-| `bubble-pop` | solid black (0,0,0,255) | game bubbles on dark bg | Clear lands; direct screen draws never reach attachment |
+Measured via `scripts/parity-diff.sh --test vulkan --ref webgpu` on
+macOS MoltenVK. Two Vulkan-backend bugs surfaced and were fixed
+incrementally; the remaining deltas are listed as known issues.
 
-In both cases the batcher + sprite-pass layers produce identical command
-streams to WebGPU (verified: `FUTURE_CORE_TRACE_BATCHES` + `TRACE_PASSES`
-diff is empty between backends). The divergence is below the encoder
-trace in the Vulkan-specific submit / layout / sample path.
+| Scene | Vulkan vs WebGPU | Status |
+|---|---|---|
+| `scene-selector` | 0.00% diff | **parity** |
+| `cascade` | matches at sampled points | likely parity |
+| `particle-garden` | matches at sampled points | likely parity |
+| `woodland` | matches at sampled points | likely parity |
+| `bubble-pop` | ~65% diff | game RT renders solid magenta; HUD renders correctly |
+| `rttest` (diagnostic) | matches | **parity** |
 
-`ReadScreen` staging buffer debug confirms the all-white content is
-already in `defaultColorImage` post-submit — readback itself is correct,
-something in the render pass / draw / composite path writes white.
+### Root causes fixed (this series)
 
-Two related items surfaced under lavapipe + Khronos validation layers
-(see follow-up branch): missing `VkImageMemoryBarrier.sType` fields on
-some paths (MoltenVK silently tolerates), and missing
-`VK_BUFFER_USAGE_INDEX_BUFFER_BIT` on index streams. Neither is
-confirmed as the scene-selector root cause but both are on the list.
+1. **`SetTextureFilter` was a no-op** (`internal/backend/vulkan/encoder_gpu.go`).
+   The filter parameter was dropped via `_ = filter` and bindUniforms
+   always used a hard-coded Nearest sampler. Any caller that asked for
+   `FilterLinear` silently got Nearest. Visible effect: the AA buffer
+   downsample composite (which explicitly requests Linear for 2x→1x
+   blending) was effectively 1:4 subsampled, corrupting any RT that
+   used the AA path. `rttest`'s first offscreen RT read as magenta
+   instead of red. Fixed by implementing a `samplerFor(filter)` cache
+   on Device and recording the requested filter on the Encoder, which
+   the descriptor-binding path consults.
+
+2. **Descriptor pool exhausted at 16 sets per frame**
+   (`ensureDescriptorPool`). Every `DrawIndexed` allocates one set
+   via `bindUniforms`, but the pool was sized for 16 and
+   `vk.AllocateDescriptorSet` returned an error that the encoder
+   dropped silently — downstream draws kept the last successful
+   descriptor set bound and sampled from whatever texture it pointed
+   at. On scene-selector (~100 batches/frame) everything past draw 16
+   composited from the same stale fallback texture, giving an
+   all-white screen. Fixed by bumping the pool to 2048 sets (and
+   proportional sampler/UBO counts); the pool is already reset per
+   frame in `resetFrame()` so this is a per-frame budget.
+
+### Remaining: bubble-pop game RT magenta
+
+bubble-pop's 1024×768 game render target samples as solid
+(255, 0, 255, 255). HUD (text, UI panels, controls) renders
+correctly — indicating the draw / composite / sampler paths that
+scene-selector exercises all work; something specific to bubble-pop's
+game RT initialization or first-draw sequence stays broken.
+
+Investigation so far:
+- 11 batches target the game RT in frame 1 (trace), with different
+  sub-RT textures (physics objects) as sources. So draws ARE issued
+  to the target — it's not a "no draws land" issue.
+- Magenta is the debug "missing texture" colour on many IHVs; MoltenVK
+  initialises undefined memory to 0xFF on some paths, and the game
+  RT's first fill might not be landing, leaving the initial contents
+  visible through subsequent composites.
+- Frame count doesn't matter (magenta persists at f=1..20).
+
+Next step: add a per-RT `ReadPixels` diagnostic right after each
+render pass ends to localise whether the game RT's memory is written
+correctly but mis-sampled, or whether the writes themselves aren't
+landing.
 
 ### Roadmap
-1. Fix scene-selector white-screen composite (split offscreen RT draw
-   from screen composite, check each image's ReadPixels individually
-   to localize which pass produces wrong content)
-2. Fix bubble-pop direct-to-screen draw (verify pipeline binding state
-   on default framebuffer vs offscreen RT; confirm index buffer usage
-   flags include `INDEX_BUFFER_BIT`)
-3. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
-   (see `docker-compose.yml` for expected failures)
-4. Resize handling (swapchain recreation; partially working)
-5. Multi-frame-in-flight synchronization (currently single-buffered)
-6. Device-local memory for vertex/index buffers (currently host-visible)
+1. Fix bubble-pop game RT magenta (see above; localise via per-pass
+   ReadPixels)
+2. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
+   (missing `VkImageMemoryBarrier.sType` fields on some paths,
+   missing `VK_BUFFER_USAGE_INDEX_BUFFER_BIT` on index streams —
+   see `docker-compose.yml` for expected failures)
+3. Resize handling (swapchain recreation; partially working)
+4. Multi-frame-in-flight synchronization (currently single-buffered)
+5. Device-local memory for vertex/index buffers (currently host-visible)
 
 ---
 
