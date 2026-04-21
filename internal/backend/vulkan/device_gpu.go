@@ -973,6 +973,26 @@ func (d *Device) ReadScreen(dst []byte) bool {
 	src := unsafe.Slice((*byte)(d.stagingMapped), n)
 	copy(dst[:n], src)
 
+	// FUTURE_CORE_VK_READSCREEN_DUMP=1 prints a 3×3 pixel grid from
+	// the staging buffer to stderr, confirming whether a blank/solid
+	// captured PNG reflects the actual GPU-image contents or a
+	// readback-path bug. This existed as a one-off during the
+	// scene-selector / bubble-pop triage and proved valuable enough
+	// to leave env-gated for future Vulkan rendering investigations.
+	if os.Getenv("FUTURE_CORE_VK_READSCREEN_DUMP") == "1" {
+		for _, yFrac := range []float64{0.25, 0.5, 0.75} {
+			for _, xFrac := range []float64{0.25, 0.5, 0.75} {
+				x := int(float64(d.width) * xFrac)
+				y := int(float64(d.height) * yFrac)
+				off := (y*d.width + x) * 4
+				if off+3 < n {
+					fmt.Fprintf(os.Stderr, "vk.ReadScreen[%d,%d]=(%d,%d,%d,%d)\n",
+						x, y, src[off], src[off+1], src[off+2], src[off+3])
+				}
+			}
+		}
+	}
+
 	vk.FreeCommandBuffers(d.device, d.commandPool, cmd)
 
 	return true
