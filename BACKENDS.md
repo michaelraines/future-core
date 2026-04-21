@@ -250,6 +250,46 @@ incrementally; the remaining deltas are listed as known issues.
    proportional sampler/UBO counts); the pool is already reset per
    frame in `resetFrame()` so this is a per-frame budget.
 
+### Remaining: scene-selector ~7% stochastic empty-frame flicker
+
+Even with the DeviceWaitIdle synchronization fix, ~7% of scene-selector
+captures come back as the bare screen clear + debug HUD (tiles don't
+composite). Observations from triage:
+
+- **Scene-specific**: cascade, particle-garden, bubble-pop HUD don't
+  flicker. Only scene-selector (which allocates 20+ small offscreen
+  RTs for tile previews) does.
+- **Stochastic, not deterministic**: same `--frames 3` invocation gives
+  different results across runs (4/5 content, 1/5 empty, etc.).
+- **Trace-identical**: `FUTURE_CORE_TRACE_BATCHES` / `TRACE_PASSES`
+  diff between a "good" capture and an "empty" capture is zero bytes.
+  Same 98 batches per frame, same render-pass sequence. The divergence
+  is below the encoder trace layer.
+- **ReadScreen buffer confirms**: the `defaultColorImage` memory
+  literally contains the flickered (empty) state on bad frames.
+  Readback is correct; rendering wrote that state.
+- **Narrowed NOT caused by**: sprite atlas (NO_ATLAS shows same rate),
+  AA path (NO_AA makes it *worse*, 35% rate), frame count (all 1..100
+  frames show similar rates).
+- **Not a sync-fence gap**: DeviceWaitIdle in BeginFrame + ReadScreen
+  reduces from ~20% to ~7%, but further sync (stronger subpass deps)
+  doesn't help.
+
+Tried but did NOT fix it:
+  - Stronger subpass dependencies (AllCommands / MemoryRead-Write) —
+    same rate.
+  - Hoisting descriptor-set-layout creation to per-Pipeline from
+    per-render-pass — same rate (mildly worse in one sample).
+  - Disabling the sprite atlas (NO_ATLAS) — same rate.
+  - Disabling AA (NO_AA) — rate *increases* to ~35%.
+
+The remaining flicker is specifically scene-selector (and other
+scenes with many small persistent offscreen RTs). Next candidate
+angles: VkImage allocation ordering and memory aliasing among the
+20+ tile RTs; MoltenVK's descriptor pool reset semantics (whether
+reset actually releases descriptors synchronously on its Metal
+translation layer).
+
 ### Remaining: bubble-pop game RT magenta
 
 bubble-pop's 1024×768 game render target samples as solid
@@ -274,15 +314,18 @@ correctly but mis-sampled, or whether the writes themselves aren't
 landing.
 
 ### Roadmap
-1. Fix bubble-pop game RT magenta (see above; localise via per-pass
-   ReadPixels)
-2. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
+1. Fix scene-selector residual ~7-15% flicker (candidate: VkImage
+   allocation ordering / memory aliasing among many small RTs;
+   investigate MoltenVK descriptor-pool reset semantics)
+2. Fix bubble-pop game RT magenta (per-pass `ReadPixels` to localise
+   whether writes land or sampling is wrong)
+3. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
    (missing `VkImageMemoryBarrier.sType` fields on some paths,
    missing `VK_BUFFER_USAGE_INDEX_BUFFER_BIT` on index streams —
    see `docker-compose.yml` for expected failures)
-3. Resize handling (swapchain recreation; partially working)
-4. Multi-frame-in-flight synchronization (currently single-buffered)
-5. Device-local memory for vertex/index buffers (currently host-visible)
+4. Resize handling (swapchain recreation; partially working)
+5. Multi-frame-in-flight synchronization (currently single-buffered)
+6. Device-local memory for vertex/index buffers (currently host-visible)
 
 ---
 
