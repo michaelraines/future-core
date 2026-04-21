@@ -1,0 +1,91 @@
+# Lavapipe-based Vulkan test services for future-core.
+#
+# Two services share a single image (built from
+# docker/Dockerfile.vulkan):
+#
+#   - vulkan-test         fast PR gate: vet + lint + Vulkan unit tests
+#   - vulkan-conformance  regenerates/validates lavapipe golden images
+#
+# Docker Desktop on macOS can't forward the GPU into Linux containers, so
+# the image uses Mesa's lavapipe (CPU-only Vulkan ICD) plus the Khronos
+# validation layers. That means lavapipe is strict where the Mac's
+# MoltenVK dev loop is permissive — API misuse that MoltenVK silently
+# accepts surfaces here instead.
+#
+# Local usage:
+#     make docker-vulkan-build
+#     make docker-vulkan-test
+#     make docker-vulkan-conformance
+#
+# The native parity harness (Vulkan vs WebGPU) is a planned follow-up:
+# parity-tests/ lives alongside future-core/ in the workspace but isn't
+# under future-core's git tree, so wiring it into a CI-visible service
+# is deferred until parity-tests has a committed home.
+
+services:
+  vulkan-test:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.vulkan
+    image: future-vulkan:latest
+    volumes:
+      - ./:/workspace/future-core:delegated
+      - go-cache:/root/.cache/go-build
+      - go-mod-cache:/root/go/pkg/mod
+    working_dir: /workspace/future-core
+    environment:
+      # Validation layer on (baked into the image; repeated here so
+      # `docker compose run` overrides are obvious). We deliberately do
+      # not set VK_ICD_FILENAMES: the filename is arch-specific
+      # (lvp_icd.x86_64.json on amd64 vs lvp_icd.aarch64.json on arm64).
+      # The Vulkan loader auto-discovers whatever's in
+      # /usr/share/vulkan/icd.d/ instead.
+      VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
+      # Tells TestLavapipeDetection to run and assert
+      # PhysicalDeviceProperties.DeviceName contains "llvmpipe".
+      FUTURE_CORE_EXPECT_LAVAPIPE: "1"
+      # Keep lavapipe goldens isolated from the MoltenVK-generated
+      # testdata/golden/ tree the Mac dev loop writes to. See
+      # conformance.GoldenDir() for the helper. MUST be absolute — go
+      # test uses the package directory as the working directory, so a
+      # relative path would resolve differently per package.
+      FUTURE_CORE_GOLDEN_DIR: /workspace/future-core/internal/backend/vulkan/testdata/golden/lavapipe
+    # Scope for this initial PR: run TestLavapipeDetection only. The
+    # full Vulkan unit suite (TestVulkanGPU*) is deliberately excluded
+    # because lavapipe + Khronos validation layers immediately surface
+    # a backlog of pre-existing bugs in the native Vulkan backend that
+    # MoltenVK on the Mac silently accepts — missing
+    # VkImageMemoryBarrier.sType fields, incorrect VkBuffer usage flags,
+    # missing image-layout transitions, command-buffer recording-state
+    # sequencing, and ultimately a SIGSEGV in CmdDrawIndexed from the
+    # invalid state. Fixing each one lands as its own follow-up PR;
+    # enabling the full suite here would block this infrastructure
+    # change on work it was designed to surface.
+    #
+    # The conformance package tests are NOT run in this container —
+    # they render against the soft rasterizer (the canonical golden
+    # source) and are already covered by the main CI job under
+    # `make TAGS=soft test`. Running them here would pick up the
+    # FUTURE_CORE_GOLDEN_DIR override and write soft-generated goldens
+    # into the lavapipe/ subdir, which is wrong.
+    #
+    # TestLavapipeDetection itself proves the Vulkan loader picks up
+    # the lavapipe ICD and guards the container wiring against silent
+    # ICD drift (see lavapipe_detect_test.go for the full rationale).
+    command: ["bash", "-c", "go test -run TestLavapipeDetection -v ./internal/backend/vulkan/..."]
+
+  vulkan-conformance:
+    extends:
+      service: vulkan-test
+    # Escape-hatch service for local debugging: runs everything with
+    # `-v -count=1` so validation-layer messages and per-test output
+    # are visible. Expected to FAIL on main until the backlog above
+    # is fixed; useful when iterating on individual fixes.
+    command: ["bash", "-c", "go test -count=1 -v ./internal/backend/conformance/... ./internal/backend/vulkan/..."]
+
+volumes:
+  # Named volumes persist Go build + module caches across `docker compose
+  # run` invocations. Nuking them via `docker compose down -v` triggers a
+  # full recompile on the next run.
+  go-cache:
+  go-mod-cache:

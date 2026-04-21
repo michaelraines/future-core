@@ -1,0 +1,72 @@
+# Lavapipe-based Vulkan test harness for future-core.
+#
+# Docker Desktop on macOS can't forward the GPU into Linux containers, so
+# this image uses Mesa's lavapipe (CPU-only Vulkan ICD) plus the Khronos
+# validation layers. That's a feature: lavapipe is strict where MoltenVK
+# on the Mac dev loop is permissive, so render-pass compatibility, buffer
+# alignment, scissor bounds, and layout-transition misuse surface here
+# instead of silently shipping.
+#
+# The same image runs locally (via docker-compose on the Mac) and on
+# GitHub Actions ubuntu-latest — no GPU required in either case.
+FROM golang:1.24-bookworm
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# System packages:
+# - mesa-vulkan-drivers      lavapipe ICD (/usr/share/vulkan/icd.d/lvp_icd.x86_64.json)
+# - libvulkan1               Vulkan loader (libvulkan.so.1)
+# - vulkan-validationlayers  VK_LAYER_KHRONOS_validation JSON + shared libs
+# - vulkan-tools             vulkaninfo for build-time ICD sanity check
+# - libglfw3-dev             engine desktop binaries link GLFW
+# - xvfb                     virtual X display for GLFW during parity runs
+# - curl, ca-certificates    bootstrap NodeSource + golangci-lint installers
+# - git                      required by some go tooling
+# - build-essential          for any CGo we accidentally pull in (audio/, etc. — excluded but safe)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      mesa-vulkan-drivers \
+      libvulkan1 \
+      vulkan-validationlayers \
+      vulkan-tools \
+      libglfw3-dev \
+      xvfb \
+      curl \
+      ca-certificates \
+      git \
+      build-essential \
+      xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node 20 via NodeSource (the parity harness's package.json expects modern node).
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# golangci-lint at the same version CI uses (v2.5.0). The install script
+# drops the binary in $GOPATH/bin which is on PATH via the golang image.
+RUN curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+      | sh -s -- -b /go/bin v2.5.0
+
+# Validation layer env var. Deliberately NOT setting VK_ICD_FILENAMES:
+# the ICD JSON filename is arch-specific (lvp_icd.x86_64.json on amd64,
+# lvp_icd.aarch64.json on arm64), so pinning it breaks one architecture.
+# With VK_ICD_FILENAMES unset the loader scans /usr/share/vulkan/icd.d/
+# automatically and picks up whatever lavapipe JSON is installed for
+# this arch. We rely on the fact that we install only lavapipe — no
+# other Vulkan ICDs are present in this image.
+ENV VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
+
+# Signal to tests (TestLavapipeDetection) that this container expects
+# lavapipe as the physical device. Without this, Mac dev-loop runs that
+# don't use the container still pass the test via skip.
+ENV FUTURE_CORE_EXPECT_LAVAPIPE=1
+
+# Sanity check: confirm lavapipe is reachable through the loader. Fails
+# the image build if Mesa changed the ICD layout or apt didn't install
+# what we expected. Matches "llvmpipe" (the device name lavapipe
+# reports) case-insensitively.
+RUN vulkaninfo --summary 2>&1 | tee /tmp/vulkaninfo.log \
+    && grep -qi "llvmpipe" /tmp/vulkaninfo.log \
+    || (echo "FATAL: lavapipe ICD not detected by Vulkan loader"; cat /tmp/vulkaninfo.log; exit 1)
+
+WORKDIR /workspace/future-core

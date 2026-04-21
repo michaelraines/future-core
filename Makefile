@@ -16,7 +16,7 @@
 #   go 1.24+
 #   golangci-lint (https://golangci-lint.run/welcome/install/)
 
-.PHONY: all ci fmt vet lint test test-race bench build build-android clean fix check-lint cover cover-check cover-html
+.PHONY: all ci fmt vet lint test test-race bench build build-android clean fix check-lint cover cover-check cover-html docker-vulkan-build docker-vulkan-test docker-vulkan-conformance
 
 # Minimum required test coverage per package (percentage).
 COVERAGE_MIN := 80
@@ -198,6 +198,28 @@ clean:
 	@echo "==> Cleaning..."
 	go clean $(PKGS)
 	rm -f cover.out coverage.html
+
+# --- Docker / lavapipe Vulkan testing ---
+#
+# These wrappers invoke docker-compose.yml in this directory, which
+# builds docker/Dockerfile.vulkan and runs the Vulkan test suite against
+# Mesa's lavapipe (CPU-only Vulkan ICD) plus the Khronos validation
+# layers. The container runs identically on the Mac dev loop and on
+# GitHub Actions ubuntu-latest — no GPU required.
+#
+# See docker-compose.yml and docker/Dockerfile.vulkan for details.
+
+docker-vulkan-build:
+	@echo "==> Building lavapipe Vulkan test image..."
+	docker compose build vulkan-test
+
+docker-vulkan-test:
+	@echo "==> Running Vulkan unit + conformance (lavapipe)..."
+	docker compose run --rm vulkan-test
+
+docker-vulkan-conformance:
+	@echo "==> Running Vulkan conformance with verbose output (lavapipe)..."
+	docker compose run --rm vulkan-conformance
 
 # --- Tool Checks ---
 

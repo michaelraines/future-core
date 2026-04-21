@@ -177,10 +177,7 @@ func ComparePixels(actual, expected []byte, width, height, tolerance int) Compar
 		TotalPixels: total,
 	}
 
-	minLen := len(actual)
-	if len(expected) < minLen {
-		minLen = len(expected)
-	}
+	minLen := min(len(actual), len(expected))
 
 	for i := 0; i+3 < minLen; i += 4 {
 		for c := range 4 {
@@ -207,8 +204,24 @@ func ComparePixels(actual, expected []byte, width, height, tolerance int) Compar
 // --- Golden image management ---
 
 // GoldenDir returns the directory for golden images. Defaults to
-// testdata/golden/ relative to the conformance package.
+// testdata/golden/ relative to the running test's working directory
+// (which `go test` sets to the package under test). Can be overridden
+// via the FUTURE_CORE_GOLDEN_DIR environment variable — used by the
+// lavapipe Docker harness to point the Vulkan suite at a separate
+// golden tree so its results don't collide with MoltenVK-generated
+// goldens captured on the Mac dev loop.
+//
+// When FUTURE_CORE_GOLDEN_DIR is set, callers MUST supply an absolute
+// path. `go test` runs each package with a different working
+// directory, so a relative override (e.g. "internal/backend/vulkan/…")
+// would resolve differently when the conformance package test runs
+// (cwd=internal/backend/conformance) vs the Vulkan package test
+// (cwd=internal/backend/vulkan), writing goldens into two separate
+// trees. See docker-compose.yml for the absolute-path usage.
 func GoldenDir() string {
+	if d := os.Getenv("FUTURE_CORE_GOLDEN_DIR"); d != "" {
+		return d
+	}
 	return filepath.Join("testdata", "golden")
 }
 
