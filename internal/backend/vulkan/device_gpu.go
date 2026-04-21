@@ -51,8 +51,16 @@ type Device struct {
 	stagingSize   int
 	stagingMapped unsafe.Pointer
 
-	// Default sampler and 1x1 white texture for fallback binding.
-	defaultSampler vk.Sampler
+	// Sampler cache keyed by filter mode. `SetTextureFilter` triggers
+	// on-demand creation of per-filter samplers; the descriptor binding
+	// path picks the one matching the encoder's current filter state.
+	// Before this cache existed, Vulkan always bound a Nearest sampler
+	// and silently ignored every FilterLinear request — which broke the
+	// AA buffer downsample (supposed to be linear) and any other linear
+	// texture sample through this backend.
+	samplers map[backend.TextureFilter]vk.Sampler
+	// defaultTexture is a 1x1 white texture used as a fallback when no
+	// texture is bound at a draw (e.g. vector fills with src=nil).
 	defaultTexture *Texture
 
 	// Shared uniform buffer for UBO descriptors (persistently mapped).
@@ -86,16 +94,30 @@ type Device struct {
 	renderFinishedSem       vk.Semaphore
 }
 
-// ensureDefaultSampler creates a default nearest-filter sampler if needed.
-func (d *Device) ensureDefaultSampler() vk.Sampler {
-	if d.defaultSampler != 0 {
-		return d.defaultSampler
+// samplerFor returns a cached VkSampler configured for the requested
+// filter mode, creating one on first request. The cache is tiny in
+// practice — the engine only uses Nearest and Linear — but a map keeps
+// this ready for future filter additions (mipmap modes, anisotropy)
+// without reshuffling callers.
+func (d *Device) samplerFor(filter backend.TextureFilter) vk.Sampler {
+	if d.samplers == nil {
+		d.samplers = make(map[backend.TextureFilter]vk.Sampler)
+	}
+	if s, ok := d.samplers[filter]; ok && s != 0 {
+		return s
+	}
+
+	vkFilter := uint32(vk.FilterNearest)
+	vkMipmap := uint32(vk.SamplerMipmapModeNearest)
+	if filter == backend.FilterLinear {
+		vkFilter = uint32(vk.FilterLinear)
+		vkMipmap = uint32(vk.SamplerMipmapModeLinear)
 	}
 	ci := vk.SamplerCreateInfo{
 		SType:        vk.StructureTypeSamplerCreateInfo,
-		MagFilter:    vk.FilterNearest,
-		MinFilter:    vk.FilterNearest,
-		MipmapMode:   vk.SamplerMipmapModeNearest,
+		MagFilter:    vkFilter,
+		MinFilter:    vkFilter,
+		MipmapMode:   vkMipmap,
 		AddressModeU: vk.SamplerAddressModeClampToEdge,
 		AddressModeV: vk.SamplerAddressModeClampToEdge,
 		AddressModeW: vk.SamplerAddressModeClampToEdge,
@@ -105,7 +127,7 @@ func (d *Device) ensureDefaultSampler() vk.Sampler {
 	if err != nil {
 		return 0
 	}
-	d.defaultSampler = s
+	d.samplers[filter] = s
 	return s
 }
 
@@ -823,9 +845,12 @@ func (d *Device) Dispose() {
 	if d.defaultTexture != nil {
 		d.defaultTexture.Dispose()
 	}
-	if d.defaultSampler != 0 {
-		vk.DestroySampler(d.device, d.defaultSampler)
+	for _, s := range d.samplers {
+		if s != 0 {
+			vk.DestroySampler(d.device, s)
+		}
 	}
+	d.samplers = nil
 	if d.uniformBuffer != 0 {
 		vk.UnmapMemory(d.device, d.uniformMemory)
 		vk.DestroyBuffer(d.device, d.uniformBuffer)

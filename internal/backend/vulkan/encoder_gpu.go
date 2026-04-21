@@ -22,10 +22,14 @@ type Encoder struct {
 	currentPipeline   *Pipeline
 	boundTexture      *Texture
 	boundShader       *Shader
-	boundSampler      vk.Sampler
-	descriptorPool    vk.DescriptorPool
-	descriptorSet     vk.DescriptorSet
-	colorWriteOn      bool
+	// boundFilter drives samplerFor() in bindUniforms. Defaults to
+	// FilterNearest (which is also backend.TextureFilter's zero value),
+	// matching the prior always-nearest behaviour. SetTextureFilter
+	// overrides per draw.
+	boundFilter    backend.TextureFilter
+	descriptorPool vk.DescriptorPool
+	descriptorSet  vk.DescriptorSet
+	colorWriteOn   bool
 }
 
 // BeginRenderPass begins a Vulkan render pass.
@@ -214,13 +218,16 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 	e.boundTexture = t
 }
 
-// SetTextureFilter overrides the texture filter for a slot.
+// SetTextureFilter overrides the texture filter for a slot. Vulkan
+// bakes filter state into the VkSampler rather than setting it dynamically,
+// so this records the requested filter and the descriptor-binding path
+// (bindUniforms) looks up the matching cached sampler via
+// Device.samplerFor(). Slot is ignored because today every backend binds
+// a single combined-image-sampler at binding 0 — when a multi-texture
+// path arrives this extends to a per-slot filter array.
 func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
-	// In Vulkan, filter state is part of the sampler. A full implementation
-	// would maintain a sampler cache keyed by filter settings and rebind.
-	// For now, use the default sampler.
 	_ = slot
-	_ = filter
+	e.boundFilter = filter
 }
 
 // SetStencilReference updates the dynamic stencil reference value.
@@ -372,16 +379,17 @@ func (e *Encoder) bindUniforms() {
 	// Build descriptor writes for all 3 bindings.
 	var writes []vk.WriteDescriptorSet
 
-	// Binding 0: combined image sampler.
-	if e.boundSampler == 0 {
-		e.boundSampler = e.dev.ensureDefaultSampler()
-	}
+	// Binding 0: combined image sampler. Picks the sampler matching
+	// the current filter state (Nearest / Linear); without this the
+	// AA buffer downsample composite silently used Nearest even though
+	// the caller asked for Linear.
+	sampler := e.dev.samplerFor(e.boundFilter)
 	tex := e.boundTexture
 	if tex == nil {
 		tex = e.dev.defaultTexture
 	}
 	imgInfo := vk.DescriptorImageInfo{
-		Sampler:     e.boundSampler,
+		Sampler:     sampler,
 		ImageView:   tex.view,
 		ImageLayout: vk.ImageLayoutShaderReadOnlyOptimal,
 	}
