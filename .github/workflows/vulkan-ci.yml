@@ -1,0 +1,50 @@
+name: Vulkan CI (lavapipe)
+
+# Exercises the native Vulkan backend under Mesa's lavapipe ICD inside a
+# Docker container — catches the class of API misuse that MoltenVK on
+# the Mac dev loop silently accepts (render-pass compatibility, buffer
+# alignment, scissor bounds, layout transitions). Runs on stock
+# ubuntu-latest runners, no GPU hardware required.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# Cancel in-progress runs for the same ref when a new one starts.
+# Avoids paying for stacked builds on a force-push.
+concurrency:
+  group: vulkan-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vulkan-lavapipe:
+    name: Vulkan (lavapipe) — Linux
+    runs-on: ubuntu-latest
+    # Defensive cap: lavapipe + validation layers can hang on
+    # pathological driver errors; without this, the default 6-hour
+    # GH Actions timeout would apply. 30 min is comfortable for the
+    # current scope (image build + single smoke test).
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        run: docker compose build vulkan-test
+
+      - name: Unit + conformance
+        run: docker compose run --rm vulkan-test
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulkan-lavapipe-diffs
+          path: internal/backend/vulkan/testdata/golden/lavapipe/diff/
+          if-no-files-found: ignore

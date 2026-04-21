@@ -26,6 +26,10 @@ coverage.html
 # OS artifacts
 .DS_Store
 
+# Dev scratch — component dependency graph dumps (tooling output,
+# not checked in).
+component-graph.dot
+
 # Claude Code local settings (allow skills)
 .claude/*
 !.claude/skills/
