@@ -213,17 +213,48 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 ### Demo-app parity status
 
 Measured via `scripts/parity-diff.sh --test vulkan --ref webgpu` on
-macOS MoltenVK. Two Vulkan-backend bugs surfaced and were fixed
-incrementally; the remaining deltas are listed as known issues.
+macOS MoltenVK against every scene in `future/cmd/driver/prepare/
+providers.go` (22 scenes total, at `--frames 3` with the 5% diff
+threshold the parity runner uses by default).
 
-| Scene | Vulkan vs WebGPU | Status |
+**Passing (14/22):**
+
+| Scene | Vulkan vs WebGPU |
+|---|---|
+| `scene-selector` | 0.00% (with ~7-15% stochastic flicker; see below) |
+| `input-actions-demo` | 0.01% |
+| `pointer-demo` | 0.08% |
+| `last-signal` | 0.11% |
+| `controls-demo` | 0.17% |
+| `keybinding-demo` | 0.22% |
+| `console` | 0.42% |
+| `particle-garden` | 0.87% |
+| `platformer` | 0.97% |
+| `cascade` | 1.61% |
+| `rttest` (diagnostic) | 1.87% |
+| `viewport-platformer` | 2.35% |
+| `orb-drop` | 2.63% |
+| `chipmunk` | 4.10% |
+
+**Failing (8/22):**
+
+| Scene | Diff | Symptom |
 |---|---|---|
-| `scene-selector` | 0.00% diff | **parity** |
-| `cascade` | matches at sampled points | likely parity |
-| `particle-garden` | matches at sampled points | likely parity |
-| `woodland` | matches at sampled points | likely parity |
-| `bubble-pop` | ~65% diff | game RT renders solid magenta; HUD renders correctly |
-| `rttest` (diagnostic) | matches | **parity** |
+| `sprite-demo` | 5.57% | WebGPU side renders blank (Vulkan is correct here) |
+| `vector-showcase` | 17.77% | 2 panels empty, 1 panel magenta (same bug class) |
+| `responsive-layout` | 30.69% | Layout responds differently on Vulkan |
+| `frame-layout` | 43.42% | Investigation needed |
+| `bubble-pop` | 64.93% | Game RT renders solid magenta; HUD parity |
+| `isometric-combat` | 66.08% | Investigation needed |
+| `deep-cartography` | 68.96% | Investigation needed |
+| `lighting` | 68.80% | Shader-driven lightmap renders with wrong tint |
+| `woodland` | 99.91% | Renders whole-scene vs WebGPU's preview tiles |
+
+**Aggregate:** 14/22 passing (64%) at the 5% diff threshold. Two of
+the "failures" (sprite-demo, vector-showcase) have Vulkan rendering
+the **correct** content while WebGPU renders blank/different — the
+parity runner doesn't distinguish "Vulkan broken" from "WebGPU
+broken", it just measures difference.
 
 ### Root causes fixed (this series)
 
