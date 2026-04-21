@@ -19,6 +19,7 @@ type Encoder struct {
 	// Current render pass state.
 	inRenderPass      bool
 	currentRenderPass vk.RenderPass
+	currentRenderTarget *RenderTarget // nil for the default/screen target
 	currentPipeline   *Pipeline
 	boundTexture      *Texture
 	boundShader       *Shader
@@ -68,6 +69,7 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 
 	if desc.Target != nil {
 		if rt, ok := desc.Target.(*RenderTarget); ok {
+			e.currentRenderTarget = rt
 			w = uint32(rt.w)
 			h = uint32(rt.h)
 			// Pick the render-pass variant matching the load action. Vulkan
@@ -144,11 +146,50 @@ func makeDepthStencilClearValue(depth float32, stencil uint32) vk.ClearValue {
 
 // EndRenderPass ends the current render pass.
 func (e *Encoder) EndRenderPass() {
-	if e.inRenderPass {
-		vk.CmdEndRenderPass(e.cmd)
-		e.inRenderPass = false
-		e.currentRenderPass = 0
+	if !e.inRenderPass {
+		return
 	}
+	vk.CmdEndRenderPass(e.cmd)
+	e.inRenderPass = false
+	e.currentRenderPass = 0
+
+	// Explicit memory barrier on the just-rendered RT color image,
+	// forcing color-attachment writes visible to subsequent
+	// fragment-shader reads. The render pass's 0→EXTERNAL subpass
+	// dependency already declares this chain (see
+	// createOffscreenRenderPass), but MoltenVK on macOS intermittently
+	// does not flush the implicit transition before the next render
+	// pass samples the image — manifesting as scene-selector tiles
+	// disappearing on alternating frames. Latency (e.g. stderr
+	// tracing) masks the race, which is the giveaway that the
+	// subpass-dep promise isn't always honoured on Metal.
+	//
+	// The image is already in ShaderReadOnlyOptimal via the render
+	// pass FinalLayout, so oldLayout == newLayout — no layout
+	// transition, just the memory-dependency side of the barrier.
+	// Screen targets are presented, not sampled, and don't need this.
+	if e.currentRenderTarget != nil && e.currentRenderTarget.colorTex != nil {
+		barriers := []vk.ImageMemoryBarrier{{
+			SType:               vk.StructureTypeImageMemoryBarrier,
+			SrcAccessMask:       vk.AccessColorAttachmentWrite,
+			DstAccessMask:       vk.AccessShaderRead,
+			OldLayout:           vk.ImageLayoutShaderReadOnlyOptimal,
+			NewLayout:           vk.ImageLayoutShaderReadOnlyOptimal,
+			SrcQueueFamilyIndex: vk.QueueFamilyIgnored,
+			DstQueueFamilyIndex: vk.QueueFamilyIgnored,
+			Image_:              e.currentRenderTarget.colorTex.image,
+			SubresAspectMask:    vk.ImageAspectColor,
+			SubresLevelCount:    1,
+			SubresLayerCount:    1,
+		}}
+		vk.CmdPipelineBarrier(e.cmd,
+			vk.PipelineStageColorAttachmentOutput,
+			vk.PipelineStageFragmentShader,
+			barriers)
+		runtime.KeepAlive(barriers)
+	}
+	e.currentRenderTarget = nil
+
 	// NOTE: Do NOT destroy the descriptor pool here! The command buffer
 	// hasn't been submitted yet. Destroying the pool would free the
 	// descriptor sets while the GPU still references them. Cleanup
