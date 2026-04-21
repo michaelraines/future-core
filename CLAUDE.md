@@ -102,6 +102,7 @@ comparison.
 | `FUTURE_CORE_NO_AA=1` | (image.go) | Bypasses `drawTrianglesAA` entirely, routing all `AntiAlias=true` draws through the aliased path. Useful for confirming whether a visual bug is caused by the AA buffer lifecycle. |
 | `FUTURE_CORE_AA_SCALE=1` | (image.go) | Uses 1x AA buffers instead of 2x. Keeps the AA pipeline active but eliminates supersample quality. Isolates buffer-size-related issues. |
 | `FUTURE_CORE_NO_ATLAS=1` | (sprite_atlas.go) | Disables sprite atlas packing. Each `NewImageFromImage` gets its own texture. Isolates atlas-related UV or texture-sharing bugs. |
+| `FUTURE_CORE_VK_READSCREEN_DUMP=1` | `internal/backend/vulkan/device_gpu.go` | Vulkan-only. After every `ReadScreen`, prints 9 pixel values (3x3 grid across the captured image) to stderr. Answers "is the captured PNG all-white because the GPU image is actually all-white, or because readback is broken?" — which was the crux of the scene-selector triage. Free when unset; zero allocations in the hot path. |
 
 Typical debugging session — capture both traces for one frame of the
 `rttest` repro program:

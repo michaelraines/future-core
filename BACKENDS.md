@@ -210,41 +210,150 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 - `TestVulkanGPUDrawGreenQuad`, `TestVulkanGPUDrawWithSubmit` — unit path round-trips through ReadScreen correctly
 - Single-triangle render + readback: green on black, pixel-level correct
 
-### Known Issues (demo-app parity)
-These fail the `scripts/parity-diff.sh --test vulkan --ref webgpu` triage
-loop on macOS MoltenVK; captured via `scripts/capture.sh` in a headless
-window. WebGPU and Metal render the same scenes correctly — the divergence
-is Vulkan-specific.
+### Demo-app parity status
 
-| Scene | Vulkan output | Expected (WebGPU/Metal) | Likely cause |
-|---|---|---|---|
-| `scene-selector` | solid white (255,255,255,255) | tile grid on dark bg | Offscreen-RT → screen composite reads as all-ones |
-| `bubble-pop` | solid black (0,0,0,255) | game bubbles on dark bg | Clear lands; direct screen draws never reach attachment |
+Measured via `scripts/parity-diff.sh --test vulkan --ref webgpu` on
+macOS MoltenVK against every scene in `future/cmd/driver/prepare/
+providers.go` (22 scenes total, at `--frames 3` with the 5% diff
+threshold the parity runner uses by default).
 
-In both cases the batcher + sprite-pass layers produce identical command
-streams to WebGPU (verified: `FUTURE_CORE_TRACE_BATCHES` + `TRACE_PASSES`
-diff is empty between backends). The divergence is below the encoder
-trace in the Vulkan-specific submit / layout / sample path.
+**Passing (14/22):**
 
-`ReadScreen` staging buffer debug confirms the all-white content is
-already in `defaultColorImage` post-submit — readback itself is correct,
-something in the render pass / draw / composite path writes white.
+| Scene | Vulkan vs WebGPU |
+|---|---|
+| `scene-selector` | 0.00% (with ~7-15% stochastic flicker; see below) |
+| `input-actions-demo` | 0.01% |
+| `pointer-demo` | 0.08% |
+| `last-signal` | 0.11% |
+| `controls-demo` | 0.17% |
+| `keybinding-demo` | 0.22% |
+| `console` | 0.42% |
+| `particle-garden` | 0.87% |
+| `platformer` | 0.97% |
+| `cascade` | 1.61% |
+| `rttest` (diagnostic) | 1.87% |
+| `viewport-platformer` | 2.35% |
+| `orb-drop` | 2.63% |
+| `chipmunk` | 4.10% |
 
-Two related items surfaced under lavapipe + Khronos validation layers
-(see follow-up branch): missing `VkImageMemoryBarrier.sType` fields on
-some paths (MoltenVK silently tolerates), and missing
-`VK_BUFFER_USAGE_INDEX_BUFFER_BIT` on index streams. Neither is
-confirmed as the scene-selector root cause but both are on the list.
+**Failing (8/22):**
+
+| Scene | Diff | Symptom |
+|---|---|---|
+| `sprite-demo` | 5.57% | WebGPU side renders blank (Vulkan is correct here) |
+| `vector-showcase` | 17.77% | 2 panels empty, 1 panel magenta (same bug class) |
+| `responsive-layout` | 30.69% | Layout responds differently on Vulkan |
+| `frame-layout` | 43.42% | Investigation needed |
+| `bubble-pop` | 64.93% | Game RT renders solid magenta; HUD parity |
+| `isometric-combat` | 66.08% | Investigation needed |
+| `deep-cartography` | 68.96% | Investigation needed |
+| `lighting` | 68.80% | Shader-driven lightmap renders with wrong tint |
+| `woodland` | 99.91% | Renders whole-scene vs WebGPU's preview tiles |
+
+**Aggregate:** 14/22 passing (64%) at the 5% diff threshold. Two of
+the "failures" (sprite-demo, vector-showcase) have Vulkan rendering
+the **correct** content while WebGPU renders blank/different — the
+parity runner doesn't distinguish "Vulkan broken" from "WebGPU
+broken", it just measures difference.
+
+### Root causes fixed (this series)
+
+1. **`SetTextureFilter` was a no-op** (`internal/backend/vulkan/encoder_gpu.go`).
+   The filter parameter was dropped via `_ = filter` and bindUniforms
+   always used a hard-coded Nearest sampler. Any caller that asked for
+   `FilterLinear` silently got Nearest. Visible effect: the AA buffer
+   downsample composite (which explicitly requests Linear for 2x→1x
+   blending) was effectively 1:4 subsampled, corrupting any RT that
+   used the AA path. `rttest`'s first offscreen RT read as magenta
+   instead of red. Fixed by implementing a `samplerFor(filter)` cache
+   on Device and recording the requested filter on the Encoder, which
+   the descriptor-binding path consults.
+
+2. **Descriptor pool exhausted at 16 sets per frame**
+   (`ensureDescriptorPool`). Every `DrawIndexed` allocates one set
+   via `bindUniforms`, but the pool was sized for 16 and
+   `vk.AllocateDescriptorSet` returned an error that the encoder
+   dropped silently — downstream draws kept the last successful
+   descriptor set bound and sampled from whatever texture it pointed
+   at. On scene-selector (~100 batches/frame) everything past draw 16
+   composited from the same stale fallback texture, giving an
+   all-white screen. Fixed by bumping the pool to 2048 sets (and
+   proportional sampler/UBO counts); the pool is already reset per
+   frame in `resetFrame()` so this is a per-frame budget.
+
+### Remaining: scene-selector ~7% stochastic empty-frame flicker
+
+Even with the DeviceWaitIdle synchronization fix, ~7% of scene-selector
+captures come back as the bare screen clear + debug HUD (tiles don't
+composite). Observations from triage:
+
+- **Scene-specific**: cascade, particle-garden, bubble-pop HUD don't
+  flicker. Only scene-selector (which allocates 20+ small offscreen
+  RTs for tile previews) does.
+- **Stochastic, not deterministic**: same `--frames 3` invocation gives
+  different results across runs (4/5 content, 1/5 empty, etc.).
+- **Trace-identical**: `FUTURE_CORE_TRACE_BATCHES` / `TRACE_PASSES`
+  diff between a "good" capture and an "empty" capture is zero bytes.
+  Same 98 batches per frame, same render-pass sequence. The divergence
+  is below the encoder trace layer.
+- **ReadScreen buffer confirms**: the `defaultColorImage` memory
+  literally contains the flickered (empty) state on bad frames.
+  Readback is correct; rendering wrote that state.
+- **Narrowed NOT caused by**: sprite atlas (NO_ATLAS shows same rate),
+  AA path (NO_AA makes it *worse*, 35% rate), frame count (all 1..100
+  frames show similar rates).
+- **Not a sync-fence gap**: DeviceWaitIdle in BeginFrame + ReadScreen
+  reduces from ~20% to ~7%, but further sync (stronger subpass deps)
+  doesn't help.
+
+Tried but did NOT fix it:
+  - Stronger subpass dependencies (AllCommands / MemoryRead-Write) —
+    same rate.
+  - Hoisting descriptor-set-layout creation to per-Pipeline from
+    per-render-pass — same rate (mildly worse in one sample).
+  - Disabling the sprite atlas (NO_ATLAS) — same rate.
+  - Disabling AA (NO_AA) — rate *increases* to ~35%.
+
+The remaining flicker is specifically scene-selector (and other
+scenes with many small persistent offscreen RTs). Next candidate
+angles: VkImage allocation ordering and memory aliasing among the
+20+ tile RTs; MoltenVK's descriptor pool reset semantics (whether
+reset actually releases descriptors synchronously on its Metal
+translation layer).
+
+### Remaining: bubble-pop game RT magenta
+
+bubble-pop's 1024×768 game render target samples as solid
+(255, 0, 255, 255). HUD (text, UI panels, controls) renders
+correctly — indicating the draw / composite / sampler paths that
+scene-selector exercises all work; something specific to bubble-pop's
+game RT initialization or first-draw sequence stays broken.
+
+Investigation so far:
+- 11 batches target the game RT in frame 1 (trace), with different
+  sub-RT textures (physics objects) as sources. So draws ARE issued
+  to the target — it's not a "no draws land" issue.
+- Magenta is the debug "missing texture" colour on many IHVs; MoltenVK
+  initialises undefined memory to 0xFF on some paths, and the game
+  RT's first fill might not be landing, leaving the initial contents
+  visible through subsequent composites.
+- Frame count doesn't matter (magenta persists at f=1..20).
+
+Next step: add a per-RT `ReadPixels` diagnostic right after each
+render pass ends to localise whether the game RT's memory is written
+correctly but mis-sampled, or whether the writes themselves aren't
+landing.
 
 ### Roadmap
-1. Fix scene-selector white-screen composite (split offscreen RT draw
-   from screen composite, check each image's ReadPixels individually
-   to localize which pass produces wrong content)
-2. Fix bubble-pop direct-to-screen draw (verify pipeline binding state
-   on default framebuffer vs offscreen RT; confirm index buffer usage
-   flags include `INDEX_BUFFER_BIT`)
+1. Fix scene-selector residual ~7-15% flicker (candidate: VkImage
+   allocation ordering / memory aliasing among many small RTs;
+   investigate MoltenVK descriptor-pool reset semantics)
+2. Fix bubble-pop game RT magenta (per-pass `ReadPixels` to localise
+   whether writes land or sampling is wrong)
 3. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
-   (see `docker-compose.yml` for expected failures)
+   (missing `VkImageMemoryBarrier.sType` fields on some paths,
+   missing `VK_BUFFER_USAGE_INDEX_BUFFER_BIT` on index streams —
+   see `docker-compose.yml` for expected failures)
 4. Resize handling (swapchain recreation; partially working)
 5. Multi-frame-in-flight synchronization (currently single-buffered)
 6. Device-local memory for vertex/index buffers (currently host-visible)

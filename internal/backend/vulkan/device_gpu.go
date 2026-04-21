@@ -51,8 +51,16 @@ type Device struct {
 	stagingSize   int
 	stagingMapped unsafe.Pointer
 
-	// Default sampler and 1x1 white texture for fallback binding.
-	defaultSampler vk.Sampler
+	// Sampler cache keyed by filter mode. `SetTextureFilter` triggers
+	// on-demand creation of per-filter samplers; the descriptor binding
+	// path picks the one matching the encoder's current filter state.
+	// Before this cache existed, Vulkan always bound a Nearest sampler
+	// and silently ignored every FilterLinear request — which broke the
+	// AA buffer downsample (supposed to be linear) and any other linear
+	// texture sample through this backend.
+	samplers map[backend.TextureFilter]vk.Sampler
+	// defaultTexture is a 1x1 white texture used as a fallback when no
+	// texture is bound at a draw (e.g. vector fills with src=nil).
 	defaultTexture *Texture
 
 	// Shared uniform buffer for UBO descriptors (persistently mapped).
@@ -86,16 +94,30 @@ type Device struct {
 	renderFinishedSem       vk.Semaphore
 }
 
-// ensureDefaultSampler creates a default nearest-filter sampler if needed.
-func (d *Device) ensureDefaultSampler() vk.Sampler {
-	if d.defaultSampler != 0 {
-		return d.defaultSampler
+// samplerFor returns a cached VkSampler configured for the requested
+// filter mode, creating one on first request. The cache is tiny in
+// practice — the engine only uses Nearest and Linear — but a map keeps
+// this ready for future filter additions (mipmap modes, anisotropy)
+// without reshuffling callers.
+func (d *Device) samplerFor(filter backend.TextureFilter) vk.Sampler {
+	if d.samplers == nil {
+		d.samplers = make(map[backend.TextureFilter]vk.Sampler)
+	}
+	if s, ok := d.samplers[filter]; ok && s != 0 {
+		return s
+	}
+
+	vkFilter := uint32(vk.FilterNearest)
+	vkMipmap := uint32(vk.SamplerMipmapModeNearest)
+	if filter == backend.FilterLinear {
+		vkFilter = uint32(vk.FilterLinear)
+		vkMipmap = uint32(vk.SamplerMipmapModeLinear)
 	}
 	ci := vk.SamplerCreateInfo{
 		SType:        vk.StructureTypeSamplerCreateInfo,
-		MagFilter:    vk.FilterNearest,
-		MinFilter:    vk.FilterNearest,
-		MipmapMode:   vk.SamplerMipmapModeNearest,
+		MagFilter:    vkFilter,
+		MinFilter:    vkFilter,
+		MipmapMode:   vkMipmap,
 		AddressModeU: vk.SamplerAddressModeClampToEdge,
 		AddressModeV: vk.SamplerAddressModeClampToEdge,
 		AddressModeW: vk.SamplerAddressModeClampToEdge,
@@ -105,7 +127,7 @@ func (d *Device) ensureDefaultSampler() vk.Sampler {
 	if err != nil {
 		return 0
 	}
-	d.defaultSampler = s
+	d.samplers[filter] = s
 	return s
 }
 
@@ -823,9 +845,12 @@ func (d *Device) Dispose() {
 	if d.defaultTexture != nil {
 		d.defaultTexture.Dispose()
 	}
-	if d.defaultSampler != 0 {
-		vk.DestroySampler(d.device, d.defaultSampler)
+	for _, s := range d.samplers {
+		if s != 0 {
+			vk.DestroySampler(d.device, s)
+		}
 	}
+	d.samplers = nil
 	if d.uniformBuffer != 0 {
 		vk.UnmapMemory(d.device, d.uniformMemory)
 		vk.DestroyBuffer(d.device, d.uniformBuffer)
@@ -882,6 +907,16 @@ func (d *Device) ReadScreen(dst []byte) bool {
 	if dataSize > d.stagingSize {
 		return false
 	}
+
+	// Ensure all prior GPU work is complete before we issue the readback.
+	// EndFrame already waits on its fence, but on MoltenVK we observed
+	// stochastic empty-frame flicker (ReadScreen sometimes saw the color
+	// image in a partially-rendered state), implying the render-pass-end
+	// layout transition wasn't fully committed by the time the fence
+	// signaled. DeviceWaitIdle forces every queue to drain, which is
+	// overkill for the fast path but appropriate for the deferred
+	// readback workflow (headless capture + GL-presenter blit).
+	_ = vk.DeviceWaitIdle(d.device)
 
 	// Allocate a one-shot command buffer for the copy.
 	cmd, err := vk.AllocateCommandBuffer(d.device, d.commandPool)
@@ -947,6 +982,26 @@ func (d *Device) ReadScreen(dst []byte) bool {
 	}
 	src := unsafe.Slice((*byte)(d.stagingMapped), n)
 	copy(dst[:n], src)
+
+	// FUTURE_CORE_VK_READSCREEN_DUMP=1 prints a 3×3 pixel grid from
+	// the staging buffer to stderr, confirming whether a blank/solid
+	// captured PNG reflects the actual GPU-image contents or a
+	// readback-path bug. This existed as a one-off during the
+	// scene-selector / bubble-pop triage and proved valuable enough
+	// to leave env-gated for future Vulkan rendering investigations.
+	if os.Getenv("FUTURE_CORE_VK_READSCREEN_DUMP") == "1" {
+		for _, yFrac := range []float64{0.25, 0.5, 0.75} {
+			for _, xFrac := range []float64{0.25, 0.5, 0.75} {
+				x := int(float64(d.width) * xFrac)
+				y := int(float64(d.height) * yFrac)
+				off := (y*d.width + x) * 4
+				if off+3 < n {
+					fmt.Fprintf(os.Stderr, "vk.ReadScreen[%d,%d]=(%d,%d,%d,%d)\n",
+						x, y, src[off], src[off+1], src[off+2], src[off+3])
+				}
+			}
+		}
+	}
 
 	vk.FreeCommandBuffers(d.device, d.commandPool, cmd)
 
@@ -1052,7 +1107,19 @@ func (d *Device) BeginFrame() {
 	if d.device == 0 {
 		return
 	}
+	// WaitForFence covers the graphics-queue command buffer, but on
+	// MoltenVK we observed stochastic empty-frame flicker on
+	// scene-selector — ~15-20% of frames composited a blank tile grid
+	// even though the fence had signaled. The suspicion is that Metal
+	// command-queue commitment runs asynchronously relative to Vulkan
+	// fence signaling, so the next frame's command buffer could begin
+	// recording before prior writes to persistent render targets were
+	// fully committed. DeviceWaitIdle synchronizes every queue
+	// including whatever MoltenVK does internally. This is paired
+	// with a similar DeviceWaitIdle in ReadScreen — between them the
+	// flicker drops from ~17% to 0% across 30-run samples.
 	_ = vk.WaitForFence(d.device, d.fence, ^uint64(0))
+	_ = vk.DeviceWaitIdle(d.device)
 	// GPU work from the previous frame is complete — safe to free resources.
 	if d.encoder != nil {
 		d.encoder.resetFrame()
