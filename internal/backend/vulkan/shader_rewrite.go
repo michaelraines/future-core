@@ -42,21 +42,56 @@ import "strings"
 // substitution is wired into the WGSL/MSL translators too. Until
 // then, this is a Vulkan-local workaround scoped to one function.
 // Known remaining bug (2026-04-22): on the lighting-demo scene, even
-// after this rewrite, the custom Kage shader's per-fragment
-// `dist = distance(dstPos.xy, Center)` evaluates as though every
-// fragment shared the same `dstPos` (i.e. `dist > Radius` fires for
-// every fragment of every light quad). Probes confirm the Center /
-// Radius uniforms arrive at the correct SPIR-V offsets and that the
-// rewrite *is* applied to every point_light / spot_light fragment
-// source. WOODLAND does render correctly (small firefly quads show
-// the expected 40 lit pixels matching WebGPU byte-for-byte) — the
-// divergence is specific to the lighting-demo's larger quads + the
-// shadow-stamping sequence. Narrowed to: not uniform layout, not
-// vertex-input bindings, not pipeline-pair mis-wiring, not the
-// extra vDstPos varying. Next investigation angle (not done here):
-// step into MoltenVK's SPIR-V→MSL transpilation via the MoltenVK
-// dumper, or run lavapipe+validation on the same workload in the
-// Docker container to isolate MoltenVK-specific vs spec-level.
+// after this rewrite, the fragment shader's `gl_FragCoord.xy` reads
+// as a near-constant value at every fragment of every custom-shader
+// (Kage) light-quad draw. Narrowed quantitatively:
+//
+//   - range-probe shader (vec4 color by dstPos.x bucket):
+//     every fragment's `dstPos.x ∈ [1020, 1024)` on Vulkan+MoltenVK.
+//     The RT is 1024 wide, so gl_FragCoord.x is at or very near the
+//     right edge for every covered pixel.
+//   - on WebGPU (no rewrite; uses `vec4 dstPos = vDstPos`) the
+//     distribution is broad across all buckets — vDstPos interpolates
+//     correctly.
+//   - woodland parity is 0.03% vs WebGPU (essentially byte-identical);
+//     the bug is specific to the lighting demo's larger-radius quads,
+//     not to the Kage pipeline path in general.
+//
+// Ruled out:
+//   - Uniform layout. Probes + spirv-dis confirm byte-for-byte
+//     correct offsets for Center/LightColor/Radius/Intensity.
+//   - Vertex input bindings, stride, attributes. Match sprite pipe.
+//   - Pipeline module pairing. Trace confirms custom Kage vertex
+//     always pairs with its matching custom Kage fragment.
+//   - Retina 2x physical scaling. Dividing gl_FragCoord.xy by 2
+//     didn't shift the constant value — it's still at ~1023.
+//   - Dropping the unused vDstPos varying entirely (to match the
+//     sprite pipeline's two-varying interface). No change.
+//   - Forcing the non-shadow BlendLighter branch (bypassing
+//     stampShadowAlpha). No change.
+//
+// What the MSL looks like (from MVK_CONFIG_LOG_LEVEL=4 dump):
+//   fragment main0_out main0(main0_in in [[stage_in]],
+//                            constant spvDescriptorSetBuffer0& ...,
+//                            float4 gl_FragCoord [[position]])
+//   {
+//       float4 dstPos = float4(gl_FragCoord.xy, 0.0, 1.0);
+//       ...
+//   }
+// The `[[position]]` builtin should give per-fragment framebuffer
+// coords. For this specific pipeline under specific scene state,
+// it returns a primitive-constant value near (RT.width-1, y).
+//
+// Next investigation angle: step into whether MVK pipeline state
+// leaks across the stampShadowAlpha DrawImage→custom-shader
+// transition in a way that clobbers `[[position]]` interpolation
+// (a Metal-side primitive-flat interpolation getting set somewhere).
+// Or run lavapipe + validation layers via docker-compose to isolate
+// MoltenVK-specific vs spec-level Vulkan bug.
+//
+// The rewrite below is the minimum that makes the multiply_dither
+// full-screen compositing path correct; it's necessary but not
+// sufficient for the lighting demo.
 func rewriteVDstPosToFragCoord(src string) string {
 	src = strings.Replace(src,
 		"vec4 dstPos = vDstPos;",
