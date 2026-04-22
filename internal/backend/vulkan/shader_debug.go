@@ -91,6 +91,19 @@ func shortHash(s string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// dumpSPIRV saves the compiled SPIR-V bytes alongside its source GLSL
+// (if FUTURE_CORE_VK_DUMP_SHADERS is set). Hash is the same as the
+// source so you can `spirv-dis <hash>.<stage>.spv` on it.
+func dumpSPIRV(src string, spirv []byte, stage string) {
+	if vkShaderDumpDir == "" || len(spirv) == 0 {
+		return
+	}
+	sum := sha1.Sum([]byte(src))
+	hash := hex.EncodeToString(sum[:])[:12]
+	path := filepath.Join(vkShaderDumpDir, hash+"."+stage+".spv")
+	_ = os.WriteFile(path, spirv, 0o600)
+}
+
 // tracePipelineBind logs each SetPipeline call (if the env var is set)
 // with the bound pipeline's VkPipeline handle + vertex/fragment hashes
 // so you can cross-reference back against tracePipelineCreate output.
@@ -101,6 +114,20 @@ func tracePipelineBind(vertSrc, fragSrc string, pipelineHandle uint64) {
 	}
 	fmt.Fprintf(os.Stderr, "vulkan: pipeline bind pip=%d vert=%s frag=%s\n",
 		pipelineHandle, shortHash(vertSrc), shortHash(fragSrc))
+}
+
+// traceVertexBind: dumps each CmdBindVertexBuffer call's offset so we
+// can cross-reference what region of the big VBO is being read at
+// each draw. When the batcher gets out of sync with shader state (the
+// diagnostic for the point-light varying bug), the offsets tell us
+// whether the draw is reading vertex data from the right region at
+// all. Gated on the same FUTURE_CORE_VK_TRACE_PIPELINES env var.
+func traceVertexBind(slot int, bufferHandle, offset uint64) {
+	if !vkTracePipelines {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "vulkan: vbuf bind slot=%d buf=%d offset=%d\n",
+		slot, bufferHandle, offset)
 }
 
 // FUTURE_CORE_VK_UNIFORM_PROBE=NAME logs the packed bytes written for the

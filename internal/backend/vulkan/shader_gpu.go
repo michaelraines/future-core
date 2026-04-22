@@ -87,6 +87,7 @@ func (s *Shader) compile() error {
 			s.compileError = fmt.Errorf("vulkan: fragment GLSL→SPIR-V: %w", err)
 			return s.compileError
 		}
+		dumpSPIRV(fragSrc, spirv, "frag")
 		info := vk.ShaderModuleCreateInfo{
 			SType:    vk.StructureTypeShaderModuleCreateInfo,
 			CodeSize: uint64(len(spirv)),

@@ -237,6 +237,7 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 	if b, ok := buf.(*Buffer); ok {
 		vk.CmdBindVertexBuffer(e.cmd, uint32(slot), b.buffer, uint64(b.lastWriteOffset))
+		traceVertexBind(slot, uint64(b.buffer), uint64(b.lastWriteOffset))
 	}
 }
 
