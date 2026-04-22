@@ -41,25 +41,26 @@ import "strings"
 // TODO: fold this into the Kage emitter itself once the equivalent
 // substitution is wired into the WGSL/MSL translators too. Until
 // then, this is a Vulkan-local workaround scoped to one function.
+// Known remaining bug (2026-04-22): on the lighting-demo scene, even
+// after this rewrite, the custom Kage shader's per-fragment
+// `dist = distance(dstPos.xy, Center)` evaluates as though every
+// fragment shared the same `dstPos` (i.e. `dist > Radius` fires for
+// every fragment of every light quad). Probes confirm the Center /
+// Radius uniforms arrive at the correct SPIR-V offsets and that the
+// rewrite *is* applied to every point_light / spot_light fragment
+// source. WOODLAND does render correctly (small firefly quads show
+// the expected 40 lit pixels matching WebGPU byte-for-byte) — the
+// divergence is specific to the lighting-demo's larger quads + the
+// shadow-stamping sequence. Narrowed to: not uniform layout, not
+// vertex-input bindings, not pipeline-pair mis-wiring, not the
+// extra vDstPos varying. Next investigation angle (not done here):
+// step into MoltenVK's SPIR-V→MSL transpilation via the MoltenVK
+// dumper, or run lavapipe+validation on the same workload in the
+// Docker container to isolate MoltenVK-specific vs spec-level.
 func rewriteVDstPosToFragCoord(src string) string {
-	// dstPos: pixel-space fragment coordinate in the framebuffer.
-	// Semantically identical to gl_FragCoord.xy on Vulkan for any
-	// draw whose projection maps vertex pos 1:1 to framebuffer — the
-	// sprite pass's common case, both for screen and offscreen RTs.
 	src = strings.Replace(src,
 		"vec4 dstPos = vDstPos;",
 		"vec4 dstPos = vec4(gl_FragCoord.xy, 0.0, 1.0);", 1)
-	// srcPos: pixel-space source-texture coordinate. For Kage shaders
-	// whose source texture is framebuffer-sized and framebuffer-aligned
-	// (the lightmap-apply path, bloom prefilter, any "pipeline post-
-	// process over same-size texture"), srcPos == gl_FragCoord.xy.
-	// Draws that transform the source sampling (e.g. scaled blits with
-	// non-identity tex coords) would read the wrong region if this
-	// substitution runs — we'd need to gate the rewrite on the pipeline
-	// intent if that case appears. No current Kage shader hits it, and
-	// without this substitution the lightmap-compose shader collapses
-	// to one sampled pixel on Vulkan (the varying bug this file works
-	// around).
 	src = strings.Replace(src,
 		"vec2 srcPos = vTexCoord;",
 		"vec2 srcPos = gl_FragCoord.xy;", 1)
