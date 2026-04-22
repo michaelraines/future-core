@@ -6,21 +6,13 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"regexp"
 	"unsafe"
 
 	"github.com/michaelraines/future-core/internal/backend"
 	"github.com/michaelraines/future-core/internal/shaderc"
+	"github.com/michaelraines/future-core/internal/shadertranslate"
 	"github.com/michaelraines/future-core/internal/vk"
 )
-
-// uniformField describes a uniform variable's layout in a packed buffer.
-type uniformField struct {
-	Name   string
-	Type   string // GLSL type: "float", "vec2", "vec4", "mat4", etc.
-	Offset int
-	Size   int
-}
 
 // Shader implements backend.Shader for Vulkan.
 // Stores GLSL source for SPIR-V compilation when a pipeline is created.
@@ -38,9 +30,12 @@ type Shader struct {
 	compiled       bool
 	compileError   error
 
-	// Uniform buffer layout parsed from GLSL source.
-	vertexUniformLayout   []uniformField
-	fragmentUniformLayout []uniformField
+	// Uniform buffer layouts computed by the shared std140 extractor.
+	// The per-backend regex parser this replaces used to diverge from
+	// shaderc's SPIR-V layout on vec3 alignment (and silently dropped
+	// [3]float32 values) — see shadertranslate/layout.go for rationale.
+	vertexUniformLayout   []shadertranslate.UniformField
+	fragmentUniformLayout []shadertranslate.UniformField
 }
 
 // compile compiles GLSL source to SPIR-V and creates VkShaderModules.
@@ -51,7 +46,12 @@ func (s *Shader) compile() error {
 	s.compiled = true
 
 	if s.vertexSource != "" {
-		s.vertexUniformLayout = parseUniformLayout(s.vertexSource)
+		layout, err := shadertranslate.ExtractUniformLayout(s.vertexSource)
+		if err != nil {
+			s.compileError = fmt.Errorf("vulkan: vertex uniform layout: %w", err)
+			return s.compileError
+		}
+		s.vertexUniformLayout = layout
 
 		spirv, err := shaderc.CompileGLSL(s.vertexSource, shaderc.StageVertex)
 		if err != nil {
@@ -72,7 +72,12 @@ func (s *Shader) compile() error {
 	}
 
 	if s.fragmentSource != "" {
-		s.fragmentUniformLayout = parseUniformLayout(s.fragmentSource)
+		layout, err := shadertranslate.ExtractUniformLayout(s.fragmentSource)
+		if err != nil {
+			s.compileError = fmt.Errorf("vulkan: fragment uniform layout: %w", err)
+			return s.compileError
+		}
+		s.fragmentUniformLayout = layout
 
 		spirv, err := shaderc.CompileGLSL(s.fragmentSource, shaderc.StageFragment)
 		if err != nil {
@@ -96,7 +101,7 @@ func (s *Shader) compile() error {
 }
 
 // packUniformBuffer builds a byte buffer from the uniform map using the given layout.
-func (s *Shader) packUniformBuffer(layout []uniformField) []byte {
+func (s *Shader) packUniformBuffer(layout []shadertranslate.UniformField) []byte {
 	if len(layout) == 0 {
 		return nil
 	}
@@ -130,10 +135,9 @@ func writeUniformValue(dst []byte, v interface{}) {
 		binary.LittleEndian.PutUint32(dst[4:8], math.Float32bits(val[1]))
 	case [3]float32:
 		// vec3 writes 12 bytes; the trailing 4 bytes of its 16-byte
-		// std140 slot stay zero from the make([]byte, ...) in
-		// packUniformBuffer. Without this case, SetUniformVec3 on
-		// Vulkan was a silent no-op, rendering point-light LightColor
-		// as (0,0,0) and the whole lighting demo black.
+		// std140 slot stay zero from the make([]byte, ...) above.
+		// Without this case, SetUniformVec3 was a silent no-op on
+		// Vulkan and every point-light LightColor rendered as (0,0,0).
 		for i := 0; i < 3; i++ {
 			binary.LittleEndian.PutUint32(dst[i*4:(i+1)*4], math.Float32bits(val[i]))
 		}
@@ -148,113 +152,6 @@ func writeUniformValue(dst []byte, v interface{}) {
 	case int32:
 		binary.LittleEndian.PutUint32(dst, uint32(val))
 	}
-}
-
-// reGLSLUniform matches uniform declarations in GLSL source.
-var reGLSLUniform = regexp.MustCompile(`^\s*uniform\s+(\w+)\s+(\w+)\s*;`)
-
-// parseUniformLayout parses GLSL source for uniform declarations and computes
-// std140-aligned byte offsets. Sampler uniforms (sampler2D) are excluded.
-func parseUniformLayout(glsl string) []uniformField {
-	var fields []uniformField
-	offset := 0
-	for _, line := range splitLines(glsl) {
-		m := reGLSLUniform.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		typ, name := m[1], m[2]
-		if typ == "sampler2D" {
-			continue
-		}
-		size := glslTypeSize(typ)
-		if size == 0 {
-			continue
-		}
-		// std140 alignment rules for the implicit UBO that shaderc's
-		// `auto_bind_uniforms` wraps bare uniforms into:
-		//   float, int  → align  4, consume  4
-		//   vec2        → align  8, consume  8
-		//   vec3        → align 16, consume 12 (tail left unused by us)
-		//   vec4        → align 16, consume 16
-		//   mat3, mat4  → align 16, consume 48 / 64
-		// Treating vec3 as 4-byte aligned (its size) was the original
-		// bug: the SPIR-V reads LightColor.rgb at offset 16 while
-		// packUniformBuffer wrote it at offset 8 (after a vec2), so
-		// every uniform after the vec3 read garbage. Point-light
-		// shaders then pulled the wrong Intensity/Radius/FalloffType.
-		align := 4
-		switch typ {
-		case "vec2":
-			align = 8
-		case "vec3", "vec4", "mat3", "mat4":
-			align = 16
-		}
-		if offset%align != 0 {
-			offset += align - (offset % align)
-		}
-		fields = append(fields, uniformField{
-			Name:   name,
-			Type:   typ,
-			Offset: offset,
-			Size:   size,
-		})
-		offset += size
-	}
-	return fields
-}
-
-// glslTypeSize returns the byte size for a GLSL uniform type.
-func glslTypeSize(typ string) int {
-	switch typ {
-	case "float":
-		return 4
-	case "vec2":
-		return 8
-	case "vec3":
-		return 12
-	case "vec4":
-		return 16
-	case "mat3":
-		return 48 // 3 x float4 (std140 padding)
-	case "mat4":
-		return 64
-	case "int":
-		return 4
-	default:
-		return 0
-	}
-}
-
-// splitLines splits a string into lines.
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
-}
-
-// uniformLayoutSize returns the total byte size of a uniform layout.
-func uniformLayoutSize(layout []uniformField) int {
-	if len(layout) == 0 {
-		return 0
-	}
-	totalSize := 0
-	for _, f := range layout {
-		end := f.Offset + f.Size
-		if end > totalSize {
-			totalSize = end
-		}
-	}
-	return totalSize
 }
 
 // SetUniformFloat records a float uniform.
