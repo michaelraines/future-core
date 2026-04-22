@@ -46,6 +46,7 @@ func (s *Shader) compile() error {
 	s.compiled = true
 
 	if s.vertexSource != "" {
+		dumpShaderSource(s.vertexSource, "vert.glsl")
 		layout, err := shadertranslate.ExtractUniformLayout(s.vertexSource)
 		if err != nil {
 			s.compileError = fmt.Errorf("vulkan: vertex uniform layout: %w", err)
@@ -72,6 +73,7 @@ func (s *Shader) compile() error {
 	}
 
 	if s.fragmentSource != "" {
+		dumpShaderSource(s.fragmentSource, "frag.glsl")
 		layout, err := shadertranslate.ExtractUniformLayout(s.fragmentSource)
 		if err != nil {
 			s.compileError = fmt.Errorf("vulkan: fragment uniform layout: %w", err)
@@ -122,6 +124,7 @@ func (s *Shader) packUniformBuffer(layout []shadertranslate.UniformField) []byte
 		}
 		writeUniformValue(buf[f.Offset:f.Offset+f.Size], v)
 	}
+	probePackedUniform(layout, buf)
 	return buf
 }
 

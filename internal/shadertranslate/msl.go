@@ -46,8 +46,14 @@ var (
 	reVersion    = regexp.MustCompile(`^\s*#version\s+`)
 	reAttribute  = regexp.MustCompile(`^\s*layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*in\s+(\w+)\s+(\w+)\s*;`)
 	reUniform    = regexp.MustCompile(`^\s*uniform\s+(\w+)\s+(\w+)\s*;`)
-	reVaryingOut = regexp.MustCompile(`^\s*out\s+(\w+)\s+(\w+)\s*;`)
-	reVaryingIn  = regexp.MustCompile(`^\s*in\s+(\w+)\s+(\w+)\s*;`)
+	// reVaryingOut and reVaryingIn accept an optional `layout(location=N)`
+	// prefix — Vulkan-targeted GLSL needs explicit varying locations or
+	// glslang auto-assigns them (which is fine for isolated shaders but
+	// the Kage path benefits from deterministic numbering across
+	// vertex+fragment pairs). The WGSL/MSL translators assign their own
+	// locations by declaration order, so the captured prefix is ignored.
+	reVaryingOut = regexp.MustCompile(`^\s*(?:layout\s*\(\s*location\s*=\s*\d+\s*\)\s*)?out\s+(\w+)\s+(\w+)\s*;`)
+	reVaryingIn  = regexp.MustCompile(`^\s*(?:layout\s*\(\s*location\s*=\s*\d+\s*\)\s*)?in\s+(\w+)\s+(\w+)\s*;`)
 	reFragOut    = regexp.MustCompile(`^\s*out\s+vec4\s+(\w+)\s*;`)
 	reMainStart  = regexp.MustCompile(`^\s*void\s+main\s*\(\s*\)\s*\{?\s*$`)
 )
