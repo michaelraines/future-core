@@ -73,15 +73,16 @@ func (s *Shader) compile() error {
 	}
 
 	if s.fragmentSource != "" {
-		dumpShaderSource(s.fragmentSource, "frag.glsl")
-		layout, err := shadertranslate.ExtractUniformLayout(s.fragmentSource)
+		fragSrc := rewriteVDstPosToFragCoord(s.fragmentSource)
+		dumpShaderSource(fragSrc, "frag.glsl")
+		layout, err := shadertranslate.ExtractUniformLayout(fragSrc)
 		if err != nil {
 			s.compileError = fmt.Errorf("vulkan: fragment uniform layout: %w", err)
 			return s.compileError
 		}
 		s.fragmentUniformLayout = layout
 
-		spirv, err := shaderc.CompileGLSL(s.fragmentSource, shaderc.StageFragment)
+		spirv, err := shaderc.CompileGLSL(fragSrc, shaderc.StageFragment)
 		if err != nil {
 			s.compileError = fmt.Errorf("vulkan: fragment GLSL→SPIR-V: %w", err)
 			return s.compileError

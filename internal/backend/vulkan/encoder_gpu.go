@@ -227,6 +227,9 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 	if pip != 0 {
 		vk.CmdBindPipeline(e.cmd, pip)
+		if sh := e.boundShader; sh != nil {
+			tracePipelineBind(sh.vertexSource, sh.fragmentSource, uint64(pip))
+		}
 	}
 }
 

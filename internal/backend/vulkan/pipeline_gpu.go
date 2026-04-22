@@ -286,6 +286,11 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 		RenderPass_:         renderPass,
 	}
 
+	if hasShader && shader != nil {
+		tracePipelineCreate(
+			shader.vertexSource, shader.fragmentSource,
+			uint64(shader.vertexModule), uint64(shader.fragmentModule))
+	}
 	pip, err := vk.CreateGraphicsPipeline(p.dev.device, uintptr(unsafe.Pointer(&ci)))
 	// Keep all referenced objects alive past the FFI call.
 	runtime.KeepAlive(stages)

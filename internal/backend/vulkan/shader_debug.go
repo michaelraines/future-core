@@ -63,6 +63,46 @@ func dumpShaderSource(src, suffix string) {
 	fmt.Fprintf(os.Stderr, "vulkan: dumped %s shader → %s\n", suffix, path)
 }
 
+// FUTURE_CORE_VK_TRACE_PIPELINES=1 logs each VkPipeline creation with
+// the vertex/fragment module handles + source hash. Pairs with
+// FUTURE_CORE_VK_DUMP_SHADERS so you can `spirv-dis` the exact
+// modules that got bound — catches cases where Vulkan thinks it's
+// linking custom-shader stages but ends up with the built-in sprite
+// vertex/fragment pair (e.g. if shader.vertexModule is zero when
+// the pipeline is created and a stale module handle leaks in).
+var vkTracePipelines = os.Getenv("FUTURE_CORE_VK_TRACE_PIPELINES") == "1"
+
+func tracePipelineCreate(vertSrc, fragSrc string, vertMod, fragMod uint64) {
+	if !vkTracePipelines {
+		return
+	}
+	vh := shortHash(vertSrc)
+	fh := shortHash(fragSrc)
+	fmt.Fprintf(os.Stderr,
+		"vulkan: pipeline create vert=%s(mod=%d) frag=%s(mod=%d)\n",
+		vh, vertMod, fh, fragMod)
+}
+
+func shortHash(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	sum := sha1.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// tracePipelineBind logs each SetPipeline call (if the env var is set)
+// with the bound pipeline's VkPipeline handle + vertex/fragment hashes
+// so you can cross-reference back against tracePipelineCreate output.
+// Cheap loop-over-cached-pipelines to find the handle's source shader.
+func tracePipelineBind(vertSrc, fragSrc string, pipelineHandle uint64) {
+	if !vkTracePipelines {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "vulkan: pipeline bind pip=%d vert=%s frag=%s\n",
+		pipelineHandle, shortHash(vertSrc), shortHash(fragSrc))
+}
+
 // FUTURE_CORE_VK_UNIFORM_PROBE=NAME logs the packed bytes written for the
 // named uniform each time a shader is packed. Useful for confirming that
 // a uniform's value reaches the GPU at the offset the SPIR-V expects.
