@@ -149,11 +149,11 @@ void main() {
 
 	// Force pipeline creation against the default render pass.
 	p := pip.(*Pipeline)
-	err = p.createVkPipeline(dev.defaultRenderPass)
+	err = p.createVkPipeline(dev.defaultRenderPass, backend.BlendSourceOver)
 	if err != nil {
 		t.Fatalf("Pipeline creation failed: %v", err)
 	}
-	pip2 := p.pipelineFor(dev.defaultRenderPass)
+	pip2 := p.pipelineFor(dev.defaultRenderPass, backend.BlendSourceOver)
 	require.NotZero(t, pip2, "VkPipeline should be created for default render pass")
 	fmt.Printf("VkPipeline created: %v\n", pip2)
 }

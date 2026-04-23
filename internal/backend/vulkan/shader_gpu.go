@@ -105,29 +105,55 @@ func (s *Shader) compile() error {
 }
 
 // packUniformBuffer builds a byte buffer from the uniform map using the given layout.
+// Prefer packUniformBufferInto on the hot path — this allocates a new slice
+// per call and is only retained for tests and standalone callers.
 func (s *Shader) packUniformBuffer(layout []shadertranslate.UniformField) []byte {
 	if len(layout) == 0 {
 		return nil
 	}
-	// Calculate total size.
-	totalSize := 0
-	for _, f := range layout {
-		end := f.Offset + f.Size
-		if end > totalSize {
-			totalSize = end
-		}
-	}
-	buf := make([]byte, totalSize)
+	buf := make([]byte, uniformLayoutSize(layout))
+	s.packUniformBufferInto(layout, buf)
+	return buf
+}
 
+// packUniformBufferInto writes packed uniform bytes directly into dst,
+// skipping the intermediate heap allocation that packUniformBuffer makes.
+// Returns the number of bytes written (always equals uniformLayoutSize).
+// dst must be at least uniformLayoutSize(layout) bytes; callers writing
+// into the mapped UBO should zero any unwritten tail themselves when the
+// descriptor range spans unwritten bytes (std140 vec3 padding is already
+// handled by the fields themselves — see writeUniformValue).
+func (s *Shader) packUniformBufferInto(layout []shadertranslate.UniformField, dst []byte) int {
+	if len(layout) == 0 {
+		return 0
+	}
+	size := uniformLayoutSize(layout)
+	// Zero the target region so padding between fields and the tail past
+	// the highest field stays deterministic. clear() compiles to
+	// runtime.memclrNoHeapPointers which is measurably faster than a
+	// hand-rolled byte loop at the ~1000-draws-per-frame rate this runs
+	// at in the lighting demo.
+	clear(dst[:size])
 	for _, f := range layout {
 		v, ok := s.uniforms[f.Name]
 		if !ok {
 			continue
 		}
-		writeUniformValue(buf[f.Offset:f.Offset+f.Size], v)
+		writeUniformValue(dst[f.Offset:f.Offset+f.Size], v)
 	}
-	probePackedUniform(layout, buf)
-	return buf
+	probePackedUniform(layout, dst[:size])
+	return size
+}
+
+// uniformLayoutSize returns the total packed size of a layout in bytes.
+func uniformLayoutSize(layout []shadertranslate.UniformField) int {
+	total := 0
+	for _, f := range layout {
+		if end := f.Offset + f.Size; end > total {
+			total = end
+		}
+	}
+	return total
 }
 
 // writeUniformValue writes a uniform value to a byte slice.

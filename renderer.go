@@ -204,3 +204,14 @@ func (t *pendingClearTracker) Consume(targetID uint32) bool {
 func (t *pendingClearTracker) Has(targetID uint32) bool {
 	return t.counts != nil && t.counts[targetID] > 0
 }
+
+// Forget drops any pending clears for the given target. Called from
+// Image.disposeNow so a texture that's been destroyed doesn't leave a
+// stale entry that could be consumed by a later NewImage sharing the
+// same textureID.
+func (t *pendingClearTracker) Forget(targetID uint32) {
+	if t.counts == nil {
+		return
+	}
+	delete(t.counts, targetID)
+}

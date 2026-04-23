@@ -67,7 +67,7 @@ func TestSaveScreenshotReadScreen(t *testing.T) {
 	e := &engine{device: dev}
 
 	path := filepath.Join(t.TempDir(), "test_screenshot.png")
-	err := e.saveScreenshot(2, 2, path)
+	err := e.saveScreenshot(2, 2, path, false)
 	require.NoError(t, err)
 
 	// Verify the PNG was written and is valid.
@@ -90,7 +90,7 @@ func TestSaveScreenshotReadScreenFails(t *testing.T) {
 	e := &engine{device: dev, noGL: true}
 
 	path := filepath.Join(t.TempDir(), "test_screenshot.png")
-	err := e.saveScreenshot(2, 2, path)
+	err := e.saveScreenshot(2, 2, path, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not support ReadScreen")
 }
@@ -106,7 +106,7 @@ func TestSaveScreenshotInvalidPath(t *testing.T) {
 	}
 	e := &engine{device: dev}
 
-	err := e.saveScreenshot(2, 2, "/nonexistent/dir/test.png")
+	err := e.saveScreenshot(2, 2, "/nonexistent/dir/test.png", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "create")
 }

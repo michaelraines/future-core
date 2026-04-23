@@ -43,9 +43,9 @@ type varying struct {
 
 // Regex patterns for GLSL parsing.
 var (
-	reVersion    = regexp.MustCompile(`^\s*#version\s+`)
-	reAttribute  = regexp.MustCompile(`^\s*layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*in\s+(\w+)\s+(\w+)\s*;`)
-	reUniform    = regexp.MustCompile(`^\s*uniform\s+(\w+)\s+(\w+)\s*;`)
+	reVersion   = regexp.MustCompile(`^\s*#version\s+`)
+	reAttribute = regexp.MustCompile(`^\s*layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*in\s+(\w+)\s+(\w+)\s*;`)
+	reUniform   = regexp.MustCompile(`^\s*uniform\s+(\w+)\s+(\w+)\s*;`)
 	// reVaryingOut and reVaryingIn accept an optional `layout(location=N)`
 	// prefix — Vulkan-targeted GLSL needs explicit varying locations or
 	// glslang auto-assigns them (which is fine for isolated shaders but

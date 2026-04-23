@@ -256,7 +256,19 @@ func (e *engine) initRenderResources() error {
 }
 
 // disposeRenderResources releases all rendering resources.
+//
+// Optionally signals the backend that a whole-device teardown is in
+// progress, so per-resource Dispose calls can skip their individual
+// GPU-idle waits. On Vulkan via MoltenVK this change turned an
+// N-wait cascade (one vkDeviceWaitIdle per texture + render target
+// + pipeline disposed) into a single device-wide wait up front —
+// the difference between "hit X, wait multiple seconds while the
+// machine stutters, sometimes leaving an orphan window" and a
+// crisp close.
 func (e *engine) disposeRenderResources() {
+	if d, ok := e.device.(interface{ BeginDispose() }); ok {
+		d.BeginDispose()
+	}
 	if e.spritePass != nil {
 		e.spritePass.Dispose()
 	}
@@ -271,6 +283,31 @@ func (e *engine) disposeRenderResources() {
 	}
 	if e.presenter != nil {
 		e.presenter.Dispose()
+	}
+	// Release all registered textures + render targets the app
+	// accumulated during its lifetime. Without this the process holds
+	// onto every sprite-atlas page, AA buffer, and offscreen RT until
+	// OS-level process cleanup — fine for a short demo but for a
+	// long-running app it's thousands of Vulkan handles + mapped
+	// memory blocks plus their MoltenVK Metal counterparts.
+	for _, rt := range e.renderTargets {
+		if rt != nil {
+			rt.Dispose()
+		}
+	}
+	e.renderTargets = nil
+	for _, tex := range e.textures {
+		if tex != nil {
+			tex.Dispose()
+		}
+	}
+	e.textures = nil
+	// Finally tear the Vulkan device down (no-op for backends that
+	// manage their lifetime elsewhere). Must happen AFTER all the
+	// above so Vulkan doesn't complain about objects outliving the
+	// device.
+	if e.device != nil {
+		e.device.Dispose()
 	}
 }
 
@@ -496,7 +533,7 @@ func (e *engine) run() error {
 		// SwapBuffers so the back buffer still contains rendered content).
 		frameCount++
 		if headless != nil && frameCount >= headless.frames {
-			if err := e.saveScreenshot(fbW, fbH, headless.output); err != nil {
+			if err := e.saveScreenshot(fbW, fbH, headless.output, headless.windowCapture); err != nil {
 				fmt.Fprintf(os.Stderr, "headless: %v\n", err)
 				os.Exit(1) //nolint:gocritic // intentional force-exit; defers are expendable in headless capture mode
 			}

@@ -4,100 +4,148 @@ package vulkan
 
 import "strings"
 
-// rewriteVDstPosToFragCoord substitutes the Kage-generated
-// `vec4 dstPos = vDstPos;` line in a fragment shader with
-// `vec4 dstPos = vec4(gl_FragCoord.xy, 0.0, 1.0);`.
+// prepareFragmentForShaderc applies Vulkan-specific rewrites to the
+// Kage-emitted fragment GLSL before shaderc compilation.
 //
-// Why this exists: custom Kage shaders on Vulkan (specifically through
-// shaderc + MoltenVK on macOS) produced non-interpolated varying values
-// in the fragment shader for Location-2 outputs. The SPIR-V validates,
-// the vertex/fragment Location decorations match, spirv-val passes —
-// but the fragment reads a constant (near-zero) value for `vDstPos.xy`
-// instead of the interpolated per-pixel position. Built-in sprite
-// shaders (which only use Location 0/1 varyings) are unaffected, and
-// the same Kage source produces correctly-interpolated varyings on
-// WebGPU. The lighting demo's point-light + spot-light shaders
-// depend on `dstPos.xy` to compute `distance(dstPos.xy, Center)`, so
-// a constant `dstPos` makes every fragment return the early
-// `if dist > Radius { return vec4(0) }` and the lightmap stays dark.
+// Unused-sampler stripping: the Kage → GLSL emitter unconditionally
+// declares `uTexture0..3` (one for each possible Images[0..3] slot).
+// Fragment shaders that only sample from `uTexture0` (e.g. point_light,
+// multiply_dither) still carry the unused uTexture1/2/3 declarations.
+// shaderc's `auto_bind_uniforms` then assigns EVERY sampler the same
+// binding (Binding=0), producing SPIR-V that decorates four separate
+// OpVariable<UniformConstant> with the identical (set=0, binding=0)
+// tuple. That's invalid per the Vulkan spec but MoltenVK (via shaderc
+// → spirv-cross → MSL) silently accepts it and synthesises pathological
+// MSL. On the lighting demo we observed: stripping the unused samplers
+// restored the scene from an all-black image to one that shows the
+// ambient fill and scene geometry. The lights themselves remain a
+// separate MoltenVK-specific interpolation issue (see below); the
+// sampler strip is a necessary-but-not-sufficient step toward parity
+// and a strict bugfix regardless.
 //
-// The Kage `dstPos` input is semantically the destination pixel
-// coordinate (per the `kage:unit pixels` directive). Vulkan's
-// gl_FragCoord.xy is defined as the framebuffer pixel coordinate
-// with top-left origin, which matches — for any draw whose projection
-// maps vertex position directly to framebuffer (which the sprite pass
-// does: screen and offscreen RTs alike). Using gl_FragCoord bypasses
-// the varying entirely, letting the rasterizer compute the value it
-// already had to compute anyway.
+// Why string-level stripping rather than emitter-level: the emitter
+// lives in shaderir/kage.go and is shared across every backend; the
+// WGSL translator and the Metal translator don't have the same
+// binding-collision behavior. Doing the surgery here keeps the fix
+// Vulkan-local until we can teach the Kage emitter to emit only the
+// sampler slots its shader actually uses. A future refactor should
+// pull usage-analysis up into shaderir.Compile so every backend
+// receives the minimal declaration set.
 //
-// Kage emits exactly one `vec4 dstPos = vDstPos;` line per shader
-// (in its generated main() prologue, see
-// future-core/internal/shaderir/kage.go:emitFragmentShader), so a
-// simple string substitution is sufficient and safe. The `in vec4
-// vDstPos;` declaration at the top of the fragment stays — it
-// becomes an unused input after the rewrite, which shaderc / glslang
-// happily compile away.
-//
-// TODO: fold this into the Kage emitter itself once the equivalent
-// substitution is wired into the WGSL/MSL translators too. Until
-// then, this is a Vulkan-local workaround scoped to one function.
-// Known remaining bug (2026-04-22): on the lighting-demo scene, even
-// after this rewrite, the fragment shader's `gl_FragCoord.xy` reads
-// as a near-constant value at every fragment of every custom-shader
-// (Kage) light-quad draw. Narrowed quantitatively:
-//
-//   - range-probe shader (vec4 color by dstPos.x bucket):
-//     every fragment's `dstPos.x ∈ [1020, 1024)` on Vulkan+MoltenVK.
-//     The RT is 1024 wide, so gl_FragCoord.x is at or very near the
-//     right edge for every covered pixel.
-//   - on WebGPU (no rewrite; uses `vec4 dstPos = vDstPos`) the
-//     distribution is broad across all buckets — vDstPos interpolates
-//     correctly.
-//   - woodland parity is 0.03% vs WebGPU (essentially byte-identical);
-//     the bug is specific to the lighting demo's larger-radius quads,
-//     not to the Kage pipeline path in general.
-//
-// Ruled out:
-//   - Uniform layout. Probes + spirv-dis confirm byte-for-byte
-//     correct offsets for Center/LightColor/Radius/Intensity.
-//   - Vertex input bindings, stride, attributes. Match sprite pipe.
-//   - Pipeline module pairing. Trace confirms custom Kage vertex
-//     always pairs with its matching custom Kage fragment.
-//   - Retina 2x physical scaling. Dividing gl_FragCoord.xy by 2
-//     didn't shift the constant value — it's still at ~1023.
-//   - Dropping the unused vDstPos varying entirely (to match the
-//     sprite pipeline's two-varying interface). No change.
-//   - Forcing the non-shadow BlendLighter branch (bypassing
-//     stampShadowAlpha). No change.
-//
-// What the MSL looks like (from MVK_CONFIG_LOG_LEVEL=4 dump):
-//   fragment main0_out main0(main0_in in [[stage_in]],
-//                            constant spvDescriptorSetBuffer0& ...,
-//                            float4 gl_FragCoord [[position]])
-//   {
-//       float4 dstPos = float4(gl_FragCoord.xy, 0.0, 1.0);
-//       ...
-//   }
-// The `[[position]]` builtin should give per-fragment framebuffer
-// coords. For this specific pipeline under specific scene state,
-// it returns a primitive-constant value near (RT.width-1, y).
-//
-// Next investigation angle: step into whether MVK pipeline state
-// leaks across the stampShadowAlpha DrawImage→custom-shader
-// transition in a way that clobbers `[[position]]` interpolation
-// (a Metal-side primitive-flat interpolation getting set somewhere).
-// Or run lavapipe + validation layers via docker-compose to isolate
-// MoltenVK-specific vs spec-level Vulkan bug.
-//
-// The rewrite below is the minimum that makes the multiply_dither
-// full-screen compositing path correct; it's necessary but not
-// sufficient for the lighting demo.
-func rewriteVDstPosToFragCoord(src string) string {
-	src = strings.Replace(src,
-		"vec4 dstPos = vDstPos;",
-		"vec4 dstPos = vec4(gl_FragCoord.xy, 0.0, 1.0);", 1)
-	src = strings.Replace(src,
-		"vec2 srcPos = vTexCoord;",
-		"vec2 srcPos = gl_FragCoord.xy;", 1)
+// Lighting-demo residual: on Vulkan+MoltenVK the point_light and
+// spot_light shaders still produce near-uniform output within their
+// quad regions — consistent with `vDstPos.xy` being flat-interpolated
+// to the primitive's provoking vertex. multiply_dither (drawn as a
+// full-screen quad to the scene RT) reads vDstPos correctly. We
+// haven't found a MoltenVK shader or pipeline option that selectively
+// triggers flat interpolation for one custom-shader pipeline and not
+// another, and spirv-cross's generated MSL declares `[[stage_in]]`
+// inputs without flat qualifiers. The next investigation angle is
+// running the same build under lavapipe (Docker) to confirm whether
+// this is MoltenVK-specific or a spec-level Vulkan issue.
+func prepareFragmentForShaderc(src string) string {
+	return stripUnusedSamplers(src)
+}
+
+// stripUnusedSamplers removes `uniform sampler2D uTextureN;` declarations
+// AND the matching imageSrcNAt / imageSrcNUnsafeAt / imageSrcNOrigin /
+// imageSrcNSize helper functions whose sampler is never invoked from the
+// user's fragment body. The Kage emitter unconditionally emits all four
+// slots (see future-core/internal/shaderir/kage.go:emitImageHelpers), so
+// the unused slots' helpers still reference their uTextureN sampler —
+// which means a naive "strip only the declaration" pass leaves the
+// reference dangling and GLSL won't compile. We detect a slot as "in
+// use" iff the source calls `imageSrcNAt(` or `imageSrcNUnsafeAt(` at
+// least once. Slot 0 is never stripped (the Kage pipeline's convention
+// binds the primary texture there and most shaders that bother to use
+// an image use slot 0).
+func stripUnusedSamplers(src string) string {
+	// The Kage emitter writes helper definitions before main(), so an
+	// `imageSrc1At(` substring match would always hit the helper's own
+	// signature even when the slot is unused. Detect real call sites by
+	// restricting the usage search to the region AFTER `void main() {`,
+	// which is where user code lives.
+	mainStart := strings.Index(src, "void main()")
+	if mainStart < 0 {
+		return src
+	}
+	body := src[mainStart:]
+	for i := 1; i <= 3; i++ {
+		n := string(rune('0' + i))
+		if strings.Contains(body, "imageSrc"+n+"At(") ||
+			strings.Contains(body, "imageSrc"+n+"UnsafeAt(") ||
+			strings.Contains(body, "imageSrc"+n+"Origin(") ||
+			strings.Contains(body, "imageSrc"+n+"Size(") {
+			continue
+		}
+		src = stripSamplerSlot(src, n)
+	}
 	return src
+}
+
+// stripSamplerSlot removes the sampler declaration AND the helper
+// function bodies that reference it. Leaves the `uImageSrcNOrigin` /
+// `uImageSrcNSize` uniform declarations in place so the UBO layout
+// stays stable (our ExtractUniformLayout is a separate pass that runs
+// on the same stripped source, so offsets remain aligned between our
+// packed buffer and shaderc's SPIR-V).
+//
+// Either every edit lands or none of them do. A partial strip — e.g.
+// declaration removed but the helper body referencing it kept because
+// we failed to find the closing brace — would leave the GLSL in a state
+// where it references a now-undeclared sampler and shaderc fails with
+// an unhelpful error at the call site rather than at our rewrite. If
+// any piece can't be located (Kage emitter changed its format, helper
+// signatures drifted, etc.) we return the original source unchanged.
+func stripSamplerSlot(src, n string) string {
+	decl := "uniform sampler2D uTexture" + n + ";\n"
+	declIdx := strings.Index(src, decl)
+	if declIdx < 0 {
+		// Nothing to strip — slot's declaration isn't present.
+		return src
+	}
+
+	type region struct{ start, end int }
+	regions := []region{{declIdx, declIdx + len(decl)}}
+
+	for _, sig := range []string{
+		"vec4 imageSrc" + n + "At(vec2 pos) {",
+		"vec4 imageSrc" + n + "UnsafeAt(vec2 pos) {",
+	} {
+		start := strings.Index(src, sig)
+		if start < 0 {
+			// Helper isn't present — nothing to remove for this sig,
+			// but since we haven't committed the edit yet that's fine.
+			continue
+		}
+		// Helpers end with "}\n\n" from the emitter (closing brace
+		// followed by the blank-line separator it appends). If we can't
+		// find the terminator the source format has changed in a way
+		// we can't safely rewrite — bail out and leave the shader
+		// untouched rather than leave a half-rewritten body behind.
+		rel := strings.Index(src[start:], "}\n\n")
+		if rel < 0 {
+			return src
+		}
+		regions = append(regions, region{start, start + rel + len("}\n\n")})
+	}
+
+	// Apply removals back-to-front so earlier offsets stay valid.
+	// Stable sort by start offset descending.
+	for i := 1; i < len(regions); i++ {
+		for j := i; j > 0 && regions[j].start > regions[j-1].start; j-- {
+			regions[j], regions[j-1] = regions[j-1], regions[j]
+		}
+	}
+	for _, r := range regions {
+		src = src[:r.start] + src[r.end:]
+	}
+	return src
+}
+
+// rewriteVDstPosToFragCoord is kept as a pass-through wrapper for backward
+// compatibility with shader_gpu.go. It now just invokes the broader
+// preparation pass.
+func rewriteVDstPosToFragCoord(src string) string {
+	return prepareFragmentForShaderc(src)
 }

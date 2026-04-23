@@ -99,7 +99,7 @@ uniform ivec2 Pair;`,
 // uniform was inserted; both cases warrant re-validating the whole
 // layout path before merging.
 func TestExtractUniformLayout_PointLight(t *testing.T) {
-	// Synthesised from point_light.kage's emitted fragment GLSL: image
+	// Synthesized from point_light.kage's emitted fragment GLSL: image
 	// metadata uniforms come first (injected by the Kage compiler),
 	// then Kage's `var` declarations in source order.
 	glsl := `uniform sampler2D uTexture0;

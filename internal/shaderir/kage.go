@@ -227,17 +227,40 @@ func (c *compiler) emitFragmentShader(fn *ast.FuncDecl) string {
 
 func (c *compiler) emitImageHelpers(b *strings.Builder) {
 	for i := 0; i < 4; i++ {
+		// Kage convention: imageSrcNAt(pos) takes `pos` in pixel-space
+		// coordinates (declared with `kage:unit pixels`). GLSL's
+		// `texture(sampler2D, vec2)` expects the UV argument to be
+		// already normalised to [0, 1], so the caller's pixel-space
+		// pos must be divided by the texture's dimensions before
+		// sampling — otherwise `texture()` interprets a pixel offset
+		// as a UV offset and the source image either wraps, clamps,
+		// or returns zero depending on the sampler's wrap mode. The
+		// WGSL translator (internal/shadertranslate/wgsl.go) already
+		// does this same normalisation; the Kage→GLSL emitter
+		// previously skipped it, which silently broke every custom
+		// Kage shader on Vulkan/OpenGL that sampled a source image
+		// (vector-showcase's night-sky chromatic-aberration effect,
+		// lighting's per-light normal-map sampling, etc.).
+		//
+		// Bounds check uses the texture's own dimensions via
+		// textureSize() rather than the uImageSrcNOrigin/Size
+		// uniforms. Those uniforms are meant for sub-image regions
+		// inside an atlas, but the CPU-side draw path doesn't
+		// populate them today (they're zero for non-atlas draws),
+		// which would cause every imageSrcNAt to return vec4(0).
+		// The WGSL translator hits the same constraint and takes
+		// the same approach — see its comment for detail.
 		fmt.Fprintf(b, "vec4 imageSrc%dAt(vec2 pos) {\n", i)
-		fmt.Fprintf(b, "    vec2 origin = uImageSrc%dOrigin;\n", i)
-		fmt.Fprintf(b, "    vec2 size = uImageSrc%dSize;\n", i)
-		fmt.Fprintf(b, "    if (pos.x < origin.x || pos.y < origin.y || pos.x >= origin.x + size.x || pos.y >= origin.y + size.y) {\n")
+		fmt.Fprintf(b, "    vec2 texDim = vec2(textureSize(uTexture%d, 0));\n", i)
+		fmt.Fprintf(b, "    if (pos.x < 0.0 || pos.y < 0.0 || pos.x >= texDim.x || pos.y >= texDim.y) {\n")
 		b.WriteString("        return vec4(0.0);\n")
 		b.WriteString("    }\n")
-		fmt.Fprintf(b, "    return texture(uTexture%d, pos);\n", i)
+		fmt.Fprintf(b, "    return texture(uTexture%d, pos / texDim);\n", i)
 		b.WriteString("}\n\n")
 
 		fmt.Fprintf(b, "vec4 imageSrc%dUnsafeAt(vec2 pos) {\n", i)
-		fmt.Fprintf(b, "    return texture(uTexture%d, pos);\n", i)
+		fmt.Fprintf(b, "    vec2 texDim = vec2(textureSize(uTexture%d, 0));\n", i)
+		fmt.Fprintf(b, "    return texture(uTexture%d, pos / texDim);\n", i)
 		b.WriteString("}\n\n")
 
 		fmt.Fprintf(b, "vec2 imageSrc%dOrigin() {\n", i)

@@ -29,10 +29,30 @@ import (
 // Fix: cache a VkPipeline PER render pass. First bind creates the
 // pipeline for the current render pass; subsequent binds reuse it.
 // Dispose destroys every cached pipeline.
+// pipelineVariantKey identifies a cached VkPipeline by the two pieces
+// of state Vulkan bakes into its pipeline object: the RenderPass (for
+// attachment format / layout compatibility) and the BlendMode (factors
+// + operations + color-write mask). SetBlendMode on this backend used
+// to be a no-op, which meant every pipeline shipped with whatever
+// blend was in the descriptor at creation time — typically
+// BlendSourceOver. Scenes that set a different blend at draw time
+// (multiply-blit in the lighting/iso-combat lightmap composite,
+// `blendAddModAlpha` shadow compositing, particle-emitter additive
+// chains) silently fell back to SourceOver. Symptom: lightmap
+// composite replaced the scene with the lightmap's bright content
+// instead of darkening/brightening it (visible as "white background
+// with correct light halos" — the lightmap content coming through at
+// full opacity). Caching per (renderPass, blend) lets SetBlendMode
+// drive a pipeline swap instead of silently dropping the request.
+type pipelineVariantKey struct {
+	renderPass vk.RenderPass
+	blend      backend.BlendMode
+}
+
 type Pipeline struct {
 	dev            *Device
 	desc           backend.PipelineDescriptor
-	pipelines      map[vk.RenderPass]vk.Pipeline
+	pipelines      map[pipelineVariantKey]vk.Pipeline
 	pipelineLayout vk.PipelineLayout
 	descSetLayout  vk.DescriptorSetLayout
 }
@@ -40,13 +60,13 @@ type Pipeline struct {
 // InnerPipeline returns nil for GPU pipelines (no soft delegation).
 func (p *Pipeline) InnerPipeline() backend.Pipeline { return nil }
 
-// pipelineFor returns the cached VkPipeline compiled against renderPass,
-// or 0 if none has been built yet.
-func (p *Pipeline) pipelineFor(renderPass vk.RenderPass) vk.Pipeline {
+// pipelineFor returns the cached VkPipeline compiled against the given
+// (renderPass, blend) pair, or 0 if none has been built yet.
+func (p *Pipeline) pipelineFor(renderPass vk.RenderPass, blend backend.BlendMode) vk.Pipeline {
 	if p.pipelines == nil {
 		return 0
 	}
-	return p.pipelines[renderPass]
+	return p.pipelines[pipelineVariantKey{renderPass: renderPass, blend: blend}]
 }
 
 // Dispose releases every cached VkPipeline plus the shared layout +
@@ -69,14 +89,14 @@ func (p *Pipeline) Dispose() {
 	}
 }
 
-// createVkPipeline creates the actual VkPipeline from the stored descriptor.
-// This is called lazily on first bind per render pass since the render
-// pass must be known at pipeline creation time.
-func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
+// createVkPipeline creates the actual VkPipeline for the given
+// (renderPass, blend) variant. Called lazily on first bind.
+func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass, blend backend.BlendMode) error {
 	if p.pipelines == nil {
-		p.pipelines = make(map[vk.RenderPass]vk.Pipeline)
+		p.pipelines = make(map[pipelineVariantKey]vk.Pipeline)
 	}
-	if p.pipelines[renderPass] != 0 {
+	key := pipelineVariantKey{renderPass: renderPass, blend: blend}
+	if p.pipelines[key] != 0 {
 		return nil
 	}
 
@@ -210,7 +230,7 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 		// encoder's SetStencilReference calls silently no-op.
 	}
 
-	colorBlendAttachment := vkBlendAttachment(p.desc.BlendMode)
+	colorBlendAttachment := vkBlendAttachment(blend)
 	if p.desc.ColorWriteDisabled {
 		// Stencil-only passes disable color writes at pipeline creation
 		// time; masking all channels produces the same effect as
@@ -310,7 +330,7 @@ func (p *Pipeline) createVkPipeline(renderPass vk.RenderPass) error {
 	if err != nil {
 		return err
 	}
-	p.pipelines[renderPass] = pip
+	p.pipelines[key] = pip
 	return nil
 }
 

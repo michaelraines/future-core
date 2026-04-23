@@ -10,14 +10,41 @@ import (
 	"github.com/michaelraines/future-core/internal/wgpu"
 )
 
-// Pipeline implements backend.Pipeline for WebGPU.
-// Stores the descriptor and lazily creates a WGPURenderPipeline.
-type Pipeline struct {
-	dev    *Device
-	desc   backend.PipelineDescriptor
-	handle wgpu.RenderPipeline
+// pipelineVariantKey identifies a cached WGPURenderPipeline by the two
+// pieces of state WebGPU bakes in: the color attachment format and the
+// blend mode. SetBlendMode on this backend used to be a no-op, which
+// meant every pipeline shipped with whatever blend was in the
+// descriptor (typically BlendSourceOver). Callers that asked for a
+// different blend at draw time — iso-combat's multiply lightmap
+// composite, the lighting demo's additive light stamps and
+// blendAddModAlpha shadow passes — silently fell back to SourceOver,
+// which for a multiply blend means "replace scene with lightmap"
+// instead of "darken/brighten scene by lightmap". Symptom: white
+// background where the scene should be dimmed, lightmap contents
+// bleeding through at full opacity. Caching per (format, blend)
+// variant lets SetBlendMode drive a pipeline swap.
+type pipelineVariantKey struct {
+	format wgpu.TextureFormat
+	blend  backend.BlendMode
+}
 
-	// The texture format this pipeline was compiled for.
+// Pipeline implements backend.Pipeline for WebGPU.
+// Stores the descriptor and lazily creates WGPURenderPipelines keyed
+// by (target format, blend mode) — see pipelineVariantKey.
+type Pipeline struct {
+	dev  *Device
+	desc backend.PipelineDescriptor
+
+	// Per-(format, blend) cache. Populated lazily by
+	// ensurePipelineForVariant. The encoder picks the key based on
+	// its current target format + the blend SetBlendMode recorded.
+	pipelines map[pipelineVariantKey]wgpu.RenderPipeline
+
+	// handle + createdFormat track the LAST-activated variant so
+	// ensurePipelineForFormat (legacy API — no blend arg) can keep
+	// working for callers that haven't migrated yet. Everything on
+	// the encoder hot path now goes through ensurePipelineForVariant.
+	handle        wgpu.RenderPipeline
 	createdFormat wgpu.TextureFormat
 
 	// Cached bind group layouts for this pipeline.
@@ -29,23 +56,49 @@ type Pipeline struct {
 // InnerPipeline returns nil for GPU pipelines (no soft delegation).
 func (p *Pipeline) InnerPipeline() backend.Pipeline { return nil }
 
-// ensurePipelineForFormat creates or recreates the pipeline if the target
-// format has changed (e.g. switching between surface and offscreen targets).
-func (p *Pipeline) ensurePipelineForFormat(format wgpu.TextureFormat) {
-	if p.handle != 0 && p.createdFormat == format {
-		return
+// ensurePipelineForVariant returns a cached pipeline for the given
+// (format, blend) pair, creating it lazily if needed. Encoder's
+// SetPipeline path calls this with the encoder's current target
+// format AND the blend SetBlendMode recorded — so a multiply-blit
+// composite on a swapchain pass and the SAME shader's additive blend
+// on an offscreen RT both end up with the correct pipeline.
+func (p *Pipeline) ensurePipelineForVariant(format wgpu.TextureFormat, blend backend.BlendMode) wgpu.RenderPipeline {
+	if p.pipelines == nil {
+		p.pipelines = make(map[pipelineVariantKey]wgpu.RenderPipeline)
 	}
-	if p.handle != 0 {
-		// Format changed — release old resources and recreate.
-		p.Dispose()
+	key := pipelineVariantKey{format: format, blend: blend}
+	if h := p.pipelines[key]; h != 0 {
+		p.handle = h
+		p.createdFormat = format
+		return h
 	}
+	// Stash the format + blend so createPipeline reads them. Old
+	// createPipeline shape is preserved for minimal churn; it still
+	// writes into p.handle + p.createdFormat + p.layout/bind-group
+	// layouts the FIRST time. Subsequent variants reuse the layout
+	// and just add a new handle to the map.
 	p.createdFormat = format
-	p.createPipeline()
+	p.createPipelineForBlend(blend)
+	if p.handle != 0 {
+		p.pipelines[key] = p.handle
+	}
+	return p.handle
 }
 
-// createPipeline lazily compiles the shader and creates the render pipeline.
-func (p *Pipeline) createPipeline() {
-	if p.handle != 0 || p.dev.device == 0 {
+// ensurePipelineForFormat is the legacy entry point — equivalent to
+// asking for the pipeline-descriptor's default blend. Kept so any
+// callers that haven't migrated keep working.
+func (p *Pipeline) ensurePipelineForFormat(format wgpu.TextureFormat) {
+	p.ensurePipelineForVariant(format, p.desc.BlendMode)
+}
+
+// createPipelineForBlend lazily compiles the shader and creates a render
+// pipeline for the given blend mode. The resulting handle is written to
+// p.handle; the caller (ensurePipelineForVariant) is responsible for
+// caching it into the per-variant map. Bind group layouts are shared
+// across variants and created on the first invocation.
+func (p *Pipeline) createPipelineForBlend(blend backend.BlendMode) {
+	if p.dev.device == 0 {
 		return
 	}
 
@@ -59,11 +112,18 @@ func (p *Pipeline) createPipeline() {
 		return
 	}
 
-	// Create bind group layouts.
-	p.createBindGroupLayouts()
+	// Create bind group layouts once, then reuse across variants.
+	if p.layout == 0 {
+		p.createBindGroupLayouts()
+	}
 	if p.layout == 0 {
 		return
 	}
+
+	// Reset handle; createPipelineForBlend always produces a fresh
+	// pipeline for this variant. The prior handle (if any) is owned by
+	// the variant map and will be released in Dispose.
+	p.handle = 0
 
 	vertexEntrySV, vertexEntryKeep := wgpu.MakeStringView("vs_main")
 	fragmentEntrySV, fragmentEntryKeep := wgpu.MakeStringView("fs_main")
@@ -102,8 +162,9 @@ func (p *Pipeline) createPipeline() {
 		bufferCount = 1
 	}
 
-	// Configure blend state.
-	blendEnabled, blend := wgpuBlendState(p.desc.BlendMode)
+	// Configure blend state from the variant's blend mode (not the
+	// descriptor default — SetBlendMode drives this).
+	blendEnabled, blendState := wgpuBlendState(blend)
 
 	// Use the format determined by the encoder's current render target.
 	targetFormat := p.createdFormat
@@ -115,7 +176,7 @@ func (p *Pipeline) createPipeline() {
 		WriteMask: wgpu.ColorWriteMaskAll,
 	}
 	if blendEnabled {
-		target.Blend = uintptr(unsafe.Pointer(&blend))
+		target.Blend = uintptr(unsafe.Pointer(&blendState))
 	}
 
 	fragment := wgpu.FragmentState{
@@ -169,7 +230,7 @@ func (p *Pipeline) createPipeline() {
 	runtime.KeepAlive(fragmentEntryKeep)
 	runtime.KeepAlive(attrs)
 	runtime.KeepAlive(vbl)
-	runtime.KeepAlive(blend)
+	runtime.KeepAlive(blendState)
 	runtime.KeepAlive(target)
 	runtime.KeepAlive(fragment)
 	runtime.KeepAlive(depthStencil)
@@ -394,10 +455,16 @@ func cstr(s string) *byte {
 
 // Dispose releases pipeline resources.
 func (p *Pipeline) Dispose() {
-	if p.handle != 0 {
-		wgpu.RenderPipelineRelease(p.handle)
-		p.handle = 0
+	for _, h := range p.pipelines {
+		if h != 0 {
+			wgpu.RenderPipelineRelease(h)
+		}
 	}
+	p.pipelines = nil
+	// p.handle always points at one of the map's entries (the last
+	// activated variant). The map release above already freed it; just
+	// clear the field so Dispose is idempotent.
+	p.handle = 0
 	if p.layout != 0 {
 		wgpu.PipelineLayoutRelease(p.layout)
 		p.layout = 0

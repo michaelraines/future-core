@@ -92,6 +92,20 @@ type Device struct {
 	hasSwapchain            bool
 	imageAvailableSem       vk.Semaphore
 	renderFinishedSem       vk.Semaphore
+
+	// disposing is set by Device.Dispose before cascading to per-resource
+	// teardown. Every Texture.Dispose / RenderTarget.Dispose was calling
+	// vk.DeviceWaitIdle individually as a "wait for in-flight GPU work"
+	// safety measure — correct in isolation but catastrophic at shutdown
+	// when hundreds of resources each re-wait the whole device (quadratic
+	// behaviour on Metal via MoltenVK; multi-second window-close hangs,
+	// macOS "application not responding" dialogs, and orphaned windows
+	// when the user force-quits). With this flag, per-resource Dispose
+	// code paths skip their own wait after Device.Dispose has already
+	// done a single DeviceWaitIdle up top — one idle-wait for the whole
+	// teardown instead of O(resources).
+	disposing bool
+
 }
 
 // samplerFor returns a cached VkSampler configured for the requested
@@ -821,12 +835,28 @@ func (d *Device) createUniformBuffer(size int) error {
 	return nil
 }
 
-// Dispose releases all Vulkan resources.
+// BeginDispose signals that a whole-device teardown is starting.
+// Per-resource Dispose calls check this flag and skip their individual
+// vkDeviceWaitIdle — the cumulative wait cost at shutdown of a
+// resource-heavy scene was causing multi-second window-close hangs and
+// orphaned windows on macOS/MoltenVK. Idempotent: repeat calls do a
+// single extra DeviceWaitIdle to re-sync if more work slipped in.
+func (d *Device) BeginDispose() {
+	if d.device == 0 {
+		return
+	}
+	if !d.disposing {
+		_ = vk.DeviceWaitIdle(d.device)
+		d.disposing = true
+	}
+}
+
 func (d *Device) Dispose() {
 	if d.device == 0 {
 		return
 	}
-	_ = vk.DeviceWaitIdle(d.device)
+	// Idempotent-idle + flag set; BeginDispose may have already run.
+	d.BeginDispose()
 
 	// Destroy swapchain resources.
 	if d.hasSwapchain {
@@ -1127,6 +1157,9 @@ func (d *Device) BeginFrame() {
 	_ = vk.ResetFence(d.device, d.fence)
 	_ = vk.ResetCommandBuffer(d.commandBuffer)
 	_ = vk.BeginCommandBuffer(d.commandBuffer, vk.CommandBufferUsageOneTimeSubmit)
+	if d.encoder != nil {
+		d.encoder.markRecording()
+	}
 	d.uniformCursor = 0
 
 	if d.hasSwapchain {
@@ -1157,6 +1190,9 @@ func (d *Device) EndFrame() {
 		return
 	}
 	_ = vk.EndCommandBuffer(d.commandBuffer)
+	if d.encoder != nil {
+		d.encoder.markNotRecording()
+	}
 
 	cmd := d.commandBuffer
 
@@ -1581,18 +1617,30 @@ func (d *Device) clearFreshRenderTarget(fb vk.Framebuffer, rp vk.RenderPass, w, 
 		return err
 	}
 
+	// Submit + wait on a one-shot fence instead of DeviceWaitIdle. Using
+	// DeviceWaitIdle here would drain the whole queue, which on MoltenVK
+	// includes any in-flight work from the caller's frame (this function
+	// is reachable mid-frame via NewRenderTarget, e.g. the AA buffer's
+	// lazy allocation). A scoped fence waits only for this one-shot
+	// submission and keeps the main frame's submission ordering /
+	// fence timing intact.
+	fence, err := vk.CreateFence(d.device, false)
+	if err != nil {
+		return err
+	}
+	defer vk.DestroyFence(d.device, fence)
+
 	submitInfo := vk.SubmitInfo{
 		SType:              vk.StructureTypeSubmitInfo,
 		CommandBufferCount: 1,
 		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
 	}
-	if err := vk.QueueSubmit(d.graphicsQueue, &submitInfo, 0); err != nil {
+	if err := vk.QueueSubmit(d.graphicsQueue, &submitInfo, fence); err != nil {
 		return err
 	}
 	runtime.KeepAlive(cmd)
 	runtime.KeepAlive(submitInfo)
-	_ = vk.DeviceWaitIdle(d.device)
-	return nil
+	return vk.WaitForFence(d.device, fence, ^uint64(0))
 }
 
 // createOffscreenRenderPass builds a 2-attachment (color + D24S8) render

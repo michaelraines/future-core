@@ -88,6 +88,13 @@ func (t *Texture) Upload(data []byte, _ int) {
 		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
 	}
 	_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfo, 0)
+	// Wait here so the CPU doesn't overwrite d.stagingMapped with the
+	// next caller's pixels while the GPU is still copying the current
+	// upload out of staging — that race corrupted text glyphs
+	// (UploadRegion is called per-character into a shared atlas, and
+	// without the wait a later glyph's pixel bytes won the race).
+	// The proper fix is a staging ring buffer with per-region tracking;
+	// until that lands, the synchronous wait keeps correctness.
 	_ = vk.DeviceWaitIdle(t.dev.device)
 	vk.FreeCommandBuffers(t.dev.device, t.dev.commandPool, cmd)
 }
@@ -151,6 +158,10 @@ func (t *Texture) UploadRegion(data []byte, x, y, w, h, _ int) {
 		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
 	}
 	_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfo, 0)
+	// Same staging-buffer-safety wait as Upload — see that function's
+	// comment. Staging is a shared CPU-mapped scratch region; the next
+	// caller will rewrite it, so we must wait until the GPU is done
+	// reading before returning.
 	_ = vk.DeviceWaitIdle(t.dev.device)
 	vk.FreeCommandBuffers(t.dev.device, t.dev.commandPool, cmd)
 }
@@ -265,7 +276,16 @@ func (t *Texture) Dispose() {
 	if t.view == 0 && t.image == 0 && t.memory == 0 {
 		return
 	}
-	vk.DeviceWaitIdle(t.dev.device)
+	// Skip the per-resource DeviceWaitIdle when the device is already
+	// being torn down — Device.Dispose waits once up-front and sets
+	// disposing=true. Without this check, a scene with hundreds of
+	// textures pays O(N) device-idle waits at shutdown (noticeable
+	// as multi-second window-close hangs on macOS/MoltenVK, and
+	// "application not responding" prompts / orphaned windows when
+	// the user force-quits during that hang).
+	if !t.dev.disposing {
+		vk.DeviceWaitIdle(t.dev.device)
+	}
 	if t.view != 0 {
 		vk.DestroyImageView(t.dev.device, t.view)
 		t.view = 0
