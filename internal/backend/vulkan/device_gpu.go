@@ -908,6 +908,30 @@ func (d *Device) Dispose() {
 	if d.defaultColorMem != 0 {
 		vk.FreeMemory(d.device, d.defaultColorMem)
 	}
+	// Default depth-stencil attachment. destroySwapchain also releases
+	// it, but that path only runs when hasSwapchain — the offscreen
+	// headless path (conformance tests, ReadScreen-driven capture,
+	// WASM soft fallback) leaves createDefaultRenderTarget's dsImg /
+	// dsMem / dsView alive until vkDestroyDevice, which
+	// validation-layer builds (lavapipe) flag as "VkImage has not been
+	// destroyed". Destroy here if it's still held.
+	if d.defaultDepthStencilView != 0 || d.defaultDepthStencilImage != 0 || d.defaultDepthStencilMem != 0 {
+		d.destroyDepthStencilTexture(
+			d.defaultDepthStencilImage,
+			d.defaultDepthStencilMem,
+			d.defaultDepthStencilView,
+		)
+		d.defaultDepthStencilImage = 0
+		d.defaultDepthStencilMem = 0
+		d.defaultDepthStencilView = 0
+	}
+	// Encoder's descriptor pool. Created lazily in ensureDescriptorPool
+	// on first draw; never freed prior to this fix. Safe to call
+	// unconditionally — guards against a nil encoder or zero handle.
+	if d.encoder != nil && d.encoder.descriptorPool != 0 {
+		vk.DestroyDescriptorPool(d.device, d.encoder.descriptorPool)
+		d.encoder.descriptorPool = 0
+	}
 	if d.fence != 0 {
 		vk.DestroyFence(d.device, d.fence)
 	}
