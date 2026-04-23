@@ -31,8 +31,9 @@ func ExtractUniformLayout(glsl string) ([]UniformField, error) {
 // samplers (which belong in descriptor sets, not UBOs). The regex
 // is shared with the MSL / WGSL translators' parse loops.
 func parseUniformDecls(glsl string) []uniform {
-	var out []uniform
-	for _, line := range strings.Split(glsl, "\n") {
+	lines := strings.Split(glsl, "\n")
+	out := make([]uniform, 0, len(lines))
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		m := reUniform.FindStringSubmatch(trimmed)
 		if m == nil {
