@@ -60,7 +60,13 @@ func (rt *RenderTarget) Height() int { return rt.h }
 // is undefined behaviour.
 func (rt *RenderTarget) Dispose() {
 	if rt.dev != nil && rt.dev.device != 0 {
-		vk.DeviceWaitIdle(rt.dev.device)
+		// Skip the per-RT device wait during whole-device teardown;
+		// Device.Dispose already drained the queue and flipped the
+		// disposing flag. This turns shutdown from O(RTs) waits into
+		// a single wait. See the matching check in Texture.Dispose.
+		if !rt.dev.disposing {
+			vk.DeviceWaitIdle(rt.dev.device)
+		}
 		if rt.framebuffer != 0 {
 			vk.DestroyFramebuffer(rt.dev.device, rt.framebuffer)
 			rt.framebuffer = 0

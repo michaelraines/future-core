@@ -17,11 +17,12 @@ type Encoder struct {
 	cmd vk.CommandBuffer
 
 	// Current render pass state.
-	inRenderPass      bool
-	currentRenderPass vk.RenderPass
-	currentPipeline   *Pipeline
-	boundTexture      *Texture
-	boundShader       *Shader
+	inRenderPass        bool
+	currentRenderPass   vk.RenderPass
+	currentRenderTarget *RenderTarget // nil for the default/screen target
+	currentPipeline     *Pipeline
+	boundTexture        *Texture
+	boundShader         *Shader
 	// boundFilter drives samplerFor() in bindUniforms. Defaults to
 	// FilterNearest (which is also backend.TextureFilter's zero value),
 	// matching the prior always-nearest behaviour. SetTextureFilter
@@ -30,6 +31,95 @@ type Encoder struct {
 	descriptorPool vk.DescriptorPool
 	descriptorSet  vk.DescriptorSet
 	colorWriteOn   bool
+
+	// Command-buffer lifecycle tracking. The encoder's `cmd` is shared
+	// with the device's main command buffer. Two usage modes exist:
+	//
+	//  1. App flow: Device.BeginFrame does BeginCommandBuffer, the
+	//     encoder records many passes, Device.EndFrame submits. In this
+	//     path Encoder.Flush is a no-op — submission is handled by
+	//     EndFrame and a mid-frame Flush (e.g. the sprite pass calling
+	//     Flush at pass boundaries) must NOT submit.
+	//
+	//  2. Standalone flow: conformance tests + any other caller that
+	//     drives the encoder without BeginFrame/EndFrame. Here commands
+	//     get recorded into a cmd buffer that was never begun — Vulkan
+	//     silently drops them on MoltenVK (validation layers would
+	//     catch it) and ReadPixels returns uninitialized memory. For
+	//     this path the encoder lazily begins recording on the first
+	//     command and Flush ends + submits + waits + resets so
+	//     subsequent passes start clean.
+	//
+	// `recording` tracks whether BeginCommandBuffer is currently open
+	// on e.cmd. `standalone` tracks whether the encoder itself opened
+	// it (and so should close it on Flush) vs whether BeginFrame did.
+	recording  bool
+	standalone bool
+
+	// Per-draw blend state. SetBlendMode stores the caller's intent;
+	// SetPipeline reads it back and picks (or creates) the matching
+	// pipeline variant. The sprite pass drives this: e.g.
+	// `enc.SetBlendMode(b.BlendMode); enc.SetPipeline(p)` — the
+	// pattern we inherited from WebGPU / Metal, which both key their
+	// pipelines on (shader, blend) pairs. On Vulkan this used to be
+	// dropped silently because SetBlendMode was a no-op and the
+	// pipeline shipped with BlendSourceOver baked in. `blendModeSet`
+	// distinguishes "caller explicitly requested a blend" from "use
+	// the pipeline-descriptor default" so a bare SetPipeline without
+	// SetBlendMode keeps the legacy behavior instead of silently
+	// defaulting to the previous frame's leftover blend.
+	currentBlendMode backend.BlendMode
+	blendModeSet     bool
+
+	// Per-draw bindUniforms scratch. bindUniforms runs on every
+	// DrawIndexed and used to allocate a fresh []vk.WriteDescriptorSet
+	// and []vk.DescriptorSet per call; at ~1000 draws/frame (the
+	// lighting demo with many lights spawned) those two-alloc-per-draw
+	// patterns generated 120k+ GC-tracked allocations per second and
+	// showed up as a visible FPS cliff. Fixed-size arrays on the
+	// encoder let us reuse the backing memory across draws.
+	//
+	// LIFETIME: the PImageInfo / PBufferInfo fields inside
+	// writeScratch[i] are uintptrs into *stack locals* in bindUniforms
+	// (imgInfo, fragBufInfo, vtxBufInfo). Those pointers are valid
+	// only until bindUniforms returns — vk.UpdateDescriptorSets
+	// consumes them before that point, and runtime.KeepAlive guards
+	// the stack escape. Do NOT read writeScratch outside of
+	// bindUniforms; the embedded pointers will dangle.
+	writeScratch [3]vk.WriteDescriptorSet
+	setScratch   [1]vk.DescriptorSet
+}
+
+// ensureRecording lazily begins the command buffer if nothing has done
+// so yet. Called from any entry point that records commands, so that
+// a standalone-mode caller (conformance tests, direct device tests)
+// doesn't record into a cmd buffer that was never begun. The flip side
+// — BeginFrame-driven app flow — sets `recording` from outside and
+// this is a no-op.
+func (e *Encoder) ensureRecording() {
+	if e.recording || e.cmd == 0 {
+		return
+	}
+	_ = vk.ResetCommandBuffer(e.cmd)
+	_ = vk.BeginCommandBuffer(e.cmd, vk.CommandBufferUsageOneTimeSubmit)
+	e.recording = true
+	e.standalone = true
+}
+
+// markRecording tells the encoder that BeginFrame has begun the shared
+// command buffer. Called from Device.BeginFrame after BeginCommandBuffer
+// so the encoder knows it doesn't own the lifecycle — Flush should stay
+// a no-op and EndFrame will handle submission.
+func (e *Encoder) markRecording() {
+	e.recording = true
+	e.standalone = false
+}
+
+// markNotRecording tells the encoder that EndFrame has submitted the
+// shared command buffer, so the next recording must start fresh.
+func (e *Encoder) markNotRecording() {
+	e.recording = false
+	e.standalone = false
 }
 
 // BeginRenderPass begins a Vulkan render pass.
@@ -44,6 +134,8 @@ type Encoder struct {
 // target. When that changes, switch to render-pass variants keyed on
 // (stencilLoadOp, stencilStoreOp) instead of the single shared object.
 func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
+	e.ensureRecording()
+
 	// Vulkan render passes on this backend always declare color +
 	// depth-stencil attachments, so every vkCmdBeginRenderPass needs
 	// two matching clear values. The second slot reuses ClearValue's
@@ -68,6 +160,7 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 
 	if desc.Target != nil {
 		if rt, ok := desc.Target.(*RenderTarget); ok {
+			e.currentRenderTarget = rt
 			w = uint32(rt.w)
 			h = uint32(rt.h)
 			// Pick the render-pass variant matching the load action. Vulkan
@@ -144,11 +237,50 @@ func makeDepthStencilClearValue(depth float32, stencil uint32) vk.ClearValue {
 
 // EndRenderPass ends the current render pass.
 func (e *Encoder) EndRenderPass() {
-	if e.inRenderPass {
-		vk.CmdEndRenderPass(e.cmd)
-		e.inRenderPass = false
-		e.currentRenderPass = 0
+	if !e.inRenderPass {
+		return
 	}
+	vk.CmdEndRenderPass(e.cmd)
+	e.inRenderPass = false
+	e.currentRenderPass = 0
+
+	// Explicit memory barrier on the just-rendered RT color image,
+	// forcing color-attachment writes visible to subsequent
+	// fragment-shader reads. The render pass's 0→EXTERNAL subpass
+	// dependency already declares this chain (see
+	// createOffscreenRenderPass), but MoltenVK on macOS intermittently
+	// does not flush the implicit transition before the next render
+	// pass samples the image — manifesting as scene-selector tiles
+	// disappearing on alternating frames. Latency (e.g. stderr
+	// tracing) masks the race, which is the giveaway that the
+	// subpass-dep promise isn't always honoured on Metal.
+	//
+	// The image is already in ShaderReadOnlyOptimal via the render
+	// pass FinalLayout, so oldLayout == newLayout — no layout
+	// transition, just the memory-dependency side of the barrier.
+	// Screen targets are presented, not sampled, and don't need this.
+	if e.currentRenderTarget != nil && e.currentRenderTarget.colorTex != nil {
+		barriers := []vk.ImageMemoryBarrier{{
+			SType:               vk.StructureTypeImageMemoryBarrier,
+			SrcAccessMask:       vk.AccessColorAttachmentWrite,
+			DstAccessMask:       vk.AccessShaderRead,
+			OldLayout:           vk.ImageLayoutShaderReadOnlyOptimal,
+			NewLayout:           vk.ImageLayoutShaderReadOnlyOptimal,
+			SrcQueueFamilyIndex: vk.QueueFamilyIgnored,
+			DstQueueFamilyIndex: vk.QueueFamilyIgnored,
+			Image_:              e.currentRenderTarget.colorTex.image,
+			SubresAspectMask:    vk.ImageAspectColor,
+			SubresLevelCount:    1,
+			SubresLayerCount:    1,
+		}}
+		vk.CmdPipelineBarrier(e.cmd,
+			vk.PipelineStageColorAttachmentOutput,
+			vk.PipelineStageFragmentShader,
+			barriers)
+		runtime.KeepAlive(barriers)
+	}
+	e.currentRenderTarget = nil
+
 	// NOTE: Do NOT destroy the descriptor pool here! The command buffer
 	// hasn't been submitted yet. Destroying the pool would free the
 	// descriptor sets while the GPU still references them. Cleanup
@@ -168,24 +300,33 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 		e.boundShader = s
 	}
 
-	// Pipelines are baked against a specific VkRenderPass at creation
-	// time. A single `Pipeline` abstract object serves every render
-	// pass (offscreen RTs, screen swapchain) the sprite pass walks
-	// through in a frame, so cache a VkPipeline per VkRenderPass and
-	// create on demand.
+	// Pipelines are baked against a specific (VkRenderPass, BlendMode)
+	// pair at creation time. A single `Pipeline` abstract object serves
+	// every render pass (offscreen RTs, screen swapchain) the sprite
+	// pass walks through in a frame AND every blend mode a caller
+	// switches through via SetBlendMode (multiply composite, additive
+	// lights, per-blend shadow stamps). Cache one VkPipeline per
+	// (renderPass, blend) and create on demand.
 	rp := e.currentRenderPass
 	if rp == 0 {
 		rp = e.dev.defaultRenderPass
 	}
-	pip := p.pipelineFor(rp)
+	blend := p.desc.BlendMode
+	if e.blendModeSet {
+		blend = e.currentBlendMode
+	}
+	pip := p.pipelineFor(rp, blend)
 	if pip == 0 {
-		if err := p.createVkPipeline(rp); err != nil {
+		if err := p.createVkPipeline(rp, blend); err != nil {
 			return
 		}
-		pip = p.pipelineFor(rp)
+		pip = p.pipelineFor(rp, blend)
 	}
 	if pip != 0 {
 		vk.CmdBindPipeline(e.cmd, pip)
+		if sh := e.boundShader; sh != nil {
+			tracePipelineBind(sh.vertexSource, sh.fragmentSource, uint64(pip))
+		}
 	}
 }
 
@@ -193,6 +334,7 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 	if b, ok := buf.(*Buffer); ok {
 		vk.CmdBindVertexBuffer(e.cmd, uint32(slot), b.buffer, uint64(b.lastWriteOffset))
+		traceVertexBind(slot, uint64(b.buffer), uint64(b.lastWriteOffset))
 	}
 }
 
@@ -354,12 +496,14 @@ func (e *Encoder) bindUniforms() {
 		return
 	}
 
-	// Pack vertex and fragment uniforms into the ring-buffer at increasing offsets.
-	// Each draw gets its own UBO region so deferred commands read correct data.
-	vtxBuf := e.boundShader.packUniformBuffer(e.boundShader.vertexUniformLayout)
-	vtxSize := len(vtxBuf)
-	fragBuf := e.boundShader.packUniformBuffer(e.boundShader.fragmentUniformLayout)
-	fragSize := len(fragBuf)
+	// Pack vertex and fragment uniforms directly into the mapped UBO
+	// ring buffer. A prior implementation allocated two []byte per
+	// draw for packing and then copied — that was ~2 heap allocations
+	// per draw, which at ~1000 draws/frame pushed 120k alloc/s into
+	// the GC and showed up as a FPS cliff in the lighting demo when
+	// users clicked to add more lights.
+	vtxSize := uniformLayoutSize(e.boundShader.vertexUniformLayout)
+	fragSize := uniformLayoutSize(e.boundShader.fragmentUniformLayout)
 
 	// Each draw needs: vtxSize (aligned to 256) + fragSize (aligned to 256).
 	vtxAligned := (vtxSize + uniformAlignOffset - 1) &^ (uniformAlignOffset - 1)
@@ -382,10 +526,12 @@ func (e *Encoder) bindUniforms() {
 
 	fullBuf := unsafe.Slice((*byte)(e.dev.uniformMapped), e.dev.uniformBufSize)
 	if vtxSize > 0 {
-		copy(fullBuf[vtxOffset:vtxOffset+vtxSize], vtxBuf)
+		e.boundShader.packUniformBufferInto(e.boundShader.vertexUniformLayout,
+			fullBuf[vtxOffset:vtxOffset+vtxSize])
 	}
 	if fragSize > 0 {
-		copy(fullBuf[fragOffset:fragOffset+fragSize], fragBuf)
+		e.boundShader.packUniformBufferInto(e.boundShader.fragmentUniformLayout,
+			fullBuf[fragOffset:fragOffset+fragSize])
 	}
 	e.dev.uniformCursor += needed
 
@@ -395,9 +541,6 @@ func (e *Encoder) bindUniforms() {
 		return
 	}
 	e.descriptorSet = set
-
-	// Build descriptor writes for all 3 bindings.
-	var writes []vk.WriteDescriptorSet
 
 	// Binding 0: combined image sampler. Picks the sampler matching
 	// the current filter state (Nearest / Linear); without this the
@@ -413,63 +556,119 @@ func (e *Encoder) bindUniforms() {
 		ImageView:   tex.view,
 		ImageLayout: vk.ImageLayoutShaderReadOnlyOptimal,
 	}
-	writes = append(writes, vk.WriteDescriptorSet{
+	fragBufInfo := vk.DescriptorBufferInfo{
+		Buffer_: e.dev.uniformBuffer,
+		Offset:  uint64(fragOffset),
+		Range_:  uint64(uniformAlignOffset),
+	}
+	vtxBufInfo := vk.DescriptorBufferInfo{
+		Buffer_: e.dev.uniformBuffer,
+		Offset:  uint64(vtxOffset),
+		Range_:  uint64(uniformAlignOffset),
+	}
+
+	// Build descriptor writes for all 3 bindings. Reuse the encoder's
+	// cached array (and backing slice) so each draw doesn't heap-grow
+	// a fresh []vk.WriteDescriptorSet — the lighting demo with N
+	// lights spends most of its per-frame time in bindUniforms and
+	// every tiny alloc here multiplies through the GC.
+	e.writeScratch[0] = vk.WriteDescriptorSet{
 		SType:           vk.StructureTypeWriteDescriptorSet,
 		DstSet:          set,
 		DstBinding:      0,
 		DescriptorCount: 1,
 		DescriptorType:  vk.DescriptorTypeCombinedImageSampler,
 		PImageInfo:      uintptr(unsafe.Pointer(&imgInfo)),
-	})
-
-	// Binding 1: fragment UBO. Always use the full aligned range to satisfy
-	// MoltenVK's descriptor validation.
-	fragBufInfo := vk.DescriptorBufferInfo{
-		Buffer_: e.dev.uniformBuffer,
-		Offset:  uint64(fragOffset),
-		Range_:  uint64(uniformAlignOffset),
 	}
-	writes = append(writes, vk.WriteDescriptorSet{
+	e.writeScratch[1] = vk.WriteDescriptorSet{
 		SType:           vk.StructureTypeWriteDescriptorSet,
 		DstSet:          set,
 		DstBinding:      1,
 		DescriptorCount: 1,
 		DescriptorType:  vk.DescriptorTypeUniformBuffer,
 		PBufferInfo:     uintptr(unsafe.Pointer(&fragBufInfo)),
-	})
-
-	// Binding 2: vertex UBO. Always use the full aligned range.
-	vtxBufInfo := vk.DescriptorBufferInfo{
-		Buffer_: e.dev.uniformBuffer,
-		Offset:  uint64(vtxOffset),
-		Range_:  uint64(uniformAlignOffset),
 	}
-	writes = append(writes, vk.WriteDescriptorSet{
+	e.writeScratch[2] = vk.WriteDescriptorSet{
 		SType:           vk.StructureTypeWriteDescriptorSet,
 		DstSet:          set,
 		DstBinding:      2,
 		DescriptorCount: 1,
 		DescriptorType:  vk.DescriptorTypeUniformBuffer,
 		PBufferInfo:     uintptr(unsafe.Pointer(&vtxBufInfo)),
-	})
+	}
 
-	vk.UpdateDescriptorSets(e.dev.device, writes)
+	vk.UpdateDescriptorSets(e.dev.device, e.writeScratch[:])
 	runtime.KeepAlive(imgInfo)
 	runtime.KeepAlive(fragBufInfo)
 	runtime.KeepAlive(vtxBufInfo)
 
-	// Bind the descriptor set.
-	vk.CmdBindDescriptorSets(e.cmd, e.currentPipeline.pipelineLayout, 0, []vk.DescriptorSet{set})
+	// Bind the descriptor set. Reuse the cached one-element slice so we
+	// don't allocate a new []vk.DescriptorSet per draw.
+	e.setScratch[0] = set
+	vk.CmdBindDescriptorSets(e.cmd, e.currentPipeline.pipelineLayout, 0, e.setScratch[:])
 }
 
-// Flush is a no-op for Vulkan — submission happens in EndFrame.
-// SetBlendMode is a no-op for this backend.
-func (e *Encoder) SetBlendMode(_ backend.BlendMode) {}
+// SetBlendMode records the caller's desired blend state. The next
+// SetPipeline call will pick (or create) the matching pipeline
+// variant. Previously this was a no-op, which silently dropped any
+// non-pipeline-descriptor blend the caller asked for — scenes that
+// relied on mid-frame blend swaps (multiply lightmap composite,
+// additive light stamps, shadow-mask blend pass) fell through to the
+// pipeline's baked-in SourceOver. See Encoder.currentBlendMode for
+// the full context.
+func (e *Encoder) SetBlendMode(b backend.BlendMode) {
+	e.currentBlendMode = b
+	e.blendModeSet = true
+}
 
-func (e *Encoder) Flush() {}
+// Flush submits pending command-buffer work — but only when the
+// encoder owns the cmd-buffer lifecycle (standalone mode). In the
+// app flow where Device.BeginFrame/EndFrame brackets recording, Flush
+// is a no-op: the sprite pass calls it at pass boundaries purely as
+// a backend hook, and an unconditional submit here would break the
+// per-frame submission contract (one submit per frame, sync'd with
+// the swapchain semaphores). Standalone callers — conformance tests
+// and direct-device unit tests — need Flush to actually execute
+// their recorded work before ReadPixels can see it.
+func (e *Encoder) Flush() {
+	if !e.standalone || !e.recording || e.cmd == 0 {
+		return
+	}
+	_ = vk.EndCommandBuffer(e.cmd)
+	submitInfo := vk.SubmitInfo{
+		SType:              vk.StructureTypeSubmitInfo,
+		CommandBufferCount: 1,
+		PCommandBuffers:    uintptr(unsafe.Pointer(&e.cmd)),
+	}
+	cmd := e.cmd
+	_ = vk.QueueSubmit(e.dev.graphicsQueue, &submitInfo, 0)
+	runtime.KeepAlive(cmd)
+	runtime.KeepAlive(submitInfo)
+	// Wait synchronously — Flush is a fence-like call in the
+	// conformance/standalone path; callers follow it immediately with
+	// ReadPixels which must see the committed output.
+	_ = vk.DeviceWaitIdle(e.dev.device)
+	e.recording = false
+	e.standalone = false
+
+	// Standalone callers (conformance tests + direct device unit tests)
+	// drive the encoder through BeginRenderPass → draws → EndRenderPass
+	// → Flush repeatedly without Device.BeginFrame bracketing, so
+	// resetFrame() never runs. Every bindUniforms allocation from the
+	// 2048-set descriptor pool accumulates across Flush calls; once the
+	// pool exhausts, AllocateDescriptorSet silently errors and every
+	// subsequent draw renders nothing. Reset here so the pool gets
+	// reused across standalone cycles too.
+	e.resetFrame()
+}
 
 // resetFrame resets descriptor pool for the next frame.
 // Called from Device.BeginFrame after the fence signals (GPU work complete).
+// Also clears the sticky blend override so a SetBlendMode call from a
+// prior frame doesn't leak into the new frame's first SetPipeline.
+// Without this reset a scene that calls SetBlendMode(Additive) once for
+// a light draw and then relies on the pipeline-descriptor's default blend
+// on the next frame's first draw would silently re-use Additive.
 func (e *Encoder) resetFrame() {
 	if e.descriptorPool != 0 {
 		// Reset is much cheaper than destroy+recreate — keeps the pool
@@ -477,4 +676,6 @@ func (e *Encoder) resetFrame() {
 		vk.ResetDescriptorPool(e.dev.device, e.descriptorPool)
 		e.descriptorSet = 0
 	}
+	e.blendModeSet = false
+	e.currentBlendMode = backend.BlendMode{}
 }

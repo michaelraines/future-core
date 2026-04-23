@@ -49,14 +49,27 @@ type (
 // TextureFormat mirrors WGPUTextureFormat.
 type TextureFormat uint32
 
+// wgpu-native v27 texture format enum values (from
+// /opt/homebrew/include/webgpu.h). The WebGPU spec shifted these in
+// v27 so every named enum has an explicit `Undefined = 0` sentinel;
+// always source new constants from the installed header rather than
+// from a spec draft. Historical note: RGBA16Float / RGBA32Float /
+// BGRA8Unorm used to be listed as 33 / 36 / 24 here — all off-by-one
+// because the author of the bindings was reading a pre-v27 spec. The
+// BGRA8Unorm bug in particular silently selected BGRA8UnormSrgb
+// (=0x18=24) on macOS surfaces and produced a visible double-gamma
+// encoding (scene-selector background noticeably brighter than the
+// WebGPU browser and Vulkan native backends).
 const (
-	TextureFormatRGBA8Unorm   TextureFormat = 18
-	TextureFormatBGRA8Unorm   TextureFormat = 24
-	TextureFormatR8Unorm      TextureFormat = 1
-	TextureFormatRGBA16Float  TextureFormat = 33
-	TextureFormatRGBA32Float  TextureFormat = 36
-	TextureFormatDepth24Plus  TextureFormat = 40
-	TextureFormatDepth32Float TextureFormat = 42
+	TextureFormatR8Unorm        TextureFormat = 0x01
+	TextureFormatRGBA8Unorm     TextureFormat = 0x12 // 18
+	TextureFormatRGBA8UnormSrgb TextureFormat = 0x13 // 19
+	TextureFormatBGRA8Unorm     TextureFormat = 0x17 // 23
+	TextureFormatBGRA8UnormSrgb TextureFormat = 0x18 // 24
+	TextureFormatRGBA16Float    TextureFormat = 0x22 // 34
+	TextureFormatRGBA32Float    TextureFormat = 0x23 // 35
+	TextureFormatDepth24Plus    TextureFormat = 0x28 // 40
+	TextureFormatDepth32Float   TextureFormat = 0x2A // 42
 )
 
 // TextureUsage mirrors WGPUTextureUsage flags (WGPUFlags = uint64).

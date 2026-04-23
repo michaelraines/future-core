@@ -556,37 +556,16 @@ func reTextureCall(samplerName string) *regexp.Regexp {
 	return regexp.MustCompile(`texture\s*\(\s*` + regexp.QuoteMeta(samplerName) + `\s*,\s*[^)]+\)`)
 }
 
-// buildWGSLUniformLayout computes byte offsets for uniform fields using WGSL/std140 rules.
+// buildWGSLUniformLayout delegates std140 arithmetic to
+// buildStd140Layout (layout.go) and then rewrites each field's Type
+// from the GLSL name to its WGSL equivalent so the downstream WGSL
+// struct emitter (`buildUniformStructWGSL`) gets valid syntax. The
+// shared layout helper guarantees the offsets match every other
+// backend that consumes ExtractUniformLayout.
 func buildWGSLUniformLayout(uniforms []uniform) []UniformField {
-	if len(uniforms) == 0 {
-		return nil
-	}
-	fields := make([]UniformField, len(uniforms))
-	offset := 0
-	for i, u := range uniforms {
-		size := uniformSize(u.typ)
-		// WGSL std140 alignment rules:
-		// f32, i32: align 4
-		// vec2<f32>: align 8
-		// vec3<f32>, vec4<f32>: align 16
-		// mat3x3, mat4x4: align 16
-		align := 4
-		switch u.typ {
-		case "vec3", "vec4", "mat3", "mat4":
-			align = 16
-		case "vec2":
-			align = 8
-		}
-		if offset%align != 0 {
-			offset += align - (offset % align)
-		}
-		fields[i] = UniformField{
-			Name:   u.name,
-			Type:   wgslType(u.typ),
-			Offset: offset,
-			Size:   size,
-		}
-		offset += size
+	fields := buildStd140Layout(uniforms)
+	for i := range fields {
+		fields[i].Type = wgslType(fields[i].Type)
 	}
 	return fields
 }

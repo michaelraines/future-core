@@ -187,13 +187,27 @@ func (d *Device) createSurface(cfg backend.DeviceConfig) error {
 // configureSurface queries the preferred format and configures the surface
 // for presentation. Called after d.surface is set.
 func (d *Device) configureSurface() error {
-	// Query the preferred surface format from the adapter.
-	d.surfaceFormat = wgpu.TextureFormatBGRA8Unorm // sensible default
+	// Query the preferred surface format from the adapter. On macOS
+	// the first advertised format is typically BGRA8UnormSrgb — but
+	// our shaders already output linear values that the compositor
+	// then treats as sRGB-encoded, so picking the sRGB surface format
+	// makes the driver apply gamma encoding a second time and the
+	// scene looks washed-out / lighter than the WebGPU browser and
+	// Vulkan backends. Prefer the linear (Unorm) variant when the
+	// surface offers it; fall back to the first advertised format if
+	// nothing linear is available.
+	d.surfaceFormat = wgpu.TextureFormatBGRA8Unorm
 	var caps wgpu.SurfaceCapabilities
 	wgpu.SurfaceGetCapabilities(d.surface, d.adapter, &caps)
 	if caps.FormatCount > 0 && caps.Formats != 0 {
 		formats := unsafe.Slice((*wgpu.TextureFormat)(unsafe.Pointer(caps.Formats)), caps.FormatCount)
 		d.surfaceFormat = formats[0]
+		for _, f := range formats {
+			if f == wgpu.TextureFormatBGRA8Unorm || f == wgpu.TextureFormatRGBA8Unorm {
+				d.surfaceFormat = f
+				break
+			}
+		}
 	}
 
 	surfaceCfg := wgpu.SurfaceConfiguration{
@@ -432,6 +446,16 @@ func (d *Device) BeginFrame() {
 	// Reset uniform ring buffer cursor for the new frame.
 	d.uniformCursor = 0
 
+	// Clear the encoder's sticky blend override so a SetBlendMode call
+	// from a prior frame doesn't leak into the new frame's first
+	// SetPipeline. Keeping the override sticky across draws (inside a
+	// frame) is intentional — matches Vulkan's behaviour — but across
+	// frames it's a correctness hazard.
+	if d.encoder != nil {
+		d.encoder.pendingBlend = backend.BlendMode{}
+		d.encoder.pendingBlendSet = false
+	}
+
 	if !d.hasSurface {
 		return
 	}
@@ -440,12 +464,28 @@ func (d *Device) BeginFrame() {
 	var surfTex wgpu.SurfaceTexture
 	wgpu.SurfaceGetCurrentTexture(d.surface, &surfTex)
 
-	// Status 0 = success. Non-zero means lost, outdated, or timeout.
-	// Reconfigure the surface and retry once.
-	if surfTex.Status != 0 {
+	// In wgpu-native v27 status 0 = SuccessOptimal, 1 = SuccessSuboptimal.
+	// Both are usable; the latter just means the surface should be
+	// reconfigured soon (e.g. after a DPR change on macOS). Only
+	// Timeout / Outdated / Lost / Error require a reconfigure+retry.
+	//
+	// wgpu-native keeps an implicit SurfaceOutput alive as long as the
+	// returned texture is held, and SurfaceConfigure refuses to run
+	// while one is outstanding ("SurfaceOutput must be dropped before
+	// a new Surface is made"). Release the texture before reconfiguring.
+	const (
+		statusSuccessOptimal    = 0
+		statusSuccessSuboptimal = 1
+	)
+	if surfTex.Status != statusSuccessOptimal && surfTex.Status != statusSuccessSuboptimal {
+		if surfTex.Texture_ != 0 {
+			wgpu.TextureRelease(surfTex.Texture_)
+			surfTex.Texture_ = 0
+		}
 		d.reconfigureSurface()
 		wgpu.SurfaceGetCurrentTexture(d.surface, &surfTex)
-		if surfTex.Status != 0 || surfTex.Texture_ == 0 {
+		if (surfTex.Status != statusSuccessOptimal && surfTex.Status != statusSuccessSuboptimal) ||
+			surfTex.Texture_ == 0 {
 			return
 		}
 	}
@@ -489,12 +529,39 @@ func (d *Device) Resize(width, height int) {
 		// Offscreen path: recreate the default color texture.
 		d.recreateDefaultTexture()
 	}
+
+	// Keep the cached encoder's viewport dimensions in sync. Without
+	// this, BeginRenderPass would call SetViewport with the original
+	// size on every screen pass, scaling the rendered scene into the
+	// top-left corner (or clipping it) until the next restart.
+	if d.encoder != nil {
+		d.encoder.width = width
+		d.encoder.height = height
+	}
+}
+
+// ResizeScreen is the interface method the engine invokes on every
+// frame (see engine_desktop.go). For WebGPU native, screen and device
+// dimensions are the same — forward to Resize, which reconfigures the
+// swapchain and updates the encoder's cached viewport.
+func (d *Device) ResizeScreen(width, height int) {
+	if width == d.width && height == d.height {
+		return
+	}
+	d.Resize(width, height)
 }
 
 // reconfigureSurface reconfigures the surface with current dimensions.
+// Any outstanding view of the previous frame's surface texture is
+// released first — wgpu-native rejects SurfaceConfigure while a
+// SurfaceOutput from this surface is still held.
 func (d *Device) reconfigureSurface() {
 	if d.surface == 0 || d.device == 0 {
 		return
+	}
+	if d.currentTexView != 0 {
+		wgpu.TextureViewRelease(d.currentTexView)
+		d.currentTexView = 0
 	}
 	surfaceCfg := wgpu.SurfaceConfiguration{
 		Device:      d.device,

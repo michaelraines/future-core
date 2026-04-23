@@ -191,6 +191,23 @@ func newImageLabeled(width, height int, labelPrefix string) *Image {
 			if rend.registerRenderTarget != nil {
 				rend.registerRenderTarget(img.textureID, rt)
 			}
+			// Auto-request a clear on first render-pass entry. Vulkan
+			// VkImages start in VK_IMAGE_LAYOUT_UNDEFINED, and our
+			// offscreen-RT load-variant render pass declares
+			// InitialLayout=ShaderReadOnlyOptimal. Without a pending
+			// clear the sprite pass's first BeginRenderPass on a fresh
+			// RT uses LoadActionLoad, triggering a layout mismatch that
+			// MoltenVK silently accepts but returns pathological
+			// content for — sampling the RT later produced all-white
+			// pixels. Visible as every sprite-atlas-backed scene
+			// (isometric-combat, everything that calls
+			// `NewCanvas` then `DrawImage` in the same frame) rendering
+			// the atlas as a solid white background with correct
+			// lightmap/HUD overlays on top. Pre-registering the clear
+			// means the first render pass does a GPU-native
+			// attachment clear from Undefined → ColorAttachment →
+			// ShaderReadOnly with no layout UB.
+			rend.pendingClears.RequestOnce(img.textureID)
 		}
 	}
 
@@ -859,6 +876,12 @@ func (img *Image) disposeNow() {
 			if rend.unregisterRenderTarget != nil && img.renderTarget != nil {
 				rend.unregisterRenderTarget(img.textureID)
 			}
+			// Drop any pending clear for this target. newImageLabeled
+			// auto-registers a RequestOnce for every fresh RT (see the
+			// Vulkan UNDEFINED-layout fix there); without this Forget,
+			// that entry outlives the texture and can be consumed later
+			// against whatever image reuses the textureID.
+			rend.pendingClears.Forget(img.textureID)
 			rend.markDisposedID(img.textureID)
 		}
 		if img.renderTarget != nil {

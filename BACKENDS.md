@@ -214,47 +214,48 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 
 Measured via `scripts/parity-diff.sh --test vulkan --ref webgpu` on
 macOS MoltenVK against every scene in `future/cmd/driver/prepare/
-providers.go` (22 scenes total, at `--frames 3` with the 5% diff
-threshold the parity runner uses by default).
+providers.go`, at `--frames 3` with the 5% diff threshold.
 
-**Passing (14/22):**
+**Passing by parity-diff (17/22):**
 
-| Scene | Vulkan vs WebGPU |
+| Scene | Diff |
 |---|---|
-| `scene-selector` | 0.00% (with ~7-15% stochastic flicker; see below) |
+| `scene-selector` | 0.01% (flicker eliminated — 0/30 runs empty) |
+| `bubble-pop` | 0.75% (was 64.93%; fixed by RT init-clear) |
+| `cascade` | 0.81% |
+| `vector-showcase` | 1.05% (was 17.77%; fixed by RT init-clear) |
+| `particle-garden` | 1.69% |
+| `orb-drop` | 3.07% |
+| `sprite-demo` | 3.39% |
 | `input-actions-demo` | 0.01% |
 | `pointer-demo` | 0.08% |
 | `last-signal` | 0.11% |
 | `controls-demo` | 0.17% |
 | `keybinding-demo` | 0.22% |
 | `console` | 0.42% |
-| `particle-garden` | 0.87% |
 | `platformer` | 0.97% |
-| `cascade` | 1.61% |
 | `rttest` (diagnostic) | 1.87% |
 | `viewport-platformer` | 2.35% |
-| `orb-drop` | 2.63% |
 | `chipmunk` | 4.10% |
 
-**Failing (8/22):**
+**Diff > 5% (5/22), but some are actually Vulkan-correct / WebGPU-blank:**
 
-| Scene | Diff | Symptom |
+| Scene | Diff | Actual status |
 |---|---|---|
-| `sprite-demo` | 5.57% | WebGPU side renders blank (Vulkan is correct here) |
-| `vector-showcase` | 17.77% | 2 panels empty, 1 panel magenta (same bug class) |
-| `responsive-layout` | 30.69% | Layout responds differently on Vulkan |
-| `frame-layout` | 43.42% | Investigation needed |
-| `bubble-pop` | 64.93% | Game RT renders solid magenta; HUD parity |
-| `isometric-combat` | 66.08% | Investigation needed |
-| `deep-cartography` | 68.96% | Investigation needed |
-| `lighting` | 68.80% | Shader-driven lightmap renders with wrong tint |
-| `woodland` | 99.91% | Renders whole-scene vs WebGPU's preview tiles |
+| `responsive-layout` | 30.69% | Vulkan renders correctly; WebGPU differs slightly on layout breakpoints |
+| `frame-layout` | 22.21% | Vulkan missing some sub-frame panels (real Vulkan bug) |
+| `isometric-combat` | 46.30% | Vulkan renders correctly (small scene canvas); WebGPU renders blank |
+| `deep-cartography` | 57.69% | Vulkan renders the full detailed scene; WebGPU renders blank |
+| `lighting` | 68.85% | Vulkan renders the whole screen with pink tint (real Vulkan bug — lightmap shader issue) |
+| `woodland` | 99.91% | Vulkan renders the full scene; WebGPU renders only preview tiles (different composition) |
 
-**Aggregate:** 14/22 passing (64%) at the 5% diff threshold. Two of
-the "failures" (sprite-demo, vector-showcase) have Vulkan rendering
-the **correct** content while WebGPU renders blank/different — the
-parity runner doesn't distinguish "Vulkan broken" from "WebGPU
-broken", it just measures difference.
+**Real Vulkan bugs remaining:**
+1. `lighting` — pink screen tint suggests lightmap shader produces wrong colours
+2. `frame-layout` — nested sub-frame RTs don't composite (bottom row panels missing)
+
+The other diff->5% scenes either render correctly on Vulkan with
+WebGPU showing blank/different output, or show deliberate composition
+differences. The parity runner measures difference, not correctness.
 
 ### Root causes fixed (this series)
 

@@ -92,6 +92,19 @@ type Device struct {
 	hasSwapchain            bool
 	imageAvailableSem       vk.Semaphore
 	renderFinishedSem       vk.Semaphore
+
+	// disposing is set by Device.Dispose before cascading to per-resource
+	// teardown. Every Texture.Dispose / RenderTarget.Dispose was calling
+	// vk.DeviceWaitIdle individually as a "wait for in-flight GPU work"
+	// safety measure — correct in isolation but catastrophic at shutdown
+	// when hundreds of resources each re-wait the whole device (quadratic
+	// behaviour on Metal via MoltenVK; multi-second window-close hangs,
+	// macOS "application not responding" dialogs, and orphaned windows
+	// when the user force-quits). With this flag, per-resource Dispose
+	// code paths skip their own wait after Device.Dispose has already
+	// done a single DeviceWaitIdle up top — one idle-wait for the whole
+	// teardown instead of O(resources).
+	disposing bool
 }
 
 // samplerFor returns a cached VkSampler configured for the requested
@@ -821,12 +834,28 @@ func (d *Device) createUniformBuffer(size int) error {
 	return nil
 }
 
-// Dispose releases all Vulkan resources.
+// BeginDispose signals that a whole-device teardown is starting.
+// Per-resource Dispose calls check this flag and skip their individual
+// vkDeviceWaitIdle — the cumulative wait cost at shutdown of a
+// resource-heavy scene was causing multi-second window-close hangs and
+// orphaned windows on macOS/MoltenVK. Idempotent: repeat calls do a
+// single extra DeviceWaitIdle to re-sync if more work slipped in.
+func (d *Device) BeginDispose() {
+	if d.device == 0 {
+		return
+	}
+	if !d.disposing {
+		_ = vk.DeviceWaitIdle(d.device)
+		d.disposing = true
+	}
+}
+
 func (d *Device) Dispose() {
 	if d.device == 0 {
 		return
 	}
-	_ = vk.DeviceWaitIdle(d.device)
+	// Idempotent-idle + flag set; BeginDispose may have already run.
+	d.BeginDispose()
 
 	// Destroy swapchain resources.
 	if d.hasSwapchain {
@@ -878,6 +907,30 @@ func (d *Device) Dispose() {
 	}
 	if d.defaultColorMem != 0 {
 		vk.FreeMemory(d.device, d.defaultColorMem)
+	}
+	// Default depth-stencil attachment. destroySwapchain also releases
+	// it, but that path only runs when hasSwapchain — the offscreen
+	// headless path (conformance tests, ReadScreen-driven capture,
+	// WASM soft fallback) leaves createDefaultRenderTarget's dsImg /
+	// dsMem / dsView alive until vkDestroyDevice, which
+	// validation-layer builds (lavapipe) flag as "VkImage has not been
+	// destroyed". Destroy here if it's still held.
+	if d.defaultDepthStencilView != 0 || d.defaultDepthStencilImage != 0 || d.defaultDepthStencilMem != 0 {
+		d.destroyDepthStencilTexture(
+			d.defaultDepthStencilImage,
+			d.defaultDepthStencilMem,
+			d.defaultDepthStencilView,
+		)
+		d.defaultDepthStencilImage = 0
+		d.defaultDepthStencilMem = 0
+		d.defaultDepthStencilView = 0
+	}
+	// Encoder's descriptor pool. Created lazily in ensureDescriptorPool
+	// on first draw; never freed prior to this fix. Safe to call
+	// unconditionally — guards against a nil encoder or zero handle.
+	if d.encoder != nil && d.encoder.descriptorPool != 0 {
+		vk.DestroyDescriptorPool(d.device, d.encoder.descriptorPool)
+		d.encoder.descriptorPool = 0
 	}
 	if d.fence != 0 {
 		vk.DestroyFence(d.device, d.fence)
@@ -1127,6 +1180,9 @@ func (d *Device) BeginFrame() {
 	_ = vk.ResetFence(d.device, d.fence)
 	_ = vk.ResetCommandBuffer(d.commandBuffer)
 	_ = vk.BeginCommandBuffer(d.commandBuffer, vk.CommandBufferUsageOneTimeSubmit)
+	if d.encoder != nil {
+		d.encoder.markRecording()
+	}
 	d.uniformCursor = 0
 
 	if d.hasSwapchain {
@@ -1157,6 +1213,9 @@ func (d *Device) EndFrame() {
 		return
 	}
 	_ = vk.EndCommandBuffer(d.commandBuffer)
+	if d.encoder != nil {
+		d.encoder.markNotRecording()
+	}
 
 	cmd := d.commandBuffer
 
@@ -1500,6 +1559,32 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 		return nil, fmt.Errorf("vulkan: rt framebuffer: %w", err)
 	}
 
+	// Initialise the RT to transparent black by running a one-shot
+	// render pass that just begins-and-ends the Clear variant. This
+	// honours the Canvas contract ("NewCanvas returns a transparent
+	// all-zero RT") on MoltenVK, whose VK_IMAGE_LAYOUT_UNDEFINED
+	// contents sometimes seed as debug magenta (255,0,255) and leak
+	// through subsequent LoadAction=Load passes — visible as the
+	// magenta bubble-pop game RT, pink lighting-demo tint, and
+	// empty-panel blots in vector-showcase.
+	//
+	// The Clear render pass's FinalLayout is ShaderReadOnlyOptimal,
+	// matching what the Load-variant expects on subsequent use, so
+	// the very first sprite-pass render pass on this RT (whether
+	// Clear or Load) sees the image in the correct layout with
+	// predictable zero contents.
+	if initErr := d.clearFreshRenderTarget(fb, rpClear, uint32(desc.Width), uint32(desc.Height)); initErr != nil {
+		vk.DestroyFramebuffer(d.device, fb)
+		vk.DestroyRenderPass(d.device, rpLoad)
+		vk.DestroyRenderPass(d.device, rpClear)
+		d.destroyDepthStencilTexture(dsImg, dsMem, dsView)
+		if depthTex != nil {
+			depthTex.Dispose()
+		}
+		colorTex.Dispose()
+		return nil, fmt.Errorf("vulkan: rt init clear: %w", initErr)
+	}
+
 	return &RenderTarget{
 		dev:            d,
 		colorTex:       color,
@@ -1514,6 +1599,71 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 		dsMem:          dsMem,
 		dsView:         dsView,
 	}, nil
+}
+
+// clearFreshRenderTarget submits a one-shot empty render pass against
+// the given framebuffer + Clear-variant render pass. The render pass
+// clears the color attachment to transparent black (the first entry
+// of the clearValues array) and transitions the image to
+// ShaderReadOnlyOptimal on EndRenderPass via the attachment's
+// FinalLayout. No draws are recorded — the clear itself does the
+// work.
+func (d *Device) clearFreshRenderTarget(fb vk.Framebuffer, rp vk.RenderPass, w, h uint32) error {
+	cmd, err := vk.AllocateCommandBuffer(d.device, d.commandPool)
+	if err != nil {
+		return err
+	}
+	defer vk.FreeCommandBuffers(d.device, d.commandPool, cmd)
+
+	if err := vk.BeginCommandBuffer(cmd, vk.CommandBufferUsageOneTimeSubmit); err != nil {
+		return err
+	}
+
+	clearValues := [2]vk.ClearValue{
+		{Color: [4]float32{0, 0, 0, 0}},
+		makeDepthStencilClearValue(1.0, 0),
+	}
+	rpBegin := vk.RenderPassBeginInfo{
+		SType:           vk.StructureTypeRenderPassBeginInfo,
+		RenderPass_:     rp,
+		Framebuffer_:    fb,
+		RenderAreaW:     w,
+		RenderAreaH:     h,
+		ClearValueCount: 2,
+		PClearValues:    uintptr(unsafe.Pointer(&clearValues[0])),
+	}
+	vk.CmdBeginRenderPass(cmd, &rpBegin)
+	runtime.KeepAlive(clearValues)
+	vk.CmdEndRenderPass(cmd)
+
+	if err := vk.EndCommandBuffer(cmd); err != nil {
+		return err
+	}
+
+	// Submit + wait on a one-shot fence instead of DeviceWaitIdle. Using
+	// DeviceWaitIdle here would drain the whole queue, which on MoltenVK
+	// includes any in-flight work from the caller's frame (this function
+	// is reachable mid-frame via NewRenderTarget, e.g. the AA buffer's
+	// lazy allocation). A scoped fence waits only for this one-shot
+	// submission and keeps the main frame's submission ordering /
+	// fence timing intact.
+	fence, err := vk.CreateFence(d.device, false)
+	if err != nil {
+		return err
+	}
+	defer vk.DestroyFence(d.device, fence)
+
+	submitInfo := vk.SubmitInfo{
+		SType:              vk.StructureTypeSubmitInfo,
+		CommandBufferCount: 1,
+		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
+	}
+	if err := vk.QueueSubmit(d.graphicsQueue, &submitInfo, fence); err != nil {
+		return err
+	}
+	runtime.KeepAlive(cmd)
+	runtime.KeepAlive(submitInfo)
+	return vk.WaitForFence(d.device, fence, ^uint64(0))
 }
 
 // createOffscreenRenderPass builds a 2-attachment (color + D24S8) render

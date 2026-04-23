@@ -33,6 +33,17 @@ type Encoder struct {
 
 	// Current sampler filter per slot (default: nearest).
 	slotFilters map[int]wgpu.FilterMode
+
+	// Sticky blend mode override. Set by SetBlendMode, read by every
+	// subsequent SetPipeline. Not reset on consume — matches the
+	// Vulkan encoder and the JS WebGPU path, both of which keep the
+	// recorded blend sticky so back-to-back draws that share a blend
+	// don't need to repeat the SetBlendMode call. Prior to this the
+	// method was a no-op and every draw used the pipeline descriptor's
+	// default (BlendSourceOver), which silently dropped iso-combat's
+	// lightmap multiply and the lighting demo's additive light stamps.
+	pendingBlend    backend.BlendMode
+	pendingBlendSet bool
 }
 
 // BeginRenderPass begins a WebGPU render pass.
@@ -70,6 +81,18 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	loadOp := wgpu.LoadOpLoad
 	if desc.LoadAction == backend.LoadActionClear {
 		loadOp = wgpu.LoadOpClear
+	}
+
+	// Skip the pass entirely if we have no color view to attach.
+	// Happens when BeginFrame couldn't acquire a surface texture
+	// (status != 0 on both attempts) — previously we'd still record a
+	// pass with View=0, which wgpu-native rejects at
+	// CommandEncoderFinish with "No color attachments or depth
+	// attachments were provided". Leaving passEncoder=0 makes every
+	// subsequent command in this "pass" a no-op; the frame is lost but
+	// the engine stays alive for the next BeginFrame.
+	if view == 0 {
+		return
 	}
 
 	colorAttachment := wgpu.RenderPassColorAttachment{
@@ -135,11 +158,21 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 	e.currentPipeline = p
 
-	// Lazily create (or recreate) the pipeline for the current target format.
-	p.ensurePipelineForFormat(e.targetFormat)
+	// Pick the blend mode for this draw. Once SetBlendMode has been
+	// called on the encoder, the recorded blend sticks — subsequent
+	// SetPipeline calls without a new SetBlendMode reuse it. This
+	// matches the Vulkan encoder and the JS WebGPU path (which mutates
+	// p.desc.BlendMode to achieve the same sticky effect). A bare
+	// SetPipeline with no prior SetBlendMode falls back to the
+	// pipeline's descriptor default.
+	blend := p.desc.BlendMode
+	if e.pendingBlendSet {
+		blend = e.pendingBlend
+	}
+	handle := p.ensurePipelineForVariant(e.targetFormat, blend)
 
-	if p.handle != 0 && e.passEncoder != 0 {
-		wgpu.RenderPassSetPipeline(e.passEncoder, p.handle)
+	if handle != 0 && e.passEncoder != 0 {
+		wgpu.RenderPassSetPipeline(e.passEncoder, handle)
 	}
 
 	// Bind uniform buffer (group 0) if the shader has uniforms.
@@ -393,12 +426,19 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 		uint32(indexCount), uint32(instanceCount), uint32(firstIndex), 0, 0)
 }
 
-// Flush is a no-op — submission happens in EndRenderPass.
+// SetBlendMode records the desired blend mode. On the next SetPipeline
+// the encoder will pick (or create) a pipeline variant compiled with
+// this blend state. Until that SetPipeline fires, the value is staged
+// — blend state is baked into the WGPURenderPipeline and can't be
+// changed mid-pipeline.
+func (e *Encoder) SetBlendMode(mode backend.BlendMode) {
+	e.pendingBlend = mode
+	e.pendingBlendSet = true
+}
+
 // Flush submits all render passes accumulated in the current command
 // encoder as a single queue submission. Called once per frame after
 // the sprite pass has recorded all its render passes.
-// SetBlendMode is a no-op for this backend.
-func (e *Encoder) SetBlendMode(_ backend.BlendMode) {}
 
 func (e *Encoder) Flush() {
 	if e.cmdEncoder == 0 {

@@ -19,11 +19,22 @@ import (
 //
 // Environment variables:
 //
-//	FUTURE_CORE_HEADLESS=N       Capture after N frames and exit.
-//	FUTURE_CORE_HEADLESS_OUTPUT  Output PNG path (default: headless_output.png).
+//	FUTURE_CORE_HEADLESS=N            Capture after N frames and exit.
+//	FUTURE_CORE_HEADLESS_OUTPUT       Output PNG path (default: headless_output.png).
+//	FUTURE_CORE_HEADLESS_WINDOW=1     Capture the window framebuffer via
+//	                                  glReadPixels instead of the backend's
+//	                                  internal RT via device.ReadScreen.
+//	                                  Includes the GL-presenter blit (and
+//	                                  any swapchain colorspace / format
+//	                                  conversion) that users actually see
+//	                                  on-screen. Use this to diagnose bugs
+//	                                  that exist only in the presentation
+//	                                  step (e.g. Vulkan → GL blit color
+//	                                  shifts, aspect-ratio stretching).
 type headlessConfig struct {
-	frames int
-	output string
+	frames        int
+	output        string
+	windowCapture bool
 }
 
 // getHeadlessConfig reads headless configuration from the environment.
@@ -41,20 +52,44 @@ func getHeadlessConfig() *headlessConfig {
 	if output == "" {
 		output = "headless_output.png"
 	}
-	return &headlessConfig{frames: n, output: output}
+	windowCapture := os.Getenv("FUTURE_CORE_HEADLESS_WINDOW") == "1"
+	return &headlessConfig{frames: n, output: output, windowCapture: windowCapture}
 }
 
-// saveScreenshot reads pixels from the device and writes a PNG.
-func (e *engine) saveScreenshot(width, height int, path string) error {
+// saveScreenshot reads pixels and writes a PNG. Two capture modes:
+//
+//   - Device mode (default): `device.ReadScreen` copies the backend's
+//     final offscreen color buffer before it's handed to the
+//     presenter. Fast, bypasses any presenter/swapchain quirks — but
+//     therefore can't see bugs that exist only in the presentation
+//     step.
+//
+//   - Window mode (FUTURE_CORE_HEADLESS_WINDOW=1): glReadPixels on
+//     the GL default framebuffer after the presenter has blit the
+//     backend's output to it. This captures exactly what the user sees
+//     in the window, including Vulkan → GL RGBA→BGRA conversions,
+//     aspect-ratio stretching by the presenter quad, viewport
+//     mismatches, and any color-space drift. Required for diagnosing
+//     bugs that were invisible in device-mode captures but visible on
+//     the live window.
+func (e *engine) saveScreenshot(width, height int, path string, windowCapture bool) error {
 	pixels := make([]byte, width*height*4)
 
-	// Try ReadScreen first (works for soft, vulkan, metal, etc.).
-	if !e.device.ReadScreen(pixels) {
-		if e.noGL {
-			return fmt.Errorf("headless: backend does not support ReadScreen and GL is not available")
+	readFromWindow := windowCapture && !e.noGL
+	readFromDevice := !readFromWindow
+
+	if readFromDevice {
+		if !e.device.ReadScreen(pixels) {
+			if e.noGL {
+				return fmt.Errorf("headless: backend does not support ReadScreen and GL is not available")
+			}
+			// Fall back to glReadPixels for backends like OpenGL that
+			// render directly to the window framebuffer.
+			readFromWindow = true
 		}
-		// OpenGL renders directly to the window framebuffer.
-		// Read pixels via glReadPixels from the default framebuffer.
+	}
+
+	if readFromWindow {
 		gl.ReadPixels(0, 0, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE,
 			unsafe.Pointer(&pixels[0]))
 

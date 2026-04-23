@@ -43,11 +43,17 @@ type varying struct {
 
 // Regex patterns for GLSL parsing.
 var (
-	reVersion    = regexp.MustCompile(`^\s*#version\s+`)
-	reAttribute  = regexp.MustCompile(`^\s*layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*in\s+(\w+)\s+(\w+)\s*;`)
-	reUniform    = regexp.MustCompile(`^\s*uniform\s+(\w+)\s+(\w+)\s*;`)
-	reVaryingOut = regexp.MustCompile(`^\s*out\s+(\w+)\s+(\w+)\s*;`)
-	reVaryingIn  = regexp.MustCompile(`^\s*in\s+(\w+)\s+(\w+)\s*;`)
+	reVersion   = regexp.MustCompile(`^\s*#version\s+`)
+	reAttribute = regexp.MustCompile(`^\s*layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*in\s+(\w+)\s+(\w+)\s*;`)
+	reUniform   = regexp.MustCompile(`^\s*uniform\s+(\w+)\s+(\w+)\s*;`)
+	// reVaryingOut and reVaryingIn accept an optional `layout(location=N)`
+	// prefix — Vulkan-targeted GLSL needs explicit varying locations or
+	// glslang auto-assigns them (which is fine for isolated shaders but
+	// the Kage path benefits from deterministic numbering across
+	// vertex+fragment pairs). The WGSL/MSL translators assign their own
+	// locations by declaration order, so the captured prefix is ignored.
+	reVaryingOut = regexp.MustCompile(`^\s*(?:layout\s*\(\s*location\s*=\s*\d+\s*\)\s*)?out\s+(\w+)\s+(\w+)\s*;`)
+	reVaryingIn  = regexp.MustCompile(`^\s*(?:layout\s*\(\s*location\s*=\s*\d+\s*\)\s*)?in\s+(\w+)\s+(\w+)\s*;`)
 	reFragOut    = regexp.MustCompile(`^\s*out\s+vec4\s+(\w+)\s*;`)
 	reMainStart  = regexp.MustCompile(`^\s*void\s+main\s*\(\s*\)\s*\{?\s*$`)
 )
@@ -442,32 +448,19 @@ func mslType(glslType string) string {
 	return glslType
 }
 
-// buildUniformLayout computes byte offsets for uniform fields.
+// buildUniformLayout delegates std140 arithmetic to buildStd140Layout
+// (layout.go) and then rewrites each field's Type from the GLSL name
+// to its MSL equivalent. The old inline math here had the same vec3
+// bug the Vulkan parser did (used `size >= 16` as the align-16
+// trigger, which misses vec3 because SizeOf(vec3)=12), so every
+// uniform after a vec3 would land at a CPU offset one slot past
+// where the generated MSL struct expected it. Sharing the layout
+// with ExtractUniformLayout makes that class of bug a single-point
+// fix.
 func buildUniformLayout(uniforms []uniform) []UniformField {
-	if len(uniforms) == 0 {
-		return nil
-	}
-	fields := make([]UniformField, len(uniforms))
-	offset := 0
-	for i, u := range uniforms {
-		size := uniformSize(u.typ)
-		// Align to 16 bytes for mat4/vec4, 8 for vec2, 4 otherwise.
-		align := 4
-		if size >= 16 {
-			align = 16
-		} else if size == 8 {
-			align = 8
-		}
-		if offset%align != 0 {
-			offset += align - (offset % align)
-		}
-		fields[i] = UniformField{
-			Name:   u.name,
-			Type:   mslType(u.typ),
-			Offset: offset,
-			Size:   size,
-		}
-		offset += size
+	fields := buildStd140Layout(uniforms)
+	for i := range fields {
+		fields[i].Type = mslType(fields[i].Type)
 	}
 	return fields
 }
