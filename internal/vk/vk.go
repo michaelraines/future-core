@@ -70,26 +70,26 @@ func (r Result) Error() string { return fmt.Sprintf("VkResult(%d)", int32(r)) }
 // ---------------------------------------------------------------------------
 
 const (
-	StructureTypeInstanceCreateInfo                   = 1
-	StructureTypeDeviceCreateInfo                     = 3
-	StructureTypeDeviceQueueCreateInfo                = 2
-	StructureTypeCommandPoolCreateInfo                = 39
-	StructureTypeCommandBufferAllocateInfo            = 40
-	StructureTypeCommandBufferBeginInfo               = 42
-	StructureTypeFenceCreateInfo                      = 8
-	StructureTypeSemaphoreCreateInfo                  = 9
-	StructureTypeRenderPassCreateInfo                 = 38
-	StructureTypeFramebufferCreateInfo                = 37
-	StructureTypeImageCreateInfo                      = 14
-	StructureTypeImageViewCreateInfo                  = 15
-	StructureTypeBufferCreateInfo                     = 12
-	StructureTypeSamplerCreateInfo                    = 31
-	StructureTypeShaderModuleCreateInfo               = 16
-	StructureTypePipelineLayoutCreateInfo             = 30
-	StructureTypeGraphicsPipelineCreateInfo           = 28
-	StructureTypeMemoryAllocateInfo                   = 5
-	StructureTypeSubmitInfo                           = 4
-	StructureTypeRenderPassBeginInfo                  = 43
+	StructureTypeInstanceCreateInfo         = 1
+	StructureTypeDeviceCreateInfo           = 3
+	StructureTypeDeviceQueueCreateInfo      = 2
+	StructureTypeCommandPoolCreateInfo      = 39
+	StructureTypeCommandBufferAllocateInfo  = 40
+	StructureTypeCommandBufferBeginInfo     = 42
+	StructureTypeFenceCreateInfo            = 8
+	StructureTypeSemaphoreCreateInfo        = 9
+	StructureTypeRenderPassCreateInfo       = 38
+	StructureTypeFramebufferCreateInfo      = 37
+	StructureTypeImageCreateInfo            = 14
+	StructureTypeImageViewCreateInfo        = 15
+	StructureTypeBufferCreateInfo           = 12
+	StructureTypeSamplerCreateInfo          = 31
+	StructureTypeShaderModuleCreateInfo     = 16
+	StructureTypePipelineLayoutCreateInfo   = 30
+	StructureTypeGraphicsPipelineCreateInfo = 28
+	StructureTypeMemoryAllocateInfo         = 5
+	StructureTypeSubmitInfo                 = 4
+	StructureTypeRenderPassBeginInfo        = 43
 	// VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER = 45 per vulkan_core.h. Was
 	// incorrectly 46 (that's VK_STRUCTURE_TYPE_MEMORY_BARRIER), which
 	// MoltenVK accepted permissively but lavapipe validation rejects
