@@ -105,7 +105,6 @@ type Device struct {
 	// done a single DeviceWaitIdle up top — one idle-wait for the whole
 	// teardown instead of O(resources).
 	disposing bool
-
 }
 
 // samplerFor returns a cached VkSampler configured for the requested

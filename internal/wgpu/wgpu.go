@@ -61,15 +61,15 @@ type TextureFormat uint32
 // encoding (scene-selector background noticeably brighter than the
 // WebGPU browser and Vulkan native backends).
 const (
-	TextureFormatR8Unorm          TextureFormat = 0x01
-	TextureFormatRGBA8Unorm       TextureFormat = 0x12 // 18
-	TextureFormatRGBA8UnormSrgb   TextureFormat = 0x13 // 19
-	TextureFormatBGRA8Unorm       TextureFormat = 0x17 // 23
-	TextureFormatBGRA8UnormSrgb   TextureFormat = 0x18 // 24
-	TextureFormatRGBA16Float      TextureFormat = 0x22 // 34
-	TextureFormatRGBA32Float      TextureFormat = 0x23 // 35
-	TextureFormatDepth24Plus      TextureFormat = 0x28 // 40
-	TextureFormatDepth32Float     TextureFormat = 0x2A // 42
+	TextureFormatR8Unorm        TextureFormat = 0x01
+	TextureFormatRGBA8Unorm     TextureFormat = 0x12 // 18
+	TextureFormatRGBA8UnormSrgb TextureFormat = 0x13 // 19
+	TextureFormatBGRA8Unorm     TextureFormat = 0x17 // 23
+	TextureFormatBGRA8UnormSrgb TextureFormat = 0x18 // 24
+	TextureFormatRGBA16Float    TextureFormat = 0x22 // 34
+	TextureFormatRGBA32Float    TextureFormat = 0x23 // 35
+	TextureFormatDepth24Plus    TextureFormat = 0x28 // 40
+	TextureFormatDepth32Float   TextureFormat = 0x2A // 42
 )
 
 // TextureUsage mirrors WGPUTextureUsage flags (WGPUFlags = uint64).

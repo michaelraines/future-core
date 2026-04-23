@@ -90,7 +90,11 @@ const (
 	StructureTypeMemoryAllocateInfo                   = 5
 	StructureTypeSubmitInfo                           = 4
 	StructureTypeRenderPassBeginInfo                  = 43
-	StructureTypeImageMemoryBarrier                   = 46
+	// VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER = 45 per vulkan_core.h. Was
+	// incorrectly 46 (that's VK_STRUCTURE_TYPE_MEMORY_BARRIER), which
+	// MoltenVK accepted permissively but lavapipe validation rejects
+	// with "sType must be VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER".
+	StructureTypeImageMemoryBarrier                   = 45
 	StructureTypeMappedMemoryRange                    = 6
 	StructureTypeWriteDescriptorSet                   = 35
 	StructureTypeDescriptorSetLayoutCreateInfo        = 32

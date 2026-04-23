@@ -17,12 +17,12 @@ type Encoder struct {
 	cmd vk.CommandBuffer
 
 	// Current render pass state.
-	inRenderPass      bool
-	currentRenderPass vk.RenderPass
+	inRenderPass        bool
+	currentRenderPass   vk.RenderPass
 	currentRenderTarget *RenderTarget // nil for the default/screen target
-	currentPipeline   *Pipeline
-	boundTexture      *Texture
-	boundShader       *Shader
+	currentPipeline     *Pipeline
+	boundTexture        *Texture
+	boundShader         *Shader
 	// boundFilter drives samplerFor() in bindUniforms. Defaults to
 	// FilterNearest (which is also backend.TextureFilter's zero value),
 	// matching the prior always-nearest behaviour. SetTextureFilter
