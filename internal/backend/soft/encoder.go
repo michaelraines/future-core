@@ -246,6 +246,11 @@ func (e *Encoder) rasterizeIndexed(indexCount, firstIndex int) {
 	r := e.buildRasterizer(rt)
 	proj := e.projectionMatrix()
 	colorBody, colorTrans := e.colorMatrix()
+	// Hoist the color-matrix identity check out of the per-triangle loop.
+	// Scene-selector issues tens of thousands of triangles per frame with
+	// the same (identity) colorBody; the [16]float32 compare that powers
+	// the inner fast-path dominated CPU in soft-backend profiling.
+	colorIsIdentity := isIdentityMatrix(colorBody) && colorTrans == [4]float32{}
 	sampler := e.textureSampler()
 
 	// Process triangles (3 indices per triangle).
@@ -261,7 +266,7 @@ func (e *Encoder) rasterizeIndexed(indexCount, firstIndex int) {
 			if i0 >= len(verts) || i1 >= len(verts) || i2 >= len(verts) {
 				continue
 			}
-			r.rasterizeTriangle(verts[i0], verts[i1], verts[i2], proj, sampler, colorBody, colorTrans)
+			r.rasterizeTriangle(verts[i0], verts[i1], verts[i2], proj, sampler, colorBody, colorTrans, colorIsIdentity)
 		}
 	} else {
 		indices := unpackIndicesU16(e.boundIndexBuf.data)
@@ -274,7 +279,7 @@ func (e *Encoder) rasterizeIndexed(indexCount, firstIndex int) {
 			if i0 >= len(verts) || i1 >= len(verts) || i2 >= len(verts) {
 				continue
 			}
-			r.rasterizeTriangle(verts[i0], verts[i1], verts[i2], proj, sampler, colorBody, colorTrans)
+			r.rasterizeTriangle(verts[i0], verts[i1], verts[i2], proj, sampler, colorBody, colorTrans, colorIsIdentity)
 		}
 	}
 }
@@ -291,6 +296,7 @@ func (e *Encoder) rasterizeNonIndexed(vertexCount, firstVertex int) {
 	r := e.buildRasterizer(rt)
 	proj := e.projectionMatrix()
 	colorBody, colorTrans := e.colorMatrix()
+	colorIsIdentity := isIdentityMatrix(colorBody) && colorTrans == [4]float32{}
 	sampler := e.textureSampler()
 
 	end := firstVertex + vertexCount
@@ -298,7 +304,7 @@ func (e *Encoder) rasterizeNonIndexed(vertexCount, firstVertex int) {
 		end = len(verts)
 	}
 	for i := firstVertex; i+2 < end; i += 3 {
-		r.rasterizeTriangle(verts[i], verts[i+1], verts[i+2], proj, sampler, colorBody, colorTrans)
+		r.rasterizeTriangle(verts[i], verts[i+1], verts[i+2], proj, sampler, colorBody, colorTrans, colorIsIdentity)
 	}
 }
 

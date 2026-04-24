@@ -205,8 +205,34 @@ func (w *Window) DevicePixelRatio() float64 {
 // SetTitle is a no-op on Android (apps don't have title bars).
 func (w *Window) SetTitle(_ string) {}
 
-// SetSize is a no-op on Android (the OS controls window size).
-func (w *Window) SetSize(_, _ int) {}
+// SetSize records the surface dimensions in physical pixels. In
+// the embedded-engine build (default Android path), this is how the
+// Java host propagates surfaceChanged sizing down to the Go engine —
+// futurerender.AndroidLayout calls this before AndroidEnsureDevice,
+// and without these values populated, FramebufferSize() returns
+// (0, 0), EnsureDevice's size guard silently short-circuits, and no
+// GPU device is ever created (so Tick is a silent no-op and zero
+// buffers reach the ANativeWindow).
+//
+// In NativeActivity builds the same fields are set by
+// HandleSizeEvent from x/mobile's size.Event stream, so SetSize there
+// is effectively a redundant restate.
+func (w *Window) SetSize(widthPx, heightPx int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.widthPx = widthPx
+	w.hPx = heightPx
+	if w.pixelsPerPt > 0 {
+		density := float32(w.pixelsPerPt) * 72.0 / 160.0
+		w.width = int(float32(widthPx) / density)
+		w.height = int(float32(heightPx) / density)
+	} else {
+		// No density seen yet; treat dp == px until a size.Event /
+		// explicit density update lands.
+		w.width = widthPx
+		w.height = heightPx
+	}
+}
 
 // SetFullscreen is a no-op on Android (apps are always fullscreen).
 func (w *Window) SetFullscreen(_ bool) {}

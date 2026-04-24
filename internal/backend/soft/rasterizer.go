@@ -108,9 +108,23 @@ func transformVertex(v vertex2D, proj [16]float32) (x, y, z, w float32) {
 }
 
 // ndcToScreen converts NDC coordinates to screen pixel coordinates.
+//
+// The engine's orthographic projection (fmath.Mat4Ortho with bottom=H
+// and top=0) places world Y=0 at NDC Y=+1 and world Y=H at NDC Y=-1.
+// We then need to land world Y=0 at screen row 0 (the top) and world
+// Y=H at screen row H-1 (the bottom) — i.e. ndcY=+1 → top, ndcY=-1 →
+// bottom. That matches Vulkan/WebGPU's Y-down screen convention and
+// is what the rest of the stack (sprite pass, scene-selector layout,
+// debug HUD positioning) assumes.
+//
+// The earlier form — (ndcY+1)*0.5*H — produced OpenGL's Y-up screen
+// space (ndcY=+1 → bottom), which rendered the entire composite
+// vertically mirrored vs. GPU backends. Visible symptom: scene-
+// selector's debug HUD appeared in the top-right corner with text
+// upside-down instead of the bottom-right with upright text.
 func ndcToScreen(ndcX, ndcY float32, vp viewportRect) (sx, sy float32) {
 	sx = float32(vp.x) + (ndcX+1)*0.5*float32(vp.w)
-	sy = float32(vp.y) + (ndcY+1)*0.5*float32(vp.h)
+	sy = float32(vp.y) + (1-ndcY)*0.5*float32(vp.h)
 	return sx, sy
 }
 
@@ -129,12 +143,17 @@ func (r *rasterizer) rasterizeTriangle(
 	texSampler func(u, v float32) (float32, float32, float32, float32),
 	colorBody [16]float32,
 	colorTranslation [4]float32,
+	colorIsIdentity bool,
 ) {
 	// Transform vertices to clip space in float64 with explicit FMA.
 	p := [16]float64{}
 	for i, v := range proj {
 		p[i] = float64(v)
 	}
+	// colorIsIdentity is a caller-provided hoist of the identity check.
+	// applyColorMatrix uses it to skip matrix/translation work — the
+	// common case — without a per-pixel [16]float32 compare. Callers
+	// compute it once per draw via isIdentityMatrix + zero-vector check.
 	px0, py0 := float64(v0.px), float64(v0.py)
 	px1, py1 := float64(v1.px), float64(v1.py)
 	px2, py2 := float64(v2.px), float64(v2.py)
@@ -163,17 +182,21 @@ func (r *rasterizer) rasterizeTriangle(
 	nx1, ny1, nz1 := cx1/cw1, cy1/cw1, cz1/cw1
 	nx2, ny2, nz2 := cx2/cw2, cy2/cw2, cz2/cw2
 
-	// NDC → screen in float64 with math.FMA.
+	// NDC → screen in float64 with math.FMA. Y-down convention
+	// (ndcY=+1 → screen top, ndcY=-1 → screen bottom) to match
+	// Vulkan/WebGPU and the engine's ortho projection. See the
+	// commentary on ndcToScreen for why we don't use OpenGL's Y-up
+	// mapping here.
 	vpx, vpy := float64(r.viewport.x), float64(r.viewport.y)
 	halfW := 0.5 * float64(r.viewport.w)
 	halfH := 0.5 * float64(r.viewport.h)
 
 	sx0 := math.FMA(nx0+1, halfW, vpx)
-	sy0 := math.FMA(ny0+1, halfH, vpy)
+	sy0 := math.FMA(1-ny0, halfH, vpy)
 	sx1 := math.FMA(nx1+1, halfW, vpx)
-	sy1 := math.FMA(ny1+1, halfH, vpy)
+	sy1 := math.FMA(1-ny1, halfH, vpy)
 	sx2 := math.FMA(nx2+1, halfW, vpx)
-	sy2 := math.FMA(ny2+1, halfH, vpy)
+	sy2 := math.FMA(1-ny2, halfH, vpy)
 
 	// Bounding box (clamped to framebuffer).
 	minX := int(math.Floor(min3(sx0, sx1, sx2)))
@@ -321,7 +344,7 @@ func (r *rasterizer) rasterizeTriangle(
 			fa := ca * ta
 
 			// Apply color matrix transform.
-			fr, fg, fb, fa = applyColorMatrix(fr, fg, fb, fa, colorBody, colorTranslation)
+			fr, fg, fb, fa = applyColorMatrix(fr, fg, fb, fa, colorBody, colorTranslation, colorIsIdentity)
 
 			// Write fragment.
 			if r.colorWrite {
@@ -385,9 +408,16 @@ func stencilApplyOp(op backend.StencilOp, ref, current uint8) uint8 {
 }
 
 // applyColorMatrix applies the 4x4 color body matrix and translation vector.
-func applyColorMatrix(r, g, b, a float32, body [16]float32, trans [4]float32) (or, og, ob, oa float32) {
-	// Check if identity (optimization for common case).
-	if isIdentityMatrix(body) && trans == [4]float32{} {
+//
+// Callers MUST pass isIdentity=true when body is the identity matrix and
+// trans is the zero vector. The identity check itself is cheap at call
+// sites (once per triangle/draw) but pathological per-pixel — profiling
+// scene-selector found this function consuming ~20% of CPU with the
+// whole-array [16]float32 compare dominating, despite identity being the
+// overwhelmingly common case. Hoisting the check out of the inner
+// rasterization loop cut the overhead to near zero.
+func applyColorMatrix(r, g, b, a float32, body [16]float32, trans [4]float32, isIdentity bool) (or, og, ob, oa float32) {
+	if isIdentity {
 		return r, g, b, a
 	}
 	// Column-major: body[col*4+row]
@@ -399,8 +429,21 @@ func applyColorMatrix(r, g, b, a float32, body [16]float32, trans [4]float32) (o
 }
 
 // isIdentityMatrix checks if a [16]float32 is the identity matrix.
+// Call this ONCE per draw/triangle at the outermost sensible layer and
+// thread the result through as a bool.
+//
+// Implemented as explicit element compares rather than `m == [16]float32{...}`
+// because Go generates a runtime-called `type:.eq.[16]float32` helper for
+// the latter that can't short-circuit, and it dominated the profile
+// even once per-pixel calls were eliminated. With short-circuiting,
+// non-identity inputs (mid-scale + translate is common for transforms)
+// return after the first failing diagonal check.
 func isIdentityMatrix(m [16]float32) bool {
-	return m == [16]float32{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}
+	return m[0] == 1 && m[5] == 1 && m[10] == 1 && m[15] == 1 &&
+		m[1] == 0 && m[2] == 0 && m[3] == 0 &&
+		m[4] == 0 && m[6] == 0 && m[7] == 0 &&
+		m[8] == 0 && m[9] == 0 && m[11] == 0 &&
+		m[12] == 0 && m[13] == 0 && m[14] == 0
 }
 
 // writePixel blends and writes a fragment to the color buffer.

@@ -87,15 +87,10 @@ func (t *Texture) Upload(data []byte, _ int) {
 		CommandBufferCount: 1,
 		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
 	}
-	_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfo, 0)
-	// Wait here so the CPU doesn't overwrite d.stagingMapped with the
-	// next caller's pixels while the GPU is still copying the current
-	// upload out of staging — that race corrupted text glyphs
-	// (UploadRegion is called per-character into a shared atlas, and
-	// without the wait a later glyph's pixel bytes won the race).
-	// The proper fix is a staging ring buffer with per-region tracking;
-	// until that lands, the synchronous wait keeps correctness.
-	_ = vk.DeviceWaitIdle(t.dev.device)
+	// Reusable upload fence instead of per-submit create/destroy. See
+	// Device.submitAndWait — create/destroy-per-upload was racing
+	// gfxstream's QSRI sync-fd tracker on the Android emulator.
+	_ = t.dev.submitAndWait(&submitInfo)
 	vk.FreeCommandBuffers(t.dev.device, t.dev.commandPool, cmd)
 }
 
@@ -157,12 +152,16 @@ func (t *Texture) UploadRegion(data []byte, x, y, w, h, _ int) {
 		CommandBufferCount: 1,
 		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
 	}
-	_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfo, 0)
-	// Same staging-buffer-safety wait as Upload — see that function's
-	// comment. Staging is a shared CPU-mapped scratch region; the next
-	// caller will rewrite it, so we must wait until the GPU is done
-	// reading before returning.
-	_ = vk.DeviceWaitIdle(t.dev.device)
+	// Scoped fence (see Upload comment).
+	if fence, err := vk.CreateFence(t.dev.device, false); err == nil {
+		submitInfoF := submitInfo
+		_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfoF, fence)
+		_ = vk.WaitForFence(t.dev.device, fence, ^uint64(0))
+		vk.DestroyFence(t.dev.device, fence)
+	} else {
+		_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfo, 0)
+		_ = vk.DeviceWaitIdle(t.dev.device)
+	}
 	vk.FreeCommandBuffers(t.dev.device, t.dev.commandPool, cmd)
 }
 
@@ -228,8 +227,16 @@ func (t *Texture) ReadPixels(dst []byte) {
 		CommandBufferCount: 1,
 		PCommandBuffers:    uintptr(unsafe.Pointer(&cmd)),
 	}
-	_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfo, 0)
-	_ = vk.DeviceWaitIdle(t.dev.device)
+	// Scoped fence (see Upload comment).
+	if fence, err := vk.CreateFence(t.dev.device, false); err == nil {
+		submitInfoF := submitInfo
+		_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfoF, fence)
+		_ = vk.WaitForFence(t.dev.device, fence, ^uint64(0))
+		vk.DestroyFence(t.dev.device, fence)
+	} else {
+		_ = vk.QueueSubmit(t.dev.graphicsQueue, &submitInfo, 0)
+		_ = vk.DeviceWaitIdle(t.dev.device)
+	}
 
 	// Copy from staging buffer to dst.
 	n := len(dst)
@@ -276,15 +283,20 @@ func (t *Texture) Dispose() {
 	if t.view == 0 && t.image == 0 && t.memory == 0 {
 		return
 	}
-	// Skip the per-resource DeviceWaitIdle when the device is already
-	// being torn down — Device.Dispose waits once up-front and sets
+	// Skip the per-resource idle-wait when the device is already being
+	// torn down — Device.Dispose waits once up-front and sets
 	// disposing=true. Without this check, a scene with hundreds of
-	// textures pays O(N) device-idle waits at shutdown (noticeable
-	// as multi-second window-close hangs on macOS/MoltenVK, and
-	// "application not responding" prompts / orphaned windows when
-	// the user force-quits during that hang).
-	if !t.dev.disposing {
-		vk.DeviceWaitIdle(t.dev.device)
+	// textures pays O(N) waits at shutdown.
+	//
+	// Use the device's per-frame fence instead of DeviceWaitIdle: the
+	// previous frame's submitted command buffer is the only thing that
+	// could still reference this texture's image view, and BeginFrame
+	// already waited on d.fence before starting recording — so if we
+	// WaitForFence here, we're guaranteed no in-flight work touches
+	// this texture. DeviceWaitIdle is the sledgehammer that hangs on
+	// the Android emulator's gfxstream Vulkan.
+	if !t.dev.disposing && t.dev.graphicsQueue != 0 {
+		_ = vk.QueueWaitIdle(t.dev.graphicsQueue)
 	}
 	if t.view != 0 {
 		vk.DestroyImageView(t.dev.device, t.view)

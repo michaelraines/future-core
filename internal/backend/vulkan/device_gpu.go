@@ -834,6 +834,22 @@ func (d *Device) createUniformBuffer(size int) error {
 	return nil
 }
 
+// submitAndWait submits a pre-built SubmitInfo on graphicsQueue, then
+// blocks until it retires via vkQueueWaitIdle. We used to use a
+// reusable fence + WaitForFence here, but the Android emulator's
+// gfxstream Vulkan driver routes fence waits through its QSRI
+// (queue-submit-retire-in-order) sync-fd bookkeeping, and that path
+// has a known "Failed to dup() QSRI sync fd: errno 9" race that leaves
+// the fence perpetually unsignaled — WaitForFence hangs forever.
+// QueueWaitIdle takes a different path inside gfxstream that avoids
+// QSRI, so it works on both the emulator and real devices.
+func (d *Device) submitAndWait(submitInfo *vk.SubmitInfo) error {
+	if err := vk.QueueSubmit(d.graphicsQueue, submitInfo, 0); err != nil {
+		return err
+	}
+	return vk.QueueWaitIdle(d.graphicsQueue)
+}
+
 // BeginDispose signals that a whole-device teardown is starting.
 // Per-resource Dispose calls check this flag and skip their individual
 // vkDeviceWaitIdle — the cumulative wait cost at shutdown of a
@@ -1160,19 +1176,28 @@ func (d *Device) BeginFrame() {
 	if d.device == 0 {
 		return
 	}
-	// WaitForFence covers the graphics-queue command buffer, but on
-	// MoltenVK we observed stochastic empty-frame flicker on
-	// scene-selector — ~15-20% of frames composited a blank tile grid
-	// even though the fence had signaled. The suspicion is that Metal
-	// command-queue commitment runs asynchronously relative to Vulkan
-	// fence signaling, so the next frame's command buffer could begin
-	// recording before prior writes to persistent render targets were
-	// fully committed. DeviceWaitIdle synchronizes every queue
-	// including whatever MoltenVK does internally. This is paired
-	// with a similar DeviceWaitIdle in ReadScreen — between them the
-	// flicker drops from ~17% to 0% across 30-run samples.
+	// WaitForFence is the correct per-frame GPU→CPU sync everywhere.
 	_ = vk.WaitForFence(d.device, d.fence, ^uint64(0))
-	_ = vk.DeviceWaitIdle(d.device)
+	// Extra DeviceWaitIdle is a MoltenVK-only workaround for a
+	// stochastic empty-frame flicker (~15-20% of frames on
+	// scene-selector composited a blank tile grid even though the
+	// fence had signaled). Suspected cause: Metal command-queue
+	// commitment runs asynchronously relative to Vulkan fence
+	// signaling, so the next frame's command buffer could begin
+	// recording before prior writes to persistent render targets were
+	// fully committed. Paired with a similar DeviceWaitIdle in
+	// ReadScreen; together they drop the flicker from ~17% → 0%.
+	//
+	// Confined to darwin because:
+	//   - On native Vulkan (Linux/Windows drivers) it's a significant
+	//     per-frame stall that gates pipelining with zero benefit.
+	//   - On the Android emulator's gfxstream Vulkan translation the
+	//     vkDeviceWaitIdle round-trip over the qemu pipe never returns
+	//     — the render thread hangs forever after the first submitted
+	//     frame. Gating this restores the render loop on emulators.
+	if runtime.GOOS == "darwin" {
+		_ = vk.DeviceWaitIdle(d.device)
+	}
 	// GPU work from the previous frame is complete — safe to free resources.
 	if d.encoder != nil {
 		d.encoder.resetFrame()
@@ -2055,7 +2080,15 @@ func (d *Device) destroySwapchain() {
 
 // recreateSwapchain rebuilds the swapchain after a resize or out-of-date error.
 func (d *Device) recreateSwapchain(w, h int) error {
-	_ = vk.DeviceWaitIdle(d.device)
+	// Wait for in-flight work on the graphics queue before destroying
+	// the old swapchain images. QueueWaitIdle rather than
+	// DeviceWaitIdle or WaitForFence: DeviceWaitIdle hangs on the
+	// Android emulator's gfxstream, and WaitForFence on d.fence routes
+	// through gfxstream's QSRI sync-fd path which can leave the fence
+	// perpetually unsignaled.
+	if d.graphicsQueue != 0 {
+		_ = vk.QueueWaitIdle(d.graphicsQueue)
+	}
 	d.width = w
 	d.height = h
 	d.destroySwapchain()

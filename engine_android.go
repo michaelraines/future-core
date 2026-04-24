@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	goimage "image"
+	"log"
 	"time"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -13,6 +14,7 @@ import (
 	"github.com/michaelraines/future-core/internal/input"
 	"github.com/michaelraines/future-core/internal/pipeline"
 	"github.com/michaelraines/future-core/internal/platform"
+	platandroid "github.com/michaelraines/future-core/internal/platform/android"
 	fmath "github.com/michaelraines/future-core/math"
 
 	// Register backends available on Android.
@@ -109,8 +111,19 @@ type engine struct {
 	// Render target registry: maps target IDs to backend render targets.
 	renderTargets map[uint32]backend.RenderTarget
 
-	// noGL is always true on Android (Vulkan handles its own presentation).
+	// noGL is true when the backend presents directly (Vulkan swapchain).
+	// False when we need our SoftPresenter (soft backend → ANativeWindow
+	// lock/blit/unlockAndPost). Set per-frame in TickOnce based on a
+	// ReadScreen(nil) probe, the same pattern the desktop engine uses
+	// to decide between direct-present and GL-presenter paths.
 	noGL bool
+
+	// softPresenter uploads CPU-rasterized frames directly to the
+	// ANativeWindow when the resolved backend is the software
+	// rasterizer. Created lazily after initDevice — nil means the
+	// backend handles its own presentation (Vulkan swapchain).
+	softPresenter  *platandroid.SoftPresenter
+	softPresentBuf []byte
 
 	// Window config state.
 	windowTitle string
@@ -373,6 +386,21 @@ func (e *engine) TickOnce() error {
 		e.rend.disposeDeferred()
 	}
 
+	// For CPU-rasterized backends (soft), copy the default color image
+	// into the ANativeWindow via lock/unlockAndPost. Swapchain-enabled
+	// backends (Vulkan) skip this — EndFrame already presented for them.
+	if e.softPresenter != nil {
+		need := fbW * fbH * 4
+		if len(e.softPresentBuf) < need {
+			e.softPresentBuf = make([]byte, need)
+		}
+		if e.device.ReadScreen(e.softPresentBuf[:need]) {
+			if err := e.softPresenter.Present(fbW, fbH, e.softPresentBuf[:need]); err != nil {
+				log.Printf("futurerender.TickOnce: soft present failed: %v", err)
+			}
+		}
+	}
+
 	// Update FPS/TPS counters every second.
 	e.frameCount++
 	if time.Since(e.fpsTimer) >= time.Second {
@@ -389,13 +417,35 @@ func (e *engine) TickOnce() error {
 // initDevice creates and initializes the rendering backend device.
 func (e *engine) initDevice(win platform.Window) error {
 	preferred := preferredBackends()
-	dev, resolved, err := backend.Resolve(backendName(), preferred)
+	requested := backendName()
+
+	// On the ranchu/goldfish Android emulator, gfxstream's guest Vulkan
+	// driver has a QSRI sync-fd bug (exportSyncFdForQSRILocked fails
+	// with EBADF after a few submits, and every subsequent Vulkan sync
+	// primitive — WaitForFences, QueueWaitIdle, DeviceWaitIdle — hangs
+	// forever waiting for retirement callbacks that never arrive). The
+	// emulator's OpenGL ES path is on a different gfxstream code path
+	// that works fine, which is how ebitenmobile-based AARs render on
+	// the same AVD. We don't have a GLES backend (yet), but we can
+	// take the same "skip Vulkan on emulator" approach by forcing the
+	// software rasterizer with our ANativeWindow_lock presenter, which
+	// talks to libandroid.so directly and never touches the broken
+	// Vulkan driver. Real devices keep the Vulkan default.
+	if requested == "auto" && platandroid.IsRanchuEmulator() {
+		log.Printf("futurerender.initDevice: emulator detected — forcing soft backend + ANativeWindow present")
+		requested = "soft"
+	}
+
+	dev, resolved, err := backend.Resolve(requested, preferred)
 	if err != nil {
 		return fmt.Errorf("backend selection: %w", err)
 	}
 	resolvedBackend.Store(resolved)
 
 	fbW, fbH := win.FramebufferSize()
+	_, hasSurface := win.(platform.VulkanSurfaceCreator)
+	log.Printf("futurerender.initDevice: backend=%s fb=%dx%d hasVulkanSurface=%v",
+		resolved, fbW, fbH, hasSurface)
 	devCfg := backend.DeviceConfig{
 		Width:  fbW,
 		Height: fbH,
@@ -410,11 +460,31 @@ func (e *engine) initDevice(win platform.Window) error {
 	}
 
 	if err := dev.Init(devCfg); err != nil {
+		log.Printf("futurerender.initDevice: dev.Init failed: %v", err)
 		return err
 	}
+	log.Printf("futurerender.initDevice: dev.Init ok backend=%s", resolved)
 
 	e.device = dev
 	e.encoder = dev.Encoder()
+
+	// If the backend rasterizes on the CPU (soft), it can't present
+	// itself — we need to copy its framebuffer into the ANativeWindow
+	// each frame. Probe via ReadScreen(nil): backends that need a
+	// presenter return true. Vulkan with a swapchain returns false.
+	if dev.ReadScreen(nil) {
+		aw, ok := win.(*platandroid.Window)
+		if !ok {
+			return fmt.Errorf("futurerender: soft backend requires android.Window, got %T", win)
+		}
+		sp, err := platandroid.NewSoftPresenter(aw)
+		if err != nil {
+			return fmt.Errorf("futurerender: soft presenter: %w", err)
+		}
+		e.softPresenter = sp
+		e.noGL = false
+		log.Printf("futurerender.initDevice: soft-backend ANativeWindow presenter installed")
+	}
 
 	// Initialize renderer.
 	rend := &renderer{

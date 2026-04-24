@@ -79,13 +79,21 @@ func TestTransformVertexOrtho(t *testing.T) {
 
 func TestNdcToScreen(t *testing.T) {
 	vp := viewportRect{x: 0, y: 0, w: 800, h: 600}
+	// Center of NDC → center of screen (unchanged).
 	sx, sy := ndcToScreen(0, 0, vp)
 	require.InDelta(t, 400, float64(sx), 1e-3)
 	require.InDelta(t, 300, float64(sy), 1e-3)
 
-	sx, sy = ndcToScreen(-1, -1, vp)
+	// Y-down screen convention: ndcY=+1 (top of clip space) → top of
+	// screen (sy=0). ndcY=-1 (bottom of clip) → bottom of screen
+	// (sy=h). Matches Vulkan/WebGPU and the rest of the engine.
+	sx, sy = ndcToScreen(-1, 1, vp)
 	require.InDelta(t, 0, float64(sx), 1e-3)
 	require.InDelta(t, 0, float64(sy), 1e-3)
+
+	sx, sy = ndcToScreen(1, -1, vp)
+	require.InDelta(t, 800, float64(sx), 1e-3)
+	require.InDelta(t, 600, float64(sy), 1e-3)
 }
 
 // --- Edge function ---
@@ -238,7 +246,7 @@ func TestSampleLinearEdge(t *testing.T) {
 // --- Color matrix ---
 
 func TestApplyColorMatrixIdentity(t *testing.T) {
-	r, g, b, a := applyColorMatrix(0.5, 0.3, 0.8, 1.0, identityMatrix(), [4]float32{})
+	r, g, b, a := applyColorMatrix(0.5, 0.3, 0.8, 1.0, identityMatrix(), [4]float32{}, true)
 	require.InDelta(t, 0.5, float64(r), 1e-6)
 	require.InDelta(t, 0.3, float64(g), 1e-6)
 	require.InDelta(t, 0.8, float64(b), 1e-6)
@@ -247,14 +255,14 @@ func TestApplyColorMatrixIdentity(t *testing.T) {
 
 func TestApplyColorMatrixTranslation(t *testing.T) {
 	trans := [4]float32{0.1, 0.2, 0, 0}
-	r, g, _, _ := applyColorMatrix(0.5, 0.3, 0.8, 1.0, identityMatrix(), trans)
+	r, g, _, _ := applyColorMatrix(0.5, 0.3, 0.8, 1.0, identityMatrix(), trans, false)
 	require.InDelta(t, 0.6, float64(r), 1e-6)
 	require.InDelta(t, 0.5, float64(g), 1e-6)
 }
 
 func TestApplyColorMatrixWithClamping(t *testing.T) {
 	trans := [4]float32{1.0, 0, 0, 0}
-	r, _, _, _ := applyColorMatrix(0.8, 0, 0, 1, identityMatrix(), trans)
+	r, _, _, _ := applyColorMatrix(0.8, 0, 0, 1, identityMatrix(), trans, false)
 	require.InDelta(t, 1.0, float64(r), 1e-6) // clamped to 1.0
 }
 

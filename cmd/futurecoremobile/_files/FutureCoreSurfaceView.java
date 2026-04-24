@@ -89,11 +89,18 @@ class FutureCoreSurfaceView extends SurfaceView
     }
 
     private void init() {
+        Log.i(TAG, "init: registering SurfaceHolder callback + starting render thread");
         getHolder().addCallback(this);
 
         renderThread = new HandlerThread("FutureCoreRenderThread");
         renderThread.start();
         renderHandler = new Handler(renderThread.getLooper(), new RenderCallback());
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        Log.i(TAG, "onAttachedToWindow");
     }
 
     // --- Public lifecycle surface (called by FutureCoreView / host) ---
@@ -137,6 +144,7 @@ class FutureCoreSurfaceView extends SurfaceView
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
+        Log.i(TAG, "surfaceCreated");
         Surface surface = holder.getSurface();
         // nativeWindowFromSurface is registered via JNI_OnLoad in the
         // Go side's mobile/futurecoreview package. Returns an
@@ -161,6 +169,7 @@ class FutureCoreSurfaceView extends SurfaceView
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        Log.i(TAG, "surfaceChanged format=" + format + " " + width + "x" + height);
         Message m = renderHandler.obtainMessage(MSG_LAYOUT);
         m.arg1 = width;
         m.arg2 = height;
@@ -227,7 +236,11 @@ class FutureCoreSurfaceView extends SurfaceView
             switch (msg.what) {
                 case MSG_SET_SURFACE: {
                     long nw = ((Long) msg.obj).longValue();
-                    Futurecoreview.setSurface(nw);
+                    try {
+                        Futurecoreview.setSurface(nw);
+                    } catch (Throwable e) {
+                        Log.e(TAG, "setSurface threw", e);
+                    }
                     return true;
                 }
                 case MSG_CLEAR_SURFACE: {
@@ -236,10 +249,12 @@ class FutureCoreSurfaceView extends SurfaceView
                     return true;
                 }
                 case MSG_LAYOUT: {
-                    // pixelsPerPt baked from host density; Layout on
-                    // the Go side reads it for DPI scaling.
                     float density = getResources().getDisplayMetrics().density;
-                    Futurecoreview.layout(msg.arg1, msg.arg2, density);
+                    try {
+                        Futurecoreview.layout(msg.arg1, msg.arg2, density);
+                    } catch (Throwable e) {
+                        Log.e(TAG, "layout threw", e);
+                    }
                     return true;
                 }
                 case MSG_TICK: {
