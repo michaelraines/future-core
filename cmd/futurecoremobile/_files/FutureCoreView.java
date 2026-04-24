@@ -14,6 +14,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 
 import {{.JavaPkg}}.futurecoreview.Futurecoreview;
 
@@ -39,7 +40,7 @@ import {{.JavaPkg}}.futurecoreview.Futurecoreview;
  * generated Futurecoreview class (see gomobile bind convention):
  * Futurecoreview.updateTouchesOnAndroid, onKeyDownOnAndroid, etc.
  */
-public class FutureCoreView extends ViewGroup
+public class FutureCoreView extends FrameLayout
         implements InputManager.InputDeviceListener {
 
     private static final String TAG = "FutureCoreView";
@@ -51,14 +52,24 @@ public class FutureCoreView extends ViewGroup
     public FutureCoreView(Context context) {
         super(context);
         surfaceView = new FutureCoreSurfaceView(context);
-        addView(surfaceView);
+        // MATCH_PARENT so FrameLayout stretches the SurfaceView to our
+        // full bounds, which in turn gives SurfaceView a non-zero measured
+        // size. Without it (and without a superclass that forwards
+        // MeasureSpecs to children), SurfaceView's BLAST surface stays
+        // 0x0 at SurfaceFlinger, the ANativeWindow is unrenderable, and
+        // the engine produces nothing.
+        addView(surfaceView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
         initInput(context);
     }
 
     public FutureCoreView(Context context, AttributeSet attrs) {
         super(context, attrs);
         surfaceView = new FutureCoreSurfaceView(context);
-        addView(surfaceView);
+        addView(surfaceView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
         initInput(context);
     }
 
@@ -101,17 +112,6 @@ public class FutureCoreView extends ViewGroup
             inputManager = null;
         }
         surfaceView.shutdown();
-    }
-
-    @Override
-    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
-        surfaceView.layout(0, 0, right - left, bottom - top);
-        for (int i = 0; i < getChildCount(); i++) {
-            View child = getChildAt(i);
-            if (child != surfaceView) {
-                child.layout(0, 0, right - left, bottom - top);
-            }
-        }
     }
 
     // --- Touch dispatch ---------------------------------------------------

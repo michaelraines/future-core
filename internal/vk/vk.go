@@ -1216,6 +1216,7 @@ var (
 	fnCreateSemaphore  func(device Device, pCreateInfo uintptr, pAllocator uintptr, pSemaphore *Semaphore) Result
 	fnDestroySemaphore func(device Device, semaphore Semaphore, pAllocator uintptr)
 	fnQueueSubmit      func(queue Queue, submitCount uint32, pSubmits uintptr, fence Fence) Result
+	fnQueueWaitIdle    func(queue Queue) Result
 
 	fnCreateImage                func(device Device, pCreateInfo uintptr, pAllocator uintptr, pImage *Image) Result
 	fnDestroyImage               func(device Device, image Image, pAllocator uintptr)
@@ -1569,6 +1570,19 @@ func ResetFence(dev Device, fence Fence) error {
 	r := fnResetFences(dev, 1, &fence)
 	if r != Success {
 		return fmt.Errorf("vkResetFences: %w", r)
+	}
+	return nil
+}
+
+// QueueWaitIdle wraps vkQueueWaitIdle. Blocks until every submission on
+// this queue has completed. Equivalent to DeviceWaitIdle for apps that
+// only use one queue, but avoids device-wide stalls (and, on the
+// Android emulator's gfxstream, avoids the internal DeviceWaitIdle
+// code path that hangs).
+func QueueWaitIdle(queue Queue) error {
+	r := fnQueueWaitIdle(queue)
+	if r != Success {
+		return fmt.Errorf("vkQueueWaitIdle: %w", r)
 	}
 	return nil
 }
@@ -2018,6 +2032,7 @@ func Init() error {
 		{&fnCreateSemaphore, "vkCreateSemaphore"},
 		{&fnDestroySemaphore, "vkDestroySemaphore"},
 		{&fnQueueSubmit, "vkQueueSubmit"},
+		{&fnQueueWaitIdle, "vkQueueWaitIdle"},
 	} {
 		if ferr := must(e.fn, e.name); ferr != nil {
 			return ferr

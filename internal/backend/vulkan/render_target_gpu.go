@@ -65,7 +65,14 @@ func (rt *RenderTarget) Dispose() {
 		// disposing flag. This turns shutdown from O(RTs) waits into
 		// a single wait. See the matching check in Texture.Dispose.
 		if !rt.dev.disposing {
-			vk.DeviceWaitIdle(rt.dev.device)
+			// Wait for in-flight command buffers on the graphics queue
+			// that might still reference this RT's framebuffer / render
+			// pass. QueueWaitIdle rather than DeviceWaitIdle (hangs on
+			// gfxstream) or WaitForFence (routes through QSRI, same
+			// issue).
+			if rt.dev.graphicsQueue != 0 {
+				_ = vk.QueueWaitIdle(rt.dev.graphicsQueue)
+			}
 		}
 		if rt.framebuffer != 0 {
 			vk.DestroyFramebuffer(rt.dev.device, rt.framebuffer)

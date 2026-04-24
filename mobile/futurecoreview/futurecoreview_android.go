@@ -3,6 +3,9 @@
 package futurecoreview
 
 import (
+	"log"
+	"runtime/debug"
+
 	futurerender "github.com/michaelraines/future-core"
 )
 
@@ -43,14 +46,14 @@ func SetSurface(nativeWindow int64) {
 	defer mu.Unlock()
 	if !bootstrapped {
 		if err := futurerender.AndroidBootstrap(); err != nil {
-			// Nothing we can do from Java's perspective — the engine
-			// wasn't SetGame'd first. Leave surface unassigned; Tick
-			// will also be a no-op until SetGame happens.
+			log.Printf("futurecoreview.SetSurface: AndroidBootstrap failed: %v", err)
 			return
 		}
+		log.Printf("futurecoreview.SetSurface: AndroidBootstrap ok")
 		bootstrapped = true
 	}
 	futurerender.AndroidSetSurface(uintptr(nativeWindow))
+	log.Printf("futurecoreview.SetSurface: nw=0x%x handed to engine", uintptr(nativeWindow))
 }
 
 // ClearSurface releases the engine's ANativeWindow reference.
@@ -72,10 +75,11 @@ func Layout(wpx, hpx int, ppp float32) {
 	heightPx = hpx
 	pixelsPerPt = ppp
 	futurerender.AndroidLayout(wpx, hpx)
-	// Best-effort: EnsureDevice may fail on the very first call if
-	// the surface isn't bound yet. The next Layout or SetSurface call
-	// will retry.
-	_ = futurerender.AndroidEnsureDevice()
+	if err := futurerender.AndroidEnsureDevice(); err != nil {
+		log.Printf("futurecoreview.Layout: AndroidEnsureDevice returned: %v (retry on next Layout/SetSurface)", err)
+	} else {
+		log.Printf("futurecoreview.Layout: AndroidEnsureDevice ok (%dx%d ppp=%v)", wpx, hpx, ppp)
+	}
 }
 
 // Tick runs one frame. Called by the host's render thread once per
@@ -86,8 +90,31 @@ func Tick() error {
 	if game == nil {
 		return nil
 	}
-	return futurerender.AndroidTick()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("futurecoreview.Tick: PANIC %v\n%s", r, debug.Stack())
+			// Re-panic so the host gets notified and the process dies
+			// with a real tombstone instead of silently looping.
+			panic(r)
+		}
+	}()
+	err := futurerender.AndroidTick()
+	if err != nil {
+		tickErrCount++
+		if tickErrCount%60 == 1 {
+			log.Printf("futurecoreview.Tick: AndroidTick returned (seen %d times): %v", tickErrCount, err)
+		}
+	} else if tickOkCount == 0 {
+		log.Printf("futurecoreview.Tick: first AndroidTick ok")
+		tickOkCount++
+	}
+	return err
 }
+
+var (
+	tickErrCount int
+	tickOkCount  int
+)
 
 // Suspend pauses the engine (Activity.onPause).
 func Suspend() error {
