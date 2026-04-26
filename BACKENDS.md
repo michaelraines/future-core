@@ -86,10 +86,29 @@ see which target's content is wrong. Common patterns:
 ### 6. Validation layers (Vulkan-specific, but the principle generalizes)
 
 MoltenVK is permissive. Run the backend under a strict driver with
-validation layers enabled — for Vulkan that's `scripts/capture.sh` run
-from inside the lavapipe container (future-core `make
-docker-vulkan-test`). Every `VUID-*` error is a likely bug MoltenVK
-tolerated.
+validation layers enabled. Two entry points:
+
+- **Unit + conformance tests** under lavapipe + Khronos validation:
+  `cd future-core && make docker-vulkan-test`. Fast PR-style gate
+  for the parts of the backend that don't trip the open
+  draw-path bugs.
+- **Headless demo capture** under lavapipe:
+  `future-meta/scripts/capture-lavapipe.sh --scene <name>` —
+  builds the future binary inside the container against the
+  workspace future-core (so uncommitted engine changes are
+  exercised) and runs the binary headlessly under xvfb +
+  lavapipe. Any `VUID-*` validation error or SIGSEGV from a
+  strict-but-not-permissive driver path is a real bug
+  MoltenVK silently tolerates.
+
+The capture wrapper integrates with the parity harness too —
+`scripts/parity-diff.sh --test lavapipe --scene X` will run the
+`X` scene on lavapipe in Docker and pixel-diff against the
+WebGPU host capture. Today the demo-app code crashes on lavapipe
+on a missing graphics-pipeline-bind before `vkCmdDrawIndexed`
+(VUID-vkCmdDrawIndexed-None-02700 — see open issues in the
+Vulkan backend section); fixing that unlocks the full
+strict-validation parity sweep.
 
 ### 7. Document what you found
 
@@ -288,22 +307,55 @@ device-init pacing) with the 5% diff threshold.
 - **frame-layout missing sub-frame panels** — passes at 0.01%. The
   nested-RT composite path now works.
 
+### Demo-app lavapipe path: first finding (2026-04-26)
+
+`docker-compose.yml` now has a `vulkan-parity` service that builds
+and runs the future demo binary against lavapipe + validation layers.
+Companion host wrappers: `future-meta/scripts/capture-lavapipe.sh`
+and `parity-diff.sh --test lavapipe`.
+
+First smoke-test capture (`scene-selector`, 30 frames) reproduces a
+real Vulkan API misuse the encoder is doing, that MoltenVK
+silently tolerates:
+
+```
+VUID-vkCmdDrawIndexed-None-02700: Must not call vkCmdDrawIndexed
+on this command buffer while there is no
+VK_PIPELINE_BIND_POINT_GRAPHICS pipeline bound.
+```
+
+Stack trace: `internal/vk.CmdDrawIndexed → encoder_gpu.go:430
+(Encoder.DrawIndexed) → SpritePass.Execute → engine.run → main`.
+The crash reproduces with `VK_INSTANCE_LAYERS` unset too, so
+this isn't a validation-only signal — lavapipe itself rejects
+the call sequence. MoltenVK tolerates it (presumably by binding
+some default state or silently no-op'ing the draw).
+
+This is the load-bearing first finding the lavapipe integration
+exists to surface. Fixing it unblocks running the full demo-app
+parity sweep against lavapipe.
+
 ### Roadmap
-1. Fix `lighting` 5.37% — either dig into MoltenVK `[[position]]`
+1. Fix the `vkCmdDrawIndexed` without graphics pipeline bound
+   bug — root cause likely in the Encoder's pipeline-bind path
+   or a code path that skips `SetPipeline` before issuing the
+   first draw of a render pass. Lavapipe smoke test will go
+   green once this lands.
+2. Fix `lighting` 5.37% — either dig into MoltenVK `[[position]]`
    interpolation behaviour for Kage-custom-shader pipelines after
-   `DrawImage→custom-shader` transitions, or expand `docker-compose.yml`
-   to run the demo binary under lavapipe + validation layers and
-   disambiguate spec-vs-MoltenVK
-2. Fix `isometric-combat` game-state divergence by landing the
-   `future/rand` deterministic-seeding effort (workspace-level), then
-   re-measure
-3. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
+   `DrawImage→custom-shader` transitions, or run the demo binary
+   under lavapipe + validation layers (now possible — see #1)
+   to disambiguate spec-vs-MoltenVK
+3. `isometric-combat` game-state divergence — RESOLVED by the
+   `future/rand` + headless-deterministic-timestep work
+   (parity now 0.7%); listed for history.
+4. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
    (missing `VkImageMemoryBarrier.sType` fields on some paths,
    missing `VK_BUFFER_USAGE_INDEX_BUFFER_BIT` on index streams —
    see `docker-compose.yml` for expected failures)
-4. Resize handling (swapchain recreation; partially working)
-5. Multi-frame-in-flight synchronization (currently single-buffered)
-6. Device-local memory for vertex/index buffers (currently host-visible)
+5. Resize handling (swapchain recreation; partially working)
+6. Multi-frame-in-flight synchronization (currently single-buffered)
+7. Device-local memory for vertex/index buffers (currently host-visible)
 
 ---
 

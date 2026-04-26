@@ -9,7 +9,7 @@
 #
 # The same image runs locally (via docker-compose on the Mac) and on
 # GitHub Actions ubuntu-latest — no GPU required in either case.
-FROM golang:1.24-bookworm
+FROM golang:1.25-bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -19,6 +19,13 @@ ARG DEBIAN_FRONTEND=noninteractive
 # - vulkan-validationlayers  VK_LAYER_KHRONOS_validation JSON + shared libs
 # - vulkan-tools             vulkaninfo for build-time ICD sanity check
 # - libglfw3-dev             engine desktop binaries link GLFW
+# - libasound2-dev           ALSA headers for the future demo's audio
+#                            package (oto/v3 → libasound2). Required
+#                            by the vulkan-parity service that builds
+#                            the full future binary; the test-only
+#                            services don't import audio but the
+#                            cost of the dep is small enough to keep
+#                            in one image.
 # - xvfb                     virtual X display for GLFW during parity runs
 # - curl, ca-certificates    bootstrap NodeSource + golangci-lint installers
 # - git                      required by some go tooling
@@ -29,7 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       vulkan-validationlayers \
       vulkan-tools \
       libglfw3-dev \
+      libasound2-dev \
       xvfb \
+      xauth \
       curl \
       ca-certificates \
       git \

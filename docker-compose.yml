@@ -1,10 +1,17 @@
 # Lavapipe-based Vulkan test services for future-core.
 #
-# Two services share a single image (built from
+# Three services share a single image (built from
 # docker/Dockerfile.vulkan):
 #
 #   - vulkan-test         fast PR gate: vet + lint + Vulkan unit tests
 #   - vulkan-conformance  regenerates/validates lavapipe golden images
+#   - vulkan-parity       headless demo-app capture against lavapipe,
+#                         bind-mounting the workspace so the future
+#                         binary can be built + run inside the
+#                         container. Output PNG lands at
+#                         /output/capture.png on the container side
+#                         and at $LAVAPIPE_OUTPUT (default
+#                         /tmp/lavapipe-output) on the host.
 #
 # Docker Desktop on macOS can't forward the GPU into Linux containers, so
 # the image uses Mesa's lavapipe (CPU-only Vulkan ICD) plus the Khronos
@@ -16,11 +23,9 @@
 #     make docker-vulkan-build
 #     make docker-vulkan-test
 #     make docker-vulkan-conformance
-#
-# The native parity harness (Vulkan vs WebGPU) is a planned follow-up:
-# parity-tests/ lives alongside future-core/ in the workspace but isn't
-# under future-core's git tree, so wiring it into a CI-visible service
-# is deferred until parity-tests has a committed home.
+#     # demo-app capture is invoked via the host wrapper, not directly:
+#     #   future-meta/scripts/capture.sh --backend lavapipe --scene <name>
+#     #   future-meta/scripts/parity-diff.sh --test lavapipe --scene <name>
 
 services:
   vulkan-test:
@@ -81,6 +86,49 @@ services:
     # are visible. Expected to FAIL on main until the backlog above
     # is fixed; useful when iterating on individual fixes.
     command: ["bash", "-c", "go test -count=1 -v ./internal/backend/conformance/... ./internal/backend/vulkan/..."]
+
+  # Headless demo-app capture against lavapipe + Khronos validation
+  # layers. Bind-mounts the entire workspace (future, future-core,
+  # parity-tests, go.work) so go.work resolves future-core to the
+  # local checkout — uncommitted engine changes are exercised
+  # immediately without an intermediate vendor step.
+  #
+  # The companion host wrappers
+  # (future-meta/scripts/capture-lavapipe.sh,
+  # future-meta/scripts/parity-diff.sh --test lavapipe) drive this
+  # service; they pass FUTURE_SCENE / FUTURE_CORE_HEADLESS /
+  # FUTURE_WINDOW_* / FUTURE_SEED via `docker compose run -e`, then
+  # read the captured PNG from the host side of the /output
+  # bind-mount.
+  vulkan-parity:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.vulkan
+    image: future-vulkan:latest
+    volumes:
+      # Whole workspace, not just future-core, so go.work resolves
+      # future-core against the local repo and the future binary's
+      # cmd/driver assets are reachable. `..` here is the workspace
+      # root that owns this future-core/ directory plus its sibling
+      # repos.
+      - ../:/workspace/meta:delegated
+      - go-cache:/root/.cache/go-build
+      - go-mod-cache:/root/go/pkg/mod
+      # Output directory bind-mount. Defaults to /tmp/lavapipe-output
+      # on the host; the host wrapper creates it before invoking
+      # `docker compose run`.
+      - ${LAVAPIPE_OUTPUT:-/tmp/lavapipe-output}:/output:delegated
+    working_dir: /workspace/meta
+    environment:
+      VK_INSTANCE_LAYERS: VK_LAYER_KHRONOS_validation
+      # Defaults for the env vars the script reads. The host wrapper
+      # overrides these per invocation via `docker compose run -e`.
+      FUTURE_SCENE: ${FUTURE_SCENE:-scene-selector}
+      FUTURE_CORE_HEADLESS: ${FUTURE_CORE_HEADLESS:-60}
+      FUTURE_WINDOW_WIDTH: ${FUTURE_WINDOW_WIDTH:-1920}
+      FUTURE_WINDOW_HEIGHT: ${FUTURE_WINDOW_HEIGHT:-1080}
+      FUTURE_CORE_HEADLESS_OUTPUT: /output/capture.png
+    command: ["bash", "/workspace/meta/future-core/docker/parity-capture.sh"]
 
 volumes:
   # Named volumes persist Go build + module caches across `docker compose
