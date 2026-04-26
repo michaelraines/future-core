@@ -435,11 +435,11 @@ func (e *engine) run() error {
 	// game state at frame 120 is reached with different tick counts on
 	// different backends. That breaks parity comparisons even when the
 	// rendering itself is byte-identical, because procgen / movement /
-	// physics state differ. In headless mode we instead synthesise
+	// physics state differ. In headless mode we instead synthesize
 	// delta = tickDuration each frame, giving exactly one Update per
 	// rendered frame regardless of how long each backend takes to
 	// produce that frame. Interactive runs (FUTURE_CORE_HEADLESS unset)
-	// keep wall-clock delta and the variable-tick-rate behaviour.
+	// keep wall-clock delta and the variable-tick-rate behavior.
 	deterministicTimestep := getHeadlessConfig() != nil
 
 	for !win.ShouldClose() {
