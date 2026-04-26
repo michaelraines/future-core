@@ -428,10 +428,30 @@ func (e *engine) run() error {
 	tickCount := 0
 	fpsTimer := time.Now()
 
+	// Headless deterministic-timestep mode: when capturing for parity
+	// tests, wall-clock-derived delta makes the tick count per rendered
+	// frame depend on per-backend execution time — Vulkan and WebGPU
+	// process N frames in different real-time spans, so the same
+	// game state at frame 120 is reached with different tick counts on
+	// different backends. That breaks parity comparisons even when the
+	// rendering itself is byte-identical, because procgen / movement /
+	// physics state differ. In headless mode we instead synthesize
+	// delta = tickDuration each frame, giving exactly one Update per
+	// rendered frame regardless of how long each backend takes to
+	// produce that frame. Interactive runs (FUTURE_CORE_HEADLESS unset)
+	// keep wall-clock delta and the variable-tick-rate behavior.
+	deterministicTimestep := getHeadlessConfig() != nil
+
 	for !win.ShouldClose() {
-		now := time.Now()
-		delta := now.Sub(lastTime)
-		lastTime = now
+		var delta time.Duration
+		if deterministicTimestep && tickDuration > 0 {
+			delta = tickDuration
+			lastTime = time.Now()
+		} else {
+			now := time.Now()
+			delta = now.Sub(lastTime)
+			lastTime = now
+		}
 
 		// Re-read TPS in case it changed.
 		tps = MaxTPS()
