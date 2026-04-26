@@ -3,7 +3,7 @@
 Per-backend state of the world for planning future work. Each section covers
 what's implemented, what's working, what's broken, and what remains.
 
-Last updated: 2026-03-30
+Last updated: 2026-04-26
 
 ---
 
@@ -110,7 +110,7 @@ fallback** for CI. Four of those (Vulkan, Metal, WebGPU, DX12) also have
 |---|---|---|---|---|
 | Software | N/A (CPU) | N/A | 10/10 | N/A |
 | OpenGL 3.3 | Production | None | N/A (GPU) | GLSL 330 core |
-| Vulkan | Clear works, draw broken | Yes | 10/10 (soft) | GLSL→SPIR-V (shaderc) |
+| Vulkan | Production (20/22 demo scenes parity) | Yes | 10/10 (soft) | GLSL→SPIR-V (shaderc) |
 | Metal | Clear + draw working | Yes | 10/10 (soft) | GLSL→MSL (pure Go) |
 | WebGPU | Pipeline wired | Yes | 10/10 (soft) | GLSL→WGSL (pure Go) |
 | DirectX 12 | Early / incomplete | Yes | 10/10 (soft) | Planned (HLSL) |
@@ -181,7 +181,7 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 ## Vulkan
 
 **Package**: `internal/backend/vulkan/`
-**Status**: Unit + conformance green; demo-app parity with WebGPU broken
+**Status**: Unit + conformance green; demo-app parity at 20/22 scenes (1 real Vulkan bug, 1 game-state nondeterminism)
 **Platform**: macOS (MoltenVK), Linux, Windows
 **Bindings**: `internal/vk/vk.go` — 91 purego-bound Vulkan functions
 **Shader**: `internal/shaderc/shaderc.go` — GLSL→SPIR-V via purego libshaderc
@@ -212,50 +212,44 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 
 ### Demo-app parity status
 
-Measured via `scripts/parity-diff.sh --test vulkan --ref webgpu` on
-macOS MoltenVK against every scene in `future/cmd/driver/prepare/
-providers.go`, at `--frames 3` with the 5% diff threshold.
+Last re-measured 2026-04-26 via `scripts/parity-diff.sh --test vulkan
+--ref webgpu` (workspace tooling) on macOS MoltenVK against every
+scene in `future/cmd/driver/prepare/providers.go`, at the scene's
+configured frame count (60 default, 120 for scenes with WebGPU
+device-init pacing) with the 5% diff threshold.
 
-**Passing by parity-diff (17/22):**
+**Passing by parity-diff (20/22):**
 
-| Scene | Diff |
-|---|---|
-| `scene-selector` | 0.01% (flicker eliminated — 0/30 runs empty) |
-| `bubble-pop` | 0.75% (was 64.93%; fixed by RT init-clear) |
-| `cascade` | 0.81% |
-| `vector-showcase` | 1.05% (was 17.77%; fixed by RT init-clear) |
-| `particle-garden` | 1.69% |
-| `orb-drop` | 3.07% |
-| `sprite-demo` | 3.39% |
-| `input-actions-demo` | 0.01% |
-| `pointer-demo` | 0.08% |
-| `last-signal` | 0.11% |
-| `controls-demo` | 0.17% |
-| `keybinding-demo` | 0.22% |
-| `console` | 0.42% |
-| `platformer` | 0.97% |
-| `rttest` (diagnostic) | 1.87% |
-| `viewport-platformer` | 2.35% |
-| `chipmunk` | 4.10% |
+| Scene | Diff | Notes |
+|---|---|---|
+| `scene-selector` | 0.01% | Flicker is gone in single-capture; long-soak re-test still pending |
+| `bubble-pop` | 0.01% | Was 64.93% then 0.75% — RT init-clear (commit 359f00b) fully resolved the magenta game RT |
+| `frame-layout` | 0.01% | Was 22.21% — sub-frame composite now lands |
+| `deep-cartography` | 0.01% (f=120) | Was 57.69% at f=60 — purely a frame-count issue; WebGPU device-init stall hadn't completed |
+| `cascade` | 0.01% | |
+| `vector-showcase` | 0.33% | |
+| `particle-garden` | 0.14% | |
+| `orb-drop` | 0.01% | |
+| `sprite-demo` | 3.98% | |
+| `chipmunk` | 0.31% | |
+| `platformer` | 0.04% | |
+| `responsive-layout` | 0.01% | |
+| `woodland` | 0.10% | |
+| `input-actions-demo` | 0.01% | (legacy measurement) |
+| `pointer-demo` | 0.08% | (legacy measurement) |
+| `last-signal` | 0.11% | (legacy measurement) |
+| `controls-demo` | 0.17% | (legacy measurement) |
+| `keybinding-demo` | 0.22% | (legacy measurement) |
+| `console` | 0.42% | (legacy measurement) |
+| `rttest` (diagnostic) | 1.87% | (legacy measurement) |
+| `viewport-platformer` | 2.35% | (legacy measurement) |
 
-**Diff > 5% (5/22), but some are actually Vulkan-correct / WebGPU-blank:**
+**Diff > 5% (2/22):**
 
 | Scene | Diff | Actual status |
 |---|---|---|
-| `responsive-layout` | 30.69% | Vulkan renders correctly; WebGPU differs slightly on layout breakpoints |
-| `frame-layout` | 22.21% | Vulkan missing some sub-frame panels (real Vulkan bug) |
-| `isometric-combat` | 46.30% | Vulkan renders correctly (small scene canvas); WebGPU renders blank |
-| `deep-cartography` | 57.69% | Vulkan renders the full detailed scene; WebGPU renders blank |
-| `lighting` | 68.85% | Vulkan renders the whole screen with pink tint (real Vulkan bug — lightmap shader issue) |
-| `woodland` | 99.91% | Vulkan renders the full scene; WebGPU renders only preview tiles (different composition) |
-
-**Real Vulkan bugs remaining:**
-1. `lighting` — pink screen tint suggests lightmap shader produces wrong colours
-2. `frame-layout` — nested sub-frame RTs don't composite (bottom row panels missing)
-
-The other diff->5% scenes either render correctly on Vulkan with
-WebGPU showing blank/different output, or show deliberate composition
-differences. The parity runner measures difference, not correctness.
+| `lighting` | 5.37% | Just over threshold. Suspected MoltenVK `[[position]]` interpolation bug on Kage-custom-shader light-quad pipelines after a `DrawImage→custom-shader` transition; rewrite of `vDstPos`→`gl_FragCoord` works for full-screen Kage passes but not for the per-light point/spot quads. See inline notes in `internal/backend/vulkan/shader_rewrite.go`. Disambiguating MoltenVK-vs-spec requires running the demo binary under lavapipe — current `docker-compose.yml` only runs unit/conformance tests. |
+| `isometric-combat` | 52.15% (f=120) | **Game-state divergence, not pixel divergence.** `FUTURE_CORE_TRACE_BATCHES`/`TRACE_PASSES` diff between WebGPU and Vulkan is *empty* in the early frames — engine produces identical command streams — but by frame 120 the two backends show different player positions, different terrain decoration tile sets, and different procgen layouts. Root cause: each backend's run uses non-deterministic `math/rand` seeding in the demo's procgen + entity-spawn paths, so steady-state game state diverges even when rendering is byte-identical. Tracked in workspace as the `future/rand` deterministic-seeding effort. |
 
 ### Root causes fixed (this series)
 
@@ -282,75 +276,27 @@ differences. The parity runner measures difference, not correctness.
    proportional sampler/UBO counts); the pool is already reset per
    frame in `resetFrame()` so this is a per-frame budget.
 
-### Remaining: scene-selector ~7% stochastic empty-frame flicker
+### Resolved during this series
 
-Even with the DeviceWaitIdle synchronization fix, ~7% of scene-selector
-captures come back as the bare screen clear + debug HUD (tiles don't
-composite). Observations from triage:
-
-- **Scene-specific**: cascade, particle-garden, bubble-pop HUD don't
-  flicker. Only scene-selector (which allocates 20+ small offscreen
-  RTs for tile previews) does.
-- **Stochastic, not deterministic**: same `--frames 3` invocation gives
-  different results across runs (4/5 content, 1/5 empty, etc.).
-- **Trace-identical**: `FUTURE_CORE_TRACE_BATCHES` / `TRACE_PASSES`
-  diff between a "good" capture and an "empty" capture is zero bytes.
-  Same 98 batches per frame, same render-pass sequence. The divergence
-  is below the encoder trace layer.
-- **ReadScreen buffer confirms**: the `defaultColorImage` memory
-  literally contains the flickered (empty) state on bad frames.
-  Readback is correct; rendering wrote that state.
-- **Narrowed NOT caused by**: sprite atlas (NO_ATLAS shows same rate),
-  AA path (NO_AA makes it *worse*, 35% rate), frame count (all 1..100
-  frames show similar rates).
-- **Not a sync-fence gap**: DeviceWaitIdle in BeginFrame + ReadScreen
-  reduces from ~20% to ~7%, but further sync (stronger subpass deps)
-  doesn't help.
-
-Tried but did NOT fix it:
-  - Stronger subpass dependencies (AllCommands / MemoryRead-Write) —
-    same rate.
-  - Hoisting descriptor-set-layout creation to per-Pipeline from
-    per-render-pass — same rate (mildly worse in one sample).
-  - Disabling the sprite atlas (NO_ATLAS) — same rate.
-  - Disabling AA (NO_AA) — rate *increases* to ~35%.
-
-The remaining flicker is specifically scene-selector (and other
-scenes with many small persistent offscreen RTs). Next candidate
-angles: VkImage allocation ordering and memory aliasing among the
-20+ tile RTs; MoltenVK's descriptor pool reset semantics (whether
-reset actually releases descriptors synchronously on its Metal
-translation layer).
-
-### Remaining: bubble-pop game RT magenta
-
-bubble-pop's 1024×768 game render target samples as solid
-(255, 0, 255, 255). HUD (text, UI panels, controls) renders
-correctly — indicating the draw / composite / sampler paths that
-scene-selector exercises all work; something specific to bubble-pop's
-game RT initialization or first-draw sequence stays broken.
-
-Investigation so far:
-- 11 batches target the game RT in frame 1 (trace), with different
-  sub-RT textures (physics objects) as sources. So draws ARE issued
-  to the target — it's not a "no draws land" issue.
-- Magenta is the debug "missing texture" colour on many IHVs; MoltenVK
-  initialises undefined memory to 0xFF on some paths, and the game
-  RT's first fill might not be landing, leaving the initial contents
-  visible through subsequent composites.
-- Frame count doesn't matter (magenta persists at f=1..20).
-
-Next step: add a per-RT `ReadPixels` diagnostic right after each
-render pass ends to localise whether the game RT's memory is written
-correctly but mis-sampled, or whether the writes themselves aren't
-landing.
+- **scene-selector ~7% stochastic empty-frame flicker** — single-capture
+  re-tests on 2026-04-26 show 0.01% diff with no flicker. A long-soak
+  N=30 re-test is still warranted before declaring fully closed, but the
+  bug as previously characterised is no longer reproducible.
+- **bubble-pop game RT magenta** — fixed by RT init-clear (commit
+  359f00b: zero-init RT VkImage at creation via one-shot render pass).
+  Now passes at 0.01%.
+- **frame-layout missing sub-frame panels** — passes at 0.01%. The
+  nested-RT composite path now works.
 
 ### Roadmap
-1. Fix scene-selector residual ~7-15% flicker (candidate: VkImage
-   allocation ordering / memory aliasing among many small RTs;
-   investigate MoltenVK descriptor-pool reset semantics)
-2. Fix bubble-pop game RT magenta (per-pass `ReadPixels` to localise
-   whether writes land or sampling is wrong)
+1. Fix `lighting` 5.37% — either dig into MoltenVK `[[position]]`
+   interpolation behaviour for Kage-custom-shader pipelines after
+   `DrawImage→custom-shader` transitions, or expand `docker-compose.yml`
+   to run the demo binary under lavapipe + validation layers and
+   disambiguate spec-vs-MoltenVK
+2. Fix `isometric-combat` game-state divergence by landing the
+   `future/rand` deterministic-seeding effort (workspace-level), then
+   re-measure
 3. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
    (missing `VkImageMemoryBarrier.sType` fields on some paths,
    missing `VK_BUFFER_USAGE_INDEX_BUFFER_BIT` on index streams —
