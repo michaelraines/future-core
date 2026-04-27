@@ -53,9 +53,15 @@ need_build=0
 if [ "$REBUILD" = "1" ] || [ ! -x "$BIN" ]; then
   need_build=1
 else
-  # Find any .go file newer than the binary; if so, rebuild.
+  # Find any source file newer than the binary; if so, rebuild.
+  # Watch *.go (regular sources) AND embedded asset types: .kage shaders
+  # (//go:embed'd into shader.go), .json (component configs), and .png
+  # (textures). Without these, an edit to a Kage shader leaves the
+  # cached binary stale and parity-diff measures the OLD shader's output
+  # against the freshly-rebuilt host binary — silent divergence.
   newer_count=$(find /workspace/meta/future /workspace/meta/future-core \
-                  -type f -name "*.go" -newer "$BIN" 2>/dev/null | head -1 | wc -l)
+                  -type f \( -name "*.go" -o -name "*.kage" -o -name "*.json" -o -name "*.png" \) \
+                  -newer "$BIN" 2>/dev/null | head -1 | wc -l)
   if [ "$newer_count" -gt 0 ]; then
     echo "==> Source files newer than cached binary; rebuilding"
     need_build=1
