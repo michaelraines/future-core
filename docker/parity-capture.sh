@@ -37,11 +37,37 @@ REBUILD="${FUTURE_PARITY_REBUILD:-0}"
 # go.work in /workspace/meta resolves future-core to the bind-mounted
 # directory, so any uncommitted future-core change on the host is
 # exercised here.
-BIN=/tmp/future-bin
+#
+# /cached-bin is a persistent named volume (see docker-compose.yml's
+# parity-bin-cache). Without it, /tmp gets thrown away by
+# `docker compose run --rm` and every scene of a sweep rebuilds the
+# binary — a 10-20s cost per scene that adds up fast.
+#
+# Cache invalidation: rebuild whenever the future binary is missing,
+# OR when any source file under /workspace/meta/{future,future-core}
+# is newer than the cached binary. This is coarse but correct — we
+# never serve a stale binary, even when the user iterates on engine
+# code mid-sweep.
+BIN=/cached-bin/future-bin
+need_build=0
 if [ "$REBUILD" = "1" ] || [ ! -x "$BIN" ]; then
+  need_build=1
+else
+  # Find any .go file newer than the binary; if so, rebuild.
+  newer_count=$(find /workspace/meta/future /workspace/meta/future-core \
+                  -type f -name "*.go" -newer "$BIN" 2>/dev/null | head -1 | wc -l)
+  if [ "$newer_count" -gt 0 ]; then
+    echo "==> Source files newer than cached binary; rebuilding"
+    need_build=1
+  fi
+fi
+if [ "$need_build" = "1" ]; then
   echo "==> Building future binary (lavapipe container) → $BIN"
+  mkdir -p "$(dirname "$BIN")"
   cd /workspace/meta/future
   go build -tags futurecore -o "$BIN" ./cmd/driver/
+else
+  echo "==> Reusing cached future binary at $BIN"
 fi
 
 # Sanity-print the resolved Vulkan ICD so capture logs make it obvious
