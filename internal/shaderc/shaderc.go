@@ -219,7 +219,19 @@ func openLib() (uintptr, error) {
 			"libshaderc_shared.dylib",
 		}
 	case "linux", "freebsd":
-		names = []string{"libshaderc_shared.so.1", "libshaderc_shared.so"}
+		// Two soname conventions seen in the wild:
+		//   - upstream wgpu / Vulkan SDK release tarballs ship as
+		//     `libshaderc_shared.so{,.1}`
+		//   - Debian/Ubuntu's `libshaderc1` package installs as
+		//     `libshaderc.so{,.1}` (no `_shared` suffix). Honour
+		//     both so the package-managed install on stock distros
+		//     works without a manual symlink.
+		names = []string{
+			"libshaderc_shared.so.1",
+			"libshaderc_shared.so",
+			"libshaderc.so.1",
+			"libshaderc.so",
+		}
 	case "windows":
 		names = []string{"shaderc_shared.dll"}
 	}

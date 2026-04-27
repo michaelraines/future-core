@@ -9,7 +9,7 @@
 #
 # The same image runs locally (via docker-compose on the Mac) and on
 # GitHub Actions ubuntu-latest — no GPU required in either case.
-FROM golang:1.25-bookworm
+FROM golang:1.25-trixie
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -37,6 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       vulkan-tools \
       libglfw3-dev \
       libasound2-dev \
+      libshaderc-dev \
+      libshaderc1 \
       xvfb \
       xauth \
       curl \

@@ -3,6 +3,8 @@
 package vulkan
 
 import (
+	"fmt"
+	"os"
 	"runtime"
 	"unsafe"
 
@@ -318,9 +320,21 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	pip := p.pipelineFor(rp, blend)
 	if pip == 0 {
 		if err := p.createVkPipeline(rp, blend); err != nil {
+			// Surface this — silently dropping the error here is
+			// what made VUID-vkCmdDrawIndexed-None-02700 (no pipeline
+			// bound at draw time) reproduce on lavapipe with no
+			// in-app diagnostic. The next draw will validation-fail
+			// or SIGSEGV; at least the operator knows why.
+			fmt.Fprintf(os.Stderr, "vulkan: SetPipeline failed: createVkPipeline rp=%d blend=%v: %v\n",
+				rp, blend, err)
 			return
 		}
 		pip = p.pipelineFor(rp, blend)
+		if pip == 0 {
+			fmt.Fprintf(os.Stderr, "vulkan: SetPipeline failed: createVkPipeline returned no error but pipelineFor still nil rp=%d blend=%v\n",
+				rp, blend)
+			return
+		}
 	}
 	if pip != 0 {
 		vk.CmdBindPipeline(e.cmd, pip)
