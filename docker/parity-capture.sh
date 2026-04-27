@@ -59,13 +59,12 @@ else
   #   .json    — component configs and demo resources
   #   .png     — textures and util/text.png debug font
   #   .ttf     — fonts under future/libs/font/resources/fonts
-  #   .md      — embedded via wildcard patterns in examples/embed.go
   # Without these, an edit to a covered asset leaves the cached binary
   # stale and parity-diff measures the OLD asset's output against the
   # freshly-rebuilt host binary — silent divergence.
   newer_count=$(find /workspace/meta/future /workspace/meta/future-core \
                   -type f \( -name "*.go" -o -name "*.kage" -o -name "*.json" \
-                          -o -name "*.png" -o -name "*.ttf" -o -name "*.md" \) \
+                          -o -name "*.png" -o -name "*.ttf" \) \
                   -newer "$BIN" 2>/dev/null | head -1 | wc -l)
   if [ "$newer_count" -gt 0 ]; then
     echo "==> Source files newer than cached binary; rebuilding"
