@@ -114,6 +114,12 @@ services:
       - ../:/workspace/meta:delegated
       - go-cache:/root/.cache/go-build
       - go-mod-cache:/root/go/pkg/mod
+      # Persistent binary cache. /tmp doesn't survive `docker compose
+      # run --rm`, so without this every capture rebuilds the future
+      # binary (~10-20s on warm caches). With the cache, only the
+      # first capture in a sweep pays the build cost; subsequent
+      # captures reuse the binary directly.
+      - parity-bin-cache:/cached-bin:delegated
       # Output directory bind-mount. Defaults to /tmp/lavapipe-output
       # on the host; the host wrapper creates it before invoking
       # `docker compose run`.
@@ -136,3 +142,7 @@ volumes:
   # full recompile on the next run.
   go-cache:
   go-mod-cache:
+  # Binary cache for the vulkan-parity service. Holds the most-
+  # recently-built future binary so back-to-back captures (parity
+  # sweeps) don't rebuild on every scene.
+  parity-bin-cache:
