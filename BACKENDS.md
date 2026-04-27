@@ -231,44 +231,54 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 
 ### Demo-app parity status
 
-Last re-measured 2026-04-26 via `scripts/parity-diff.sh --test vulkan
---ref webgpu` (workspace tooling) on macOS MoltenVK against every
-scene in `future/cmd/driver/prepare/providers.go`, at the scene's
-configured frame count (60 default, 120 for scenes with WebGPU
-device-init pacing) with the 5% diff threshold.
+Last re-measured 2026-04-27 via `scripts/parity-sweep.sh` against
+**lavapipe + Khronos validation** (the new `vulkan-parity` Docker
+service, future-core PR #70/#71/#72 + future-meta #6). `--test
+vulkan` now defaults to lavapipe rather than host MoltenVK — the
+strict-validation environment is what parity testing actually
+wants, and the host MoltenVK path silently accepted the
+`VUID-vkCmdDrawIndexed-None-02700` violation that lavapipe
+caught on its first run.
 
-**Passing by parity-diff (20/22):**
+Sweep config: `parity-sweep.sh --frames 5 --width 640 --height 480`,
+`FUTURE_SEED=1`. Lavapipe is a CPU rasterizer so full-HD captures
+are gratuitously slow; 640×480/5 frames is plenty to characterize
+correctness, the binary cache means the whole 24-scene sweep takes
+<60s wall-clock.
 
-| Scene | Diff | Notes |
+**Passing (21/24):**
+
+| Scene | Diff |
+|---|---|
+| `scene-selector` | 0.69% |
+| `bubble-pop` | 0.62% |
+| `frame-layout` | 0.62% |
+| `cascade` | 1.33% |
+| `chipmunk` | 1.15% |
+| `console` | 0.35% |
+| `controls-demo` | 0.62% |
+| `input-actions-demo` | 0.62% |
+| `isometric-combat` | 0.93% |
+| `keybinding-demo` | 0.62% |
+| `last-signal` | 1.19% |
+| `orb-drop` | 0.76% |
+| `particle-garden` | 0.62% |
+| `platformer` | 0.66% |
+| `pointer-demo` | 4.53% |
+| `responsive-layout` | 0.62% |
+| `showcase` | 1.86% |
+| `sprite-demo` | 1.09% |
+| `vector-showcase` | 0.95% |
+| `viewport-platformer` | 0.62% |
+| `woodland` | 2.65% |
+
+**Failing (3/24):**
+
+| Scene | Diff | Status |
 |---|---|---|
-| `scene-selector` | 0.01% | Flicker is gone in single-capture; long-soak re-test still pending |
-| `bubble-pop` | 0.01% | Was 64.93% then 0.75% — RT init-clear (commit 359f00b) fully resolved the magenta game RT |
-| `frame-layout` | 0.01% | Was 22.21% — sub-frame composite now lands |
-| `deep-cartography` | 0.01% (f=120) | Was 57.69% at f=60 — purely a frame-count issue; WebGPU device-init stall hadn't completed |
-| `cascade` | 0.01% | |
-| `vector-showcase` | 0.33% | |
-| `particle-garden` | 0.14% | |
-| `orb-drop` | 0.01% | |
-| `sprite-demo` | 3.98% | |
-| `chipmunk` | 0.31% | |
-| `platformer` | 0.04% | |
-| `responsive-layout` | 0.01% | |
-| `woodland` | 0.10% | |
-| `input-actions-demo` | 0.01% | (legacy measurement) |
-| `pointer-demo` | 0.08% | (legacy measurement) |
-| `last-signal` | 0.11% | (legacy measurement) |
-| `controls-demo` | 0.17% | (legacy measurement) |
-| `keybinding-demo` | 0.22% | (legacy measurement) |
-| `console` | 0.42% | (legacy measurement) |
-| `rttest` (diagnostic) | 1.87% | (legacy measurement) |
-| `viewport-platformer` | 2.35% | (legacy measurement) |
-
-**Diff > 5% (2/22):**
-
-| Scene | Diff | Actual status |
-|---|---|---|
-| `lighting` | 5.37% | Just over threshold. Suspected MoltenVK `[[position]]` interpolation bug on Kage-custom-shader light-quad pipelines after a `DrawImage→custom-shader` transition; rewrite of `vDstPos`→`gl_FragCoord` works for full-screen Kage passes but not for the per-light point/spot quads. See inline notes in `internal/backend/vulkan/shader_rewrite.go`. Disambiguating MoltenVK-vs-spec requires running the demo binary under lavapipe — current `docker-compose.yml` only runs unit/conformance tests. |
-| `isometric-combat` | 52.15% (f=120) | **Game-state divergence, not pixel divergence.** `FUTURE_CORE_TRACE_BATCHES`/`TRACE_PASSES` diff between WebGPU and Vulkan is *empty* in the early frames — engine produces identical command streams — but by frame 120 the two backends show different player positions, different terrain decoration tile sets, and different procgen layouts. Root cause: each backend's run uses non-deterministic `math/rand` seeding in the demo's procgen + entity-spawn paths, so steady-state game state diverges even when rendering is byte-identical. Tracked in workspace as the `future/rand` deterministic-seeding effort. |
+| `deep-cartography` | 16.73% | Earlier passed at 0.01% on host MoltenVK (with seed + deterministic timestep + 120 frames); now fails on strict lavapipe. Either lavapipe is rendering correctly and MoltenVK was masking a bug (likely, given lavapipe's stricter compliance), or lavapipe has a scene-specific issue. Needs side-by-side capture comparison. |
+| `lighting` | 12.00% | Same scene that's been flaky on host MoltenVK (suspected `[[position]]` interpolation bug — see inline notes in `internal/backend/vulkan/shader_rewrite.go`). The fact that lavapipe ALSO fails at 12% suggests the bug is **not MoltenVK-specific** — it's spec-level in our shader rewrite or some other backend code path. The earlier hypothesis ("MoltenVK MSL transpilation issue") is wrong; the bug is in our code. |
+| `multiplayer` | 6.28% | Just over threshold. The only demo file in the migration audit that uses `time.Now()` (`examples/multiplayer/components/demo.go`); residual nondeterminism that `FUTURE_SEED` can't tame because the time source isn't routed through `future/rand`. Fix: switch the time source to a tick-counter or accumulated-dt that the deterministic-timestep mode can control. |
 
 ### Root causes fixed (this series)
 
@@ -307,48 +317,45 @@ device-init pacing) with the 5% diff threshold.
 - **frame-layout missing sub-frame panels** — passes at 0.01%. The
   nested-RT composite path now works.
 
-### Demo-app lavapipe path: first finding (2026-04-26)
+### Demo-app lavapipe path
 
-`docker-compose.yml` now has a `vulkan-parity` service that builds
-and runs the future demo binary against lavapipe + validation layers.
-Companion host wrappers: `future-meta/scripts/capture-lavapipe.sh`
-and `parity-diff.sh --test lavapipe`.
+`docker-compose.yml`'s `vulkan-parity` service builds + runs the
+future demo binary against lavapipe + Khronos validation layers.
+Drive it via `future-meta/scripts/capture-lavapipe.sh` (single
+capture) or `future-meta/scripts/parity-diff.sh --test lavapipe`
+(diff vs WebGPU). `--test vulkan` aliases to lavapipe — the host
+MoltenVK path is still callable via `scripts/capture.sh --backend
+vulkan` directly.
 
-First smoke-test capture (`scene-selector`, 30 frames) reproduces a
-real Vulkan API misuse the encoder is doing, that MoltenVK
-silently tolerates:
+A persistent `parity-bin-cache` named volume holds the most-recent
+future binary so back-to-back captures (a sweep) don't rebuild on
+every scene. Cold-cache first capture: ~10-20s build + ~3-30s
+render. Warm-cache: ~3-10s render only. The whole 24-scene sweep
+at 640×480/5 frames takes <60s wall-clock with cache primed.
 
-```
-VUID-vkCmdDrawIndexed-None-02700: Must not call vkCmdDrawIndexed
-on this command buffer while there is no
-VK_PIPELINE_BIND_POINT_GRAPHICS pipeline bound.
-```
+#### Resolved during initial integration
 
-Stack trace: `internal/vk.CmdDrawIndexed → encoder_gpu.go:430
-(Encoder.DrawIndexed) → SpritePass.Execute → engine.run → main`.
-The crash reproduces with `VK_INSTANCE_LAYERS` unset too, so
-this isn't a validation-only signal — lavapipe itself rejects
-the call sequence. MoltenVK tolerates it (presumably by binding
-some default state or silently no-op'ing the draw).
-
-This is the load-bearing first finding the lavapipe integration
-exists to surface. Fixing it unblocks running the full demo-app
-parity sweep against lavapipe.
+- `VUID-vkCmdDrawIndexed-None-02700` (no pipeline bound) was a
+  cascade from a missing `libshaderc` library on the original
+  bookworm-based image — `Encoder.SetPipeline` silently
+  swallowed the shader-compile error. Fixed in #71 (extended
+  shaderc loader paths, switched to Trixie which packages
+  spirv-tools correctly, and added stderr logging for any future
+  pipeline-create failure).
 
 ### Roadmap
-1. Fix the `vkCmdDrawIndexed` without graphics pipeline bound
-   bug — root cause likely in the Encoder's pipeline-bind path
-   or a code path that skips `SetPipeline` before issuing the
-   first draw of a render pass. Lavapipe smoke test will go
-   green once this lands.
-2. Fix `lighting` 5.37% — either dig into MoltenVK `[[position]]`
-   interpolation behaviour for Kage-custom-shader pipelines after
-   `DrawImage→custom-shader` transitions, or run the demo binary
-   under lavapipe + validation layers (now possible — see #1)
-   to disambiguate spec-vs-MoltenVK
-3. `isometric-combat` game-state divergence — RESOLVED by the
-   `future/rand` + headless-deterministic-timestep work
-   (parity now 0.7%); listed for history.
+1. Fix `lighting` — lavapipe ALSO fails at 12% on this scene, so
+   the `[[position]]` interpolation hypothesis (MoltenVK-specific)
+   is wrong. Bug is in our shader rewrite or another code path
+   that's spec-level. Re-investigate with the strict-validation
+   environment now available.
+2. Investigate `deep-cartography` — passes 0.01% on host MoltenVK
+   but fails 16.73% on lavapipe. Either lavapipe is correct and
+   MoltenVK was masking, or vice versa. Side-by-side capture
+   compare needed.
+3. Fix `multiplayer` — the only demo using `time.Now()` directly;
+   route the time source through a deterministic-tick-controllable
+   path so seed+timestep cover it.
 4. Fix MoltenVK-tolerated validation errors surfaced by lavapipe CI
    (missing `VkImageMemoryBarrier.sType` fields on some paths,
    missing `VK_BUFFER_USAGE_INDEX_BUFFER_BIT` on index streams —
@@ -356,6 +363,12 @@ parity sweep against lavapipe.
 5. Resize handling (swapchain recreation; partially working)
 6. Multi-frame-in-flight synchronization (currently single-buffered)
 7. Device-local memory for vertex/index buffers (currently host-visible)
+8. (history) `isometric-combat` game-state divergence — RESOLVED
+   by the `future/rand` + headless-deterministic-timestep work;
+   parity now 0.93%.
+9. (history) `vkCmdDrawIndexed` without graphics pipeline bound —
+   RESOLVED (was the libshaderc cascade in the resolved-during-
+   integration list above).
 
 ---
 
