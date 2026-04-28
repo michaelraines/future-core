@@ -62,11 +62,16 @@ else
   # Without these, an edit to a covered asset leaves the cached binary
   # stale and parity-diff measures the OLD asset's output against the
   # freshly-rebuilt host binary — silent divergence.
-  newer_count=$(find /workspace/meta/future /workspace/meta/future-core \
+  #
+  # `-print -quit` makes find exit on the first match — equivalent to
+  # `| head -1` but without the SIGPIPE-vs-pipefail interaction that
+  # killed this script when many sources are newer than the cached
+  # binary (right after a git pull).
+  newer=$(find /workspace/meta/future /workspace/meta/future-core \
                   -type f \( -name "*.go" -o -name "*.kage" -o -name "*.json" \
                           -o -name "*.png" -o -name "*.ttf" \) \
-                  -newer "$BIN" 2>/dev/null | head -1 | wc -l)
-  if [ "$newer_count" -gt 0 ]; then
+                  -newer "$BIN" -print -quit 2>/dev/null)
+  if [ -n "$newer" ]; then
     echo "==> Source files newer than cached binary; rebuilding"
     need_build=1
   fi
