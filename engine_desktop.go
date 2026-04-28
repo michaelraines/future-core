@@ -8,6 +8,7 @@ import (
 	goimage "image"
 	"os"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -634,6 +635,21 @@ func (e *engine) setCursorMode(mode CursorMode) {
 }
 
 func (e *engine) deviceScaleFactor() float64 {
+	// Parity captures need the host (typically retina, DPR=2 on
+	// macOS) to render at 1x so the antialiasing characteristics
+	// match the lavapipe container which has no display and runs
+	// at DPR=1 natively. Without an override, parity-diff against
+	// a host capture is biased by ~5% just from the AA difference
+	// between supersampled-then-downsampled (host) and native-1x
+	// (container) — independent of any actual rendering bug.
+	//
+	// FUTURE_FORCE_DPR=N (1 ≤ N ≤ 4) overrides whatever the window
+	// reports. Unset = use the real backing scale factor.
+	if v := os.Getenv("FUTURE_FORCE_DPR"); v != "" {
+		if dpr, err := strconv.ParseFloat(v, 64); err == nil && dpr >= 1.0 && dpr <= 4.0 {
+			return dpr
+		}
+	}
 	if e.window != nil {
 		return e.window.DevicePixelRatio()
 	}
