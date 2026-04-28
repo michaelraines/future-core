@@ -53,6 +53,32 @@ func NewShaderFromGLSL(vertSrc, fragSrc []byte) (*Shader, error) {
 	return newShaderFromGLSLInternal(vertSrc, fragSrc, nil)
 }
 
+// ShaderLanguage is the public alias of backend.ShaderLanguage. It
+// names the source language of a shader pair so the future framework
+// (and other consumers outside the internal/ tree) can talk about
+// language selection without importing the internal backend package.
+type ShaderLanguage = backend.ShaderLanguage
+
+// ShaderLanguage constants re-exported for use outside future-core's
+// internal tree. The values track backend.ShaderLanguage* exactly —
+// they're aliases, not copies — so a backend.ShaderLanguage and a
+// futurerender.ShaderLanguage are the same type.
+const (
+	ShaderLanguageKage   = backend.ShaderLanguageKage
+	ShaderLanguageGLSL   = backend.ShaderLanguageGLSL
+	ShaderLanguageGLSLES = backend.ShaderLanguageGLSLES
+	ShaderLanguageWGSL   = backend.ShaderLanguageWGSL
+	ShaderLanguageMSL    = backend.ShaderLanguageMSL
+	ShaderLanguageSPIRV  = backend.ShaderLanguageSPIRV
+	ShaderLanguageHLSL   = backend.ShaderLanguageHLSL
+)
+
+// NativeUniformField is the public alias of backend.NativeUniformField.
+// Authors of native shader variants declare the std140 uniform layout
+// using this type when calling NewShaderNative — see backend's
+// NativeUniformField doc comment for the alignment rules.
+type NativeUniformField = backend.NativeUniformField
+
 // PreferredShaderLanguage reports the active rendering device's preferred
 // native shader source language. Callers use it to pick which native
 // variant of a multi-language shader to feed to NewShaderNative.
