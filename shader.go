@@ -53,6 +53,84 @@ func NewShaderFromGLSL(vertSrc, fragSrc []byte) (*Shader, error) {
 	return newShaderFromGLSLInternal(vertSrc, fragSrc, nil)
 }
 
+// NewShaderNative compiles a shader pair already in the active device's
+// preferred native source language, skipping the Kage → GLSL → target
+// translation pipeline that NewShader and NewShaderFromGLSL go through.
+//
+// Use this when the active backend supports a native source path and a
+// hand-written native variant exists for the shader (e.g. WGSL for
+// WebGPU, MSL for Metal, SPIR-V for Vulkan). Cross-backend authors
+// typically pair this with the matching ShaderSource registry on the
+// future side, where build tags select which native variant gets
+// embedded for the active backend.
+//
+// uniforms declares the combined vertex+fragment uniform struct
+// layout — see backend.NativeUniformField for the std140 packing rules
+// and how to derive a layout from a known-good GLSL form via
+// shadertranslate.ExtractUniformLayout.
+//
+// Returns an error if no rendering device is available, if the active
+// device does not implement backend.NativeShaderDevice (e.g. soft
+// rasterizer), or if the descriptor's Language doesn't match the
+// device's preferred native language. Builds that ship native variants
+// should layer a compile-time compatibility check on top of this so
+// the runtime case never fires.
+func NewShaderNative(lang backend.ShaderLanguage, vertSrc, fragSrc []byte, uniforms []backend.NativeUniformField) (*Shader, error) {
+	rend := getRenderer()
+	if rend == nil || rend.device == nil {
+		return nil, fmt.Errorf("shader: no rendering device available")
+	}
+
+	nsd, ok := rend.device.(backend.NativeShaderDevice)
+	if !ok {
+		return nil, fmt.Errorf("shader: active backend does not support native shader sources")
+	}
+
+	desc := backend.NativeShaderDescriptor{
+		Language:   lang,
+		Vertex:     vertSrc,
+		Fragment:   fragSrc,
+		Uniforms:   uniforms,
+		Attributes: batch.Vertex2DFormat().Attributes,
+	}
+	sh, err := nsd.NewShaderNative(desc)
+	if err != nil {
+		return nil, fmt.Errorf("shader: native compile: %w", err)
+	}
+
+	pip, err := rend.device.NewPipeline(backend.PipelineDescriptor{
+		Shader:       sh,
+		VertexFormat: batch.Vertex2DFormat(),
+		BlendMode:    backend.BlendSourceOver,
+		DepthTest:    false,
+		DepthWrite:   false,
+		CullMode:     backend.CullNone,
+		Primitive:    backend.PrimitiveTriangles,
+	})
+	if err != nil {
+		sh.Dispose()
+		return nil, fmt.Errorf("shader: create pipeline: %w", err)
+	}
+
+	id := nextShaderID.Add(1)
+	s := &Shader{
+		id:       id,
+		backend:  sh,
+		pipeline: pip,
+	}
+
+	if rend.registerShader != nil {
+		rend.registerShader(id, s)
+	}
+
+	// Native shaders skip context-loss tracking: the recovery path
+	// would need to re-translate Kage→GLSL→target, which doesn't
+	// apply here. Authors using native variants opt into the
+	// less-resilient lifecycle in exchange for skipping translation.
+
+	return s, nil
+}
+
 func newShaderFromGLSLInternal(vertSrc, fragSrc []byte, uniforms []shaderir.Uniform) (*Shader, error) {
 	rend := getRenderer()
 	if rend == nil || rend.device == nil {
