@@ -150,6 +150,130 @@ func TestNewShaderFromGLSLNoRenderer(t *testing.T) {
 	require.Contains(t, err.Error(), "no rendering device")
 }
 
+// shaderMockNativeDevice is a shaderMockDevice that also implements
+// backend.NativeShaderDevice for testing the native path.
+type shaderMockNativeDevice struct {
+	shaderMockDevice
+	preferred backend.ShaderLanguage
+	last      backend.NativeShaderDescriptor
+}
+
+func (d *shaderMockNativeDevice) PreferredShaderLanguage() backend.ShaderLanguage {
+	return d.preferred
+}
+
+func (d *shaderMockNativeDevice) NewShaderNative(desc backend.NativeShaderDescriptor) (backend.Shader, error) {
+	if desc.Language != d.preferred {
+		return nil, backend.ErrUnsupportedShaderLanguage
+	}
+	d.last = desc
+	s := newMockShader()
+	d.shaders = append(d.shaders, s)
+	return s, nil
+}
+
+func TestNewShaderNativeNoRenderer(t *testing.T) {
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
+
+	_, err := NewShaderNative(backend.ShaderLanguageWGSL, []byte("v"), []byte("f"), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no rendering device")
+}
+
+func TestNewShaderNativeUnsupportedDevice(t *testing.T) {
+	// shaderMockDevice does not implement NativeShaderDevice — the type
+	// assertion in NewShaderNative must fail and produce a clear error.
+	_ = withShaderRenderer(t)
+
+	_, err := NewShaderNative(backend.ShaderLanguageWGSL, []byte("v"), []byte("f"), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "does not support native shader sources")
+}
+
+func TestPreferredShaderLanguageNoRenderer(t *testing.T) {
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
+
+	require.Equal(t, backend.ShaderLanguageKage, PreferredShaderLanguage())
+}
+
+func TestPreferredShaderLanguageNonNativeDevice(t *testing.T) {
+	// shaderMockDevice does not implement NativeShaderDevice — preferred
+	// must collapse to Kage so callers fall back to the universal source.
+	_ = withShaderRenderer(t)
+	require.Equal(t, backend.ShaderLanguageKage, PreferredShaderLanguage())
+}
+
+func TestPreferredShaderLanguageNativeDevice(t *testing.T) {
+	dev := &shaderMockNativeDevice{preferred: backend.ShaderLanguageWGSL}
+	rend := &renderer{
+		device:               dev,
+		batcher:              batch.NewBatcher(1024, 1024),
+		registerTexture:      func(_ uint32, _ backend.Texture) {},
+		registerRenderTarget: func(_ uint32, _ backend.RenderTarget) {},
+		registerShader:       func(_ uint32, _ *Shader) {},
+	}
+	old := getRenderer()
+	setRenderer(rend)
+	defer func() { setRenderer(old) }()
+
+	require.Equal(t, backend.ShaderLanguageWGSL, PreferredShaderLanguage())
+}
+
+func TestNewShaderNativeAccepted(t *testing.T) {
+	dev := &shaderMockNativeDevice{preferred: backend.ShaderLanguageWGSL}
+	rend := &renderer{
+		device:               dev,
+		batcher:              batch.NewBatcher(1024, 1024),
+		registerTexture:      func(_ uint32, _ backend.Texture) {},
+		registerRenderTarget: func(_ uint32, _ backend.RenderTarget) {},
+		registerShader:       func(_ uint32, _ *Shader) {},
+	}
+	old := getRenderer()
+	setRenderer(rend)
+	defer func() { setRenderer(old) }()
+
+	uniforms := []backend.NativeUniformField{
+		{Name: "uProjection", Offset: 0, Size: 64},
+	}
+	shader, err := NewShaderNative(backend.ShaderLanguageWGSL,
+		[]byte("// vertex"), []byte("// fragment"), uniforms)
+	require.NoError(t, err)
+	require.NotNil(t, shader)
+	require.Greater(t, shader.ID(), uint32(0))
+	require.Len(t, dev.shaders, 1)
+	require.Len(t, dev.pipelines, 1)
+	require.Equal(t, backend.ShaderLanguageWGSL, dev.last.Language)
+	require.Equal(t, uniforms, dev.last.Uniforms)
+	// Attributes are auto-filled from the engine's Vertex2D layout —
+	// callers don't supply them.
+	require.Equal(t, batch.Vertex2DFormat().Attributes, dev.last.Attributes)
+}
+
+func TestNewShaderNativeLanguageMismatch(t *testing.T) {
+	dev := &shaderMockNativeDevice{preferred: backend.ShaderLanguageWGSL}
+	rend := &renderer{
+		device:               dev,
+		batcher:              batch.NewBatcher(1024, 1024),
+		registerTexture:      func(_ uint32, _ backend.Texture) {},
+		registerRenderTarget: func(_ uint32, _ backend.RenderTarget) {},
+		registerShader:       func(_ uint32, _ *Shader) {},
+	}
+	old := getRenderer()
+	setRenderer(rend)
+	defer func() { setRenderer(old) }()
+
+	// Device prefers WGSL; pass MSL — descriptor mismatch wraps
+	// ErrUnsupportedShaderLanguage.
+	_, err := NewShaderNative(backend.ShaderLanguageMSL,
+		[]byte("// vertex"), []byte("// fragment"), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "native compile")
+}
+
 func TestShaderDeallocate(t *testing.T) {
 	dev := withShaderRenderer(t)
 
