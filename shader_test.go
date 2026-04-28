@@ -192,6 +192,37 @@ func TestNewShaderNativeUnsupportedDevice(t *testing.T) {
 	require.Contains(t, err.Error(), "does not support native shader sources")
 }
 
+func TestPreferredShaderLanguageNoRenderer(t *testing.T) {
+	old := getRenderer()
+	setRenderer(nil)
+	defer func() { setRenderer(old) }()
+
+	require.Equal(t, backend.ShaderLanguageKage, PreferredShaderLanguage())
+}
+
+func TestPreferredShaderLanguageNonNativeDevice(t *testing.T) {
+	// shaderMockDevice does not implement NativeShaderDevice — preferred
+	// must collapse to Kage so callers fall back to the universal source.
+	_ = withShaderRenderer(t)
+	require.Equal(t, backend.ShaderLanguageKage, PreferredShaderLanguage())
+}
+
+func TestPreferredShaderLanguageNativeDevice(t *testing.T) {
+	dev := &shaderMockNativeDevice{preferred: backend.ShaderLanguageWGSL}
+	rend := &renderer{
+		device:               dev,
+		batcher:              batch.NewBatcher(1024, 1024),
+		registerTexture:      func(_ uint32, _ backend.Texture) {},
+		registerRenderTarget: func(_ uint32, _ backend.RenderTarget) {},
+		registerShader:       func(_ uint32, _ *Shader) {},
+	}
+	old := getRenderer()
+	setRenderer(rend)
+	defer func() { setRenderer(old) }()
+
+	require.Equal(t, backend.ShaderLanguageWGSL, PreferredShaderLanguage())
+}
+
 func TestNewShaderNativeAccepted(t *testing.T) {
 	dev := &shaderMockNativeDevice{preferred: backend.ShaderLanguageWGSL}
 	rend := &renderer{

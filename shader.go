@@ -53,6 +53,26 @@ func NewShaderFromGLSL(vertSrc, fragSrc []byte) (*Shader, error) {
 	return newShaderFromGLSLInternal(vertSrc, fragSrc, nil)
 }
 
+// PreferredShaderLanguage reports the active rendering device's preferred
+// native shader source language. Callers use it to pick which native
+// variant of a multi-language shader to feed to NewShaderNative.
+//
+// Returns backend.ShaderLanguageKage when no rendering device is
+// active, when the device does not implement backend.NativeShaderDevice
+// (i.e. has no native-shader path — soft, or backends not yet wired
+// up), or when the active backend prefers Kage. Callers should treat
+// "Kage" as "no native variant; use the universal Kage fallback."
+func PreferredShaderLanguage() backend.ShaderLanguage {
+	rend := getRenderer()
+	if rend == nil || rend.device == nil {
+		return backend.ShaderLanguageKage
+	}
+	if nsd, ok := rend.device.(backend.NativeShaderDevice); ok {
+		return nsd.PreferredShaderLanguage()
+	}
+	return backend.ShaderLanguageKage
+}
+
 // NewShaderNative compiles a shader pair already in the active device's
 // preferred native source language, skipping the Kage → GLSL → target
 // translation pipeline that NewShader and NewShaderFromGLSL go through.
