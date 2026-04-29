@@ -155,10 +155,15 @@ func (e *engine) run() error {
 
 	// Resolve and create backend.
 	preferred := []string{"webgpu", "soft"}
-	dev, _, err := backend.Resolve(backendName(), preferred)
+	dev, resolvedName, err := backend.Resolve(backendName(), preferred)
 	if err != nil {
 		return err
 	}
+	// Stash the resolved backend so callers of Backend() / BackendName()
+	// see the concrete name (e.g. "webgpu") instead of the literal user
+	// request "auto" — the debug overlay's [futurecore/<backend>] tag
+	// otherwise reads "[futurecore/auto]" on browser builds.
+	resolvedBackend.Store(resolvedName)
 
 	e.fbW, e.fbH = win.FramebufferSize()
 	if err := dev.Init(backend.DeviceConfig{
