@@ -33,9 +33,22 @@ type Shader struct {
 	// Uniform buffer layout from the GLSL→MSL translator.
 	vertexUniformLayout   []shadertranslate.UniformField
 	fragmentUniformLayout []shadertranslate.UniformField
+
+	// nativeMode signals that vertexSource and fragmentSource hold
+	// MSL directly, not Kage-translated GLSL. compile() skips the
+	// GLSL→MSL translator block when this is true. Populated by
+	// Device.NewShaderNative; the per-stage uniform layouts are set
+	// up at construction time so packUniformBuffer works without a
+	// translator round-trip.
+	nativeMode bool
 }
 
 // compile translates GLSL to MSL and compiles to MTLLibrary + MTLFunction.
+//
+// When nativeMode is true the source fields already hold MSL —
+// Device.NewShaderNative stored them — and the translator step is
+// skipped. The vertex/fragment uniform layouts were populated at
+// NewShaderNative time so packUniformBuffer works the same way.
 func (s *Shader) compile() error {
 	if s.compiled {
 		return s.compileError
@@ -43,14 +56,20 @@ func (s *Shader) compile() error {
 	s.compiled = true
 
 	if s.vertexSource != "" {
-		result, err := shadertranslate.GLSLToMSLVertex(s.vertexSource)
-		if err != nil {
-			s.compileError = fmt.Errorf("metal: vertex GLSL→MSL: %w", err)
-			return s.compileError
+		var msl string
+		if s.nativeMode {
+			msl = s.vertexSource
+		} else {
+			result, err := shadertranslate.GLSLToMSLVertex(s.vertexSource)
+			if err != nil {
+				s.compileError = fmt.Errorf("metal: vertex GLSL→MSL: %w", err)
+				return s.compileError
+			}
+			s.vertexUniformLayout = result.Uniforms
+			msl = result.Source
 		}
-		s.vertexUniformLayout = result.Uniforms
 
-		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, result.Source)
+		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, msl)
 		if err != nil {
 			s.compileError = fmt.Errorf("metal: compile vertex MSL: %w", err)
 			return s.compileError
@@ -60,14 +79,20 @@ func (s *Shader) compile() error {
 	}
 
 	if s.fragmentSource != "" {
-		result, err := shadertranslate.GLSLToMSLFragment(s.fragmentSource)
-		if err != nil {
-			s.compileError = fmt.Errorf("metal: fragment GLSL→MSL: %w", err)
-			return s.compileError
+		var msl string
+		if s.nativeMode {
+			msl = s.fragmentSource
+		} else {
+			result, err := shadertranslate.GLSLToMSLFragment(s.fragmentSource)
+			if err != nil {
+				s.compileError = fmt.Errorf("metal: fragment GLSL→MSL: %w", err)
+				return s.compileError
+			}
+			s.fragmentUniformLayout = result.Uniforms
+			msl = result.Source
 		}
-		s.fragmentUniformLayout = result.Uniforms
 
-		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, result.Source)
+		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, msl)
 		if err != nil {
 			s.compileError = fmt.Errorf("metal: compile fragment MSL: %w", err)
 			return s.compileError
