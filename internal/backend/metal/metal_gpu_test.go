@@ -23,6 +23,51 @@ func initGPUDevice(t *testing.T) (*Device, backend.CommandEncoder) {
 	return dev, dev.Encoder()
 }
 
+func TestMetalResizeScreen(t *testing.T) {
+	dev, _ := initGPUDevice(t)
+
+	// Capture the original screen-buffer size, then resize down (simulating
+	// retina → non-retina display drag) and back up.
+	origBufSize := dev.screenBufSize
+	require.Equal(t, 64*64*4, origBufSize)
+
+	dev.ResizeScreen(32, 32)
+	require.Equal(t, 32, dev.width)
+	require.Equal(t, 32, dev.height)
+	require.Equal(t, 32*32*4, dev.screenBufSize)
+	require.NotZero(t, dev.defaultColorTex, "texture reallocated after shrink")
+
+	dev.ResizeScreen(128, 96)
+	require.Equal(t, 128, dev.width)
+	require.Equal(t, 96, dev.height)
+	require.Equal(t, 128*96*4, dev.screenBufSize)
+	require.NotZero(t, dev.defaultColorTex, "texture reallocated after grow")
+
+	// No-op when dims unchanged.
+	tex := dev.defaultColorTex
+	dev.ResizeScreen(128, 96)
+	require.Equal(t, tex, dev.defaultColorTex, "no realloc when dims unchanged")
+
+	// Render at the new size and confirm ReadScreen returns full coverage —
+	// regression guard for the bug where the encoder cached stale dims and
+	// kept rendering into the old-size texture.
+	enc := dev.Encoder()
+	enc.BeginRenderPass(backend.RenderPassDescriptor{
+		LoadAction: backend.LoadActionClear,
+		ClearColor: [4]float32{0, 0, 1, 1},
+	})
+	enc.EndRenderPass()
+	buf := make([]byte, 128*96*4)
+	require.True(t, dev.ReadScreen(buf))
+	// Bottom-right pixel should be blue — proves the new viewport reaches
+	// every pixel of the resized buffer.
+	last := (95*128 + 127) * 4
+	require.Equal(t, byte(0), buf[last+0], "R")
+	require.Equal(t, byte(0), buf[last+1], "G")
+	require.Equal(t, byte(255), buf[last+2], "B")
+	require.Equal(t, byte(255), buf[last+3], "A")
+}
+
 func TestMetalClearAndReadScreen(t *testing.T) {
 	dev, enc := initGPUDevice(t)
 
