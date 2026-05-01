@@ -26,9 +26,14 @@ type Encoder struct {
 	boundIndexBuf   *Buffer
 	boundShader     *Shader
 
-	// (Pool lifetime tracked at frame granularity on Device — see
-	// Device.frameAutoreleaseToken. Per-pass scoping would release the
-	// frame's command buffer prematurely, since it's autoreleased.)
+	// Per-pass nested autorelease pool. Drains the
+	// MTLRenderPassDescriptor / colorAttachments / RenderCommandEncoder
+	// (and any temp NSStrings the encoder allocates) immediately at
+	// EndRenderPass, so scenes with many render passes don't balloon
+	// the heap waiting for the per-frame pool to drain. The frame-level
+	// pool on Device.frameAutoreleaseToken still bounds the cmdBuffer
+	// itself; this nested pool only catches the per-pass churn.
+	passAutoreleaseToken uintptr
 }
 
 // BeginRenderPass begins a Metal render pass.
@@ -47,6 +52,7 @@ type Encoder struct {
 func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	e.dev.ensureFrameStarted()
 	e.cmdBuffer = e.dev.frameCmdBuffer
+	e.passAutoreleaseToken = mtl.AutoreleasePoolPush()
 
 	colorTex := e.dev.defaultColorTex
 	w, h := uint32(e.dev.width), uint32(e.dev.height)
@@ -101,9 +107,17 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	// imageSrcNAt/Origin/Size builtin; leaving any declared slot
 	// unbound makes Metal validation drop the draw — presenting as
 	// fully-black render targets on cells that ran multi-texture
-	// effect shaders (color_adjust, vignette, etc.) even though the
-	// shader compiled cleanly. SetTexture/SetTextureFilter calls from
-	// the engine override these defaults at the slots they touch.
+	// effect shaders (color_adjust, vignette, etc.).
+	//
+	// Slot 0 also needs a default because the sprite pass binds the
+	// per-batch texture lazily and validation must pass at the first
+	// draw before SetTexture has been called. The pipeline pairs with
+	// `sprite_pass.lastTextureID = 0` reset on pass switch — without
+	// that reset, the engine would skip re-binding slot 0 when a new
+	// pass starts with the same TextureID as the prior pass's last
+	// batch, leaving this whiteTex placeholder sampled instead of the
+	// atlas the engine thinks is bound (the bug that painted
+	// isometric-combat's terrain solid white).
 	if e.dev.defaultSampler != 0 {
 		for slot := 0; slot < 4; slot++ {
 			mtl.RenderCommandEncoderSetFragmentSamplerState(e.renderEncoder, e.dev.defaultSampler, uint64(slot))
@@ -116,24 +130,30 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	}
 }
 
-// EndRenderPass ends the current render encoder. Commits the frame's
-// command buffer and starts a fresh one for the next pass — each
-// render pass becomes its own GPU submission. Per-frame batching was
-// measurably slower on scenes with many small thumbnail RTs (vector-
-// showcase ~11s vs 2s per-pass) because Metal serializes within a
-// single command buffer but pipelines aggressively across them.
-// Cross-pass texture-write→sample dependencies are preserved by
-// command-queue ordering between commits.
+// EndRenderPass ends the current render encoder. The frame's command
+// buffer stays open across passes — every render pass goes into one
+// MTLCommandBuffer, committed in Device.EndFrame. This is required for
+// correctness: when render pass N writes to a texture and pass N+1
+// samples it (e.g. isometric-combat's terrain atlas built up over
+// passes 0-9 then sampled at pass 57), Metal only guarantees the
+// write→read ordering when both passes live in the SAME command
+// buffer. Per-pass commits split them across cmdBuffers which Metal
+// pipelines aggressively without inserting a barrier, and the sample
+// would race with the write.
+//
+// The per-frame autorelease pool keeps memory pressure low even with
+// hundreds of passes batched into one buffer (scene-selector spawns
+// ~50 thumbnail RTs per frame and renders fine).
 func (e *Encoder) EndRenderPass() {
 	if e.inRenderPass {
 		mtl.RenderCommandEncoderEndEncoding(e.renderEncoder)
 		e.renderEncoder = 0
 		e.inRenderPass = false
-
-		mtl.CommandBufferCommit(e.cmdBuffer)
-		e.dev.lastCmdBuffer = e.cmdBuffer
-		e.dev.frameCmdBuffer = 0
 		e.cmdBuffer = 0
+	}
+	if e.passAutoreleaseToken != 0 {
+		mtl.AutoreleasePoolPop(e.passAutoreleaseToken)
+		e.passAutoreleaseToken = 0
 	}
 }
 
