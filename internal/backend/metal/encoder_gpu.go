@@ -95,9 +95,24 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	}
 	mtl.RenderCommandEncoderSetViewport(e.renderEncoder, vp)
 
-	// Bind default sampler.
+	// Bind default texture + sampler at every slot the MSL fragment
+	// signature could declare. The Kage→MSL emit declares uTexture0..3
+	// (and matching samplers) on any shader that uses an
+	// imageSrcNAt/Origin/Size builtin; leaving any declared slot
+	// unbound makes Metal validation drop the draw — presenting as
+	// fully-black render targets on cells that ran multi-texture
+	// effect shaders (color_adjust, vignette, etc.) even though the
+	// shader compiled cleanly. SetTexture/SetTextureFilter calls from
+	// the engine override these defaults at the slots they touch.
 	if e.dev.defaultSampler != 0 {
-		mtl.RenderCommandEncoderSetFragmentSamplerState(e.renderEncoder, e.dev.defaultSampler, 0)
+		for slot := 0; slot < 4; slot++ {
+			mtl.RenderCommandEncoderSetFragmentSamplerState(e.renderEncoder, e.dev.defaultSampler, uint64(slot))
+		}
+	}
+	if e.dev.whiteTex != 0 {
+		for slot := 0; slot < 4; slot++ {
+			mtl.RenderCommandEncoderSetFragmentTexture(e.renderEncoder, e.dev.whiteTex, uint64(slot))
+		}
 	}
 }
 

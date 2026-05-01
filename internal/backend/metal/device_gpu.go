@@ -29,6 +29,13 @@ type Device struct {
 	defaultSampler uintptr // MTLSamplerState (nearest)
 	linearSampler  uintptr // MTLSamplerState (linear)
 
+	// 1x1 white texture used to fill any sampler slot the shader's MSL
+	// signature declares but the engine doesn't bind. Metal validation
+	// drops draws that leave a declared texture/sampler binding nil,
+	// which presented as fully-black render targets on cells that ran
+	// effect shaders declaring uTexture0..3 but only sampling slot 0.
+	whiteTex mtl.Texture
+
 	// frameCmdBuffer is the command buffer being filled this frame.
 	// Lazily created via ensureFrameStarted on the first
 	// BeginRenderPass; committed in Device.EndFrame. Holds every
@@ -112,6 +119,22 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	d.defaultSampler = mtl.DeviceNewSamplerState(d.device, mtl.SamplerMinMagFilterNearest)
 	d.linearSampler = mtl.DeviceNewSamplerState(d.device, mtl.SamplerMinMagFilterLinear)
 
+	// Create a 1x1 white texture for binding at unused sampler slots.
+	whiteDesc := mtl.TextureDescriptor{
+		PixelFormat: mtl.PixelFormatRGBA8Unorm,
+		Width:       1, Height: 1, Depth: 1,
+		MipmapCount: 1,
+		SampleCount: 1,
+		StorageMode: mtl.StorageModeShared,
+		Usage:       mtl.TextureUsageShaderRead,
+	}
+	d.whiteTex = mtl.DeviceNewTexture(d.device, &whiteDesc)
+	if d.whiteTex != 0 {
+		whiteData := []byte{255, 255, 255, 255}
+		region := mtl.Region{Size: mtl.Size{Width: 1, Height: 1, Depth: 1}}
+		mtl.TextureReplaceRegion(d.whiteTex, region, 0, unsafe.Pointer(&whiteData[0]), 4)
+	}
+
 	return nil
 }
 
@@ -181,6 +204,10 @@ func (d *Device) Dispose() {
 	if d.defaultColorTex != 0 {
 		mtl.TextureRelease(d.defaultColorTex)
 		d.defaultColorTex = 0
+	}
+	if d.whiteTex != 0 {
+		mtl.TextureRelease(d.whiteTex)
+		d.whiteTex = 0
 	}
 	if d.screenBuffer != 0 {
 		mtl.BufferRelease(d.screenBuffer)
