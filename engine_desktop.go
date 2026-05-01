@@ -674,23 +674,18 @@ func resolveBackendName(name string, preferred []string) string {
 }
 
 // preferredBackends returns the platform-specific preferred backend order.
-// OpenGL is currently preferred on all platforms because it is the only
-// backend with a working GLSL shader pipeline. The GPU backends (Metal,
-// Vulkan, DX12) compile by default and have presentation layers, but need
-// a GLSL→MSL/SPIR-V translation step before they can render. Once shader
-// cross-compilation is added, restore the native API preferences:
-//
-//	darwin:  metal, opengl, soft
-//	windows: dx12, vulkan, opengl, soft
-//	linux:   vulkan, opengl, soft
+// Each platform prefers its native graphics API. The Kage→GLSL→target
+// shader translation pipeline (and per-language NativeShaderDevice paths)
+// is in place across Metal, Vulkan, OpenGL, and WebGPU, so native APIs
+// are reachable from a default build without extra build tags.
 func preferredBackends() []string {
 	switch runtime.GOOS {
 	case "darwin":
-		return []string{"opengl", "metal", "soft"}
+		return []string{"metal", "opengl", "soft"}
 	case "windows":
-		return []string{"opengl", "dx12", "vulkan", "soft"}
+		return []string{"dx12", "vulkan", "opengl", "soft"}
 	case "linux", "freebsd":
-		return []string{"opengl", "vulkan", "soft"}
+		return []string{"vulkan", "opengl", "soft"}
 	default:
 		return []string{"opengl", "soft"}
 	}
