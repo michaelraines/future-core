@@ -264,18 +264,28 @@ func (w *Window) Size() (int, int) {
 }
 
 // FramebufferSize returns the framebuffer size in physical pixels.
-// When NoGL is set (Vulkan presentation), returns the logical window size to
-// match the GL path's behavior. The swapchain/CAMetalLayer handles Retina
-// upscaling automatically during presentation.
+//
+// Every Cocoa backend renders at this size and presents into a
+// drawable of the same size, so cross-backend parity comparison is
+// dimension-correct. The two paths:
+//
+//   - GL path (OpenGL, Metal-via-GL-presenter, DX12-via-GL-presenter):
+//     NSOpenGLContext attached to a non-layer-backed NSView produces
+//     a backbuffer at backingScaleFactor × view-bounds (i.e. physical
+//     pixels on Retina). The engine renders to its own offscreen at
+//     this same size and the GL presenter blits 1:1.
+//   - noGL path (Vulkan, WebGPU): CAMetalLayer's drawableSize defaults
+//     to bounds × contentsScale (physical pixels on Retina). The
+//     engine configures the surface at this size and renders into the
+//     drawable directly.
+//
+// Earlier revisions returned logical pixels for the noGL path — that
+// produced a 2× capture-dimension mismatch in cross-backend parity
+// runs and a quadrant-only render on Retina interactive Metal.
+// Physical-everywhere is the only consistent option.
 func (w *Window) FramebufferSize() (int, int) {
 	if w.contentView == 0 {
 		return 0, 0
-	}
-	if w.noGL {
-		// Match GL path: use logical size. The presentation layer handles
-		// Retina scaling. This keeps the projection/viewport math consistent
-		// across backends.
-		return w.Size()
 	}
 	frame := objc.Send[CGRect](w.contentView, selFrame)
 	backing := objc.Send[CGRect](w.contentView, selConvertRectToBacking, frame)

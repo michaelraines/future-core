@@ -25,11 +25,28 @@ type Encoder struct {
 	indexFormat     backend.IndexFormat
 	boundIndexBuf   *Buffer
 	boundShader     *Shader
+
+	// (Pool lifetime tracked at frame granularity on Device — see
+	// Device.frameAutoreleaseToken. Per-pass scoping would release the
+	// frame's command buffer prematurely, since it's autoreleased.)
 }
 
 // BeginRenderPass begins a Metal render pass.
+//
+// Frame architecture: one MTLCommandBuffer per frame, multiple
+// RenderCommandEncoders within it. The frame's command buffer is
+// lazily created on the first BeginRenderPass and committed in
+// Device.EndFrame; ReadScreen / ResizeScreen / Dispose drain the
+// previous frame's buffer before touching the screen texture.
+//
+// Per-pass autorelease pool: the MTLRenderPassDescriptor allocated
+// here (plus its colorAttachments / attachment descriptors) is
+// autoreleased; without a pool around each pass these accumulate
+// across frames and the heap balloons after a few seconds of
+// rendering.
 func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
-	e.cmdBuffer = mtl.CommandQueueCommandBuffer(e.dev.commandQueue)
+	e.dev.ensureFrameStarted()
+	e.cmdBuffer = e.dev.frameCmdBuffer
 
 	colorTex := e.dev.defaultColorTex
 	w, h := uint32(e.dev.width), uint32(e.dev.height)
@@ -84,16 +101,21 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	}
 }
 
-// EndRenderPass ends the current render pass.
+// EndRenderPass ends the current render encoder. Commits the frame's
+// command buffer and starts a new one so each pass is its own GPU
+// submission — needed because Metal's cross-pass texture-write→sample
+// barriers don't hold reliably across multiple encoders within a
+// single command buffer when the same texture is targeted then read.
+// We rely on Metal's command-queue ordering to serialize the commits.
 func (e *Encoder) EndRenderPass() {
 	if e.inRenderPass {
 		mtl.RenderCommandEncoderEndEncoding(e.renderEncoder)
 		e.renderEncoder = 0
 		e.inRenderPass = false
 
-		// Commit and wait.
 		mtl.CommandBufferCommit(e.cmdBuffer)
-		mtl.CommandBufferWaitUntilCompleted(e.cmdBuffer)
+		e.dev.lastCmdBuffer = e.cmdBuffer
+		e.dev.frameCmdBuffer = 0
 		e.cmdBuffer = 0
 	}
 }

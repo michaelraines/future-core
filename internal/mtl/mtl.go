@@ -203,6 +203,14 @@ var (
 	fnObjcGetClass    func(name *byte) Class
 	fnSelRegisterName func(name *byte) Selector
 
+	// Lightweight autorelease pool API. Each pair forms a scope: tokens
+	// returned by Push must be passed to Pop in LIFO order. Drains every
+	// object autoreleased between the two calls. Required for any code
+	// that runs outside Cocoa's main run loop (e.g. our headless render
+	// loop) — without it autoreleased Metal objects leak forever.
+	fnObjcAutoreleasePoolPush func() uintptr
+	fnObjcAutoreleasePoolPop  func(token uintptr)
+
 	// Cached selectors for Metal methods.
 	selNewCommandQueue          Selector
 	selCommandBuffer            Selector
@@ -273,6 +281,12 @@ func Init() error {
 	if err := resolveSymbol(objcLib, "sel_registerName", &fnSelRegisterName); err != nil {
 		return err
 	}
+	if err := resolveSymbol(objcLib, "objc_autoreleasePoolPush", &fnObjcAutoreleasePoolPush); err != nil {
+		return err
+	}
+	if err := resolveSymbol(objcLib, "objc_autoreleasePoolPop", &fnObjcAutoreleasePoolPop); err != nil {
+		return err
+	}
 
 	// Load Metal framework.
 	lib, err = purego.Dlopen("/System/Library/Frameworks/Metal.framework/Metal", purego.RTLD_LAZY|purego.RTLD_GLOBAL)
@@ -332,6 +346,18 @@ func Init() error {
 func CreateSystemDefaultDevice() Device {
 	return fnMTLCreateSystemDefaultDevice()
 }
+
+// AutoreleasePoolPush opens a new autorelease pool and returns the token
+// that must be passed to AutoreleasePoolPop. Use to bound the lifetime
+// of autoreleased Cocoa/Metal objects (NSCommandBuffer,
+// MTLRenderPassDescriptor, NSRenderCommandEncoder, ...) when running
+// outside Cocoa's main run loop. Pools nest; tokens must be popped in
+// LIFO order.
+func AutoreleasePoolPush() uintptr { return fnObjcAutoreleasePoolPush() }
+
+// AutoreleasePoolPop drains all objects autoreleased since the matching
+// AutoreleasePoolPush.
+func AutoreleasePoolPop(token uintptr) { fnObjcAutoreleasePoolPop(token) }
 
 // DeviceNewCommandQueue creates a new command queue.
 func DeviceNewCommandQueue(dev Device) CommandQueue {
