@@ -302,6 +302,15 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 	pf := mtlPixelFormatFromBackend(desc.Format)
 	usage := mtl.TextureUsageShaderRead | mtl.TextureUsageRenderTarget
 
+	// Always Shared because the engine's sprite atlas
+	// (sprite_atlas.go:144 → UploadRegion → replaceRegion) writes new
+	// sprites into RT-backed textures via the CPU path — that's invalid
+	// on Private storage. Private would be a better fit for render-only
+	// targets (lets Metal auto-insert the write→sample barriers between
+	// render passes), but until the sprite atlas grows a render-into
+	// upload path we can't separate the two cases.
+	storage := mtl.StorageModeShared
+
 	texDesc := mtl.TextureDescriptor{
 		PixelFormat: pf,
 		Width:       uint64(desc.Width),
@@ -309,7 +318,7 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 		Depth:       1,
 		MipmapCount: 1,
 		SampleCount: 1,
-		StorageMode: mtl.StorageModeShared,
+		StorageMode: storage,
 		Usage:       usage,
 	}
 
@@ -330,18 +339,17 @@ func (d *Device) NewTexture(desc backend.TextureDescriptor) (backend.Texture, er
 
 	if len(desc.Data) > 0 {
 		tex.Upload(desc.Data, 0)
-	} else {
-		// Zero-fill new textures. Metal does NOT zero-initialize newly-
-		// allocated texture storage, so a fresh RT — sampled before
-		// anything is rendered into it — reads garbage. Other backends
-		// either zero by default (soft) or pre-register a pending clear
-		// (WebGPU's newImageLabeled). Metal needs the same treatment;
-		// the cost is one Upload of zeros at allocation time, paid once
-		// per RT instead of once per frame's load action.
-		bpp := bytesPerPixel(desc.Format)
-		zeros := make([]byte, desc.Width*desc.Height*bpp)
-		tex.Upload(zeros, 0)
 	}
+	// No zero-fill on creation. The engine's `newImageLabeled` already
+	// pre-registers a pending clear for fresh RTs (image.go:210), which
+	// the sprite pass consumes by issuing a LoadActionClear on the
+	// first BeginRenderPass — that's a GPU-side clear that runs before
+	// any sampler reads. A CPU-side replaceRegion zero-fill before the
+	// GPU's render-pass writes can race with the GPU's own writes when
+	// the texture is used as a render target on shared storage; on
+	// isometric-combat this manifested as the terrain atlas sampling
+	// solid white (the CPU zero-fill committed AFTER the GPU's diamond
+	// writes, blanking them).
 
 	return tex, nil
 }
