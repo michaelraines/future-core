@@ -102,11 +102,13 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 }
 
 // EndRenderPass ends the current render encoder. Commits the frame's
-// command buffer and starts a new one so each pass is its own GPU
-// submission — needed because Metal's cross-pass texture-write→sample
-// barriers don't hold reliably across multiple encoders within a
-// single command buffer when the same texture is targeted then read.
-// We rely on Metal's command-queue ordering to serialize the commits.
+// command buffer and starts a fresh one for the next pass — each
+// render pass becomes its own GPU submission. Per-frame batching was
+// measurably slower on scenes with many small thumbnail RTs (vector-
+// showcase ~11s vs 2s per-pass) because Metal serializes within a
+// single command buffer but pipelines aggressively across them.
+// Cross-pass texture-write→sample dependencies are preserved by
+// command-queue ordering between commits.
 func (e *Encoder) EndRenderPass() {
 	if e.inRenderPass {
 		mtl.RenderCommandEncoderEndEncoding(e.renderEncoder)
