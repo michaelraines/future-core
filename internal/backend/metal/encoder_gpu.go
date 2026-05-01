@@ -10,10 +10,13 @@ import (
 )
 
 // Encoder implements backend.CommandEncoder for Metal.
+//
+// The encoder reads screen dimensions from e.dev (not a cached copy) so
+// that ResizeScreen — invoked when the window moves between displays
+// with different backingScaleFactor — takes effect on the very next
+// frame without re-creating the encoder.
 type Encoder struct {
-	dev    *Device
-	width  int
-	height int
+	dev *Device
 
 	inRenderPass    bool
 	currentPipeline *Pipeline
@@ -29,7 +32,7 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 	e.cmdBuffer = mtl.CommandQueueCommandBuffer(e.dev.commandQueue)
 
 	colorTex := e.dev.defaultColorTex
-	w, h := uint32(e.width), uint32(e.height)
+	w, h := uint32(e.dev.width), uint32(e.dev.height)
 	if desc.Target != nil {
 		if rt, ok := desc.Target.(*RenderTarget); ok {
 			colorTex = rt.colorTex.handle
@@ -202,8 +205,8 @@ func (e *Encoder) SetViewport(vp backend.Viewport) {
 func (e *Encoder) SetScissor(rect *backend.ScissorRect) {
 	if rect == nil {
 		mtl.RenderCommandEncoderSetScissorRect(e.renderEncoder, mtl.ScissorRect{
-			Width:  uint64(e.width),
-			Height: uint64(e.height),
+			Width:  uint64(e.dev.width),
+			Height: uint64(e.dev.height),
 		})
 		return
 	}

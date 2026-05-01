@@ -4,6 +4,7 @@ package metal
 
 import (
 	"fmt"
+	"os"
 	"unsafe"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -78,21 +79,8 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("metal: failed to create command queue")
 	}
 
-	// Create a shared buffer and a texture backed by it for screen rendering.
-	// Using a buffer-backed texture allows CPU readback via buffer.contents
-	// instead of getBytes:fromRegion: (which has arm64 struct ABI issues with purego).
-	bytesPerRow := d.width * 4
-	d.screenBufSize = bytesPerRow * d.height
-	d.screenBuffer = mtl.DeviceNewBuffer(d.device, uint64(d.screenBufSize), mtl.ResourceStorageModeShared)
-	if d.screenBuffer == 0 {
-		return fmt.Errorf("metal: failed to create screen buffer")
-	}
-
-	d.defaultColorTex = mtl.BufferNewTexture(d.screenBuffer, d.device,
-		mtl.PixelFormatRGBA8Unorm, uint64(d.width), uint64(d.height),
-		uint64(bytesPerRow), mtl.TextureUsageShaderRead|mtl.TextureUsageRenderTarget)
-	if d.defaultColorTex == 0 {
-		return fmt.Errorf("metal: failed to create default color texture")
+	if err := d.allocScreen(); err != nil {
+		return err
 	}
 
 	// Create sampler states.
@@ -102,11 +90,65 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	return nil
 }
 
+// allocScreen creates a shared buffer plus a buffer-backed texture sized to
+// d.width × d.height. Used by Init and ResizeScreen. The buffer-backed
+// texture lets ReadScreen copy via buffer.contents instead of
+// getBytes:fromRegion: (which has arm64 struct ABI issues with purego).
+func (d *Device) allocScreen() error {
+	bytesPerRow := d.width * 4
+	d.screenBufSize = bytesPerRow * d.height
+	d.screenBuffer = mtl.DeviceNewBuffer(d.device, uint64(d.screenBufSize), mtl.ResourceStorageModeShared)
+	if d.screenBuffer == 0 {
+		return fmt.Errorf("metal: failed to create screen buffer")
+	}
+	d.defaultColorTex = mtl.BufferNewTexture(d.screenBuffer, d.device,
+		mtl.PixelFormatRGBA8Unorm, uint64(d.width), uint64(d.height),
+		uint64(bytesPerRow), mtl.TextureUsageShaderRead|mtl.TextureUsageRenderTarget)
+	if d.defaultColorTex == 0 {
+		mtl.BufferRelease(d.screenBuffer)
+		d.screenBuffer = 0
+		return fmt.Errorf("metal: failed to create default color texture")
+	}
+	return nil
+}
+
+// ResizeScreen reallocates the default color texture and screen readback
+// buffer when the framebuffer dimensions change — typically when the
+// window moves between displays with different backingScaleFactor (Retina
+// vs non-Retina). Without this the engine keeps drawing into a stale-size
+// texture and ReadScreen memcpys a partial slice into a presenter buffer
+// of a different size, producing torn/garbled output.
+func (d *Device) ResizeScreen(width, height int) {
+	if width <= 0 || height <= 0 || (width == d.width && height == d.height) {
+		return
+	}
+	if d.defaultColorTex != 0 {
+		mtl.TextureRelease(d.defaultColorTex)
+		d.defaultColorTex = 0
+	}
+	if d.screenBuffer != 0 {
+		mtl.BufferRelease(d.screenBuffer)
+		d.screenBuffer = 0
+	}
+	d.width = width
+	d.height = height
+	if err := d.allocScreen(); err != nil {
+		// Allocation failure leaves the device without a screen target;
+		// next BeginRenderPass will see colorTex==0 and the frame is
+		// dropped. Log via stderr so the failure isn't completely silent.
+		fmt.Fprintf(os.Stderr, "metal: ResizeScreen(%d,%d) failed: %v\n", width, height, err)
+	}
+}
+
 // Dispose releases all Metal resources.
 func (d *Device) Dispose() {
 	if d.defaultColorTex != 0 {
 		mtl.TextureRelease(d.defaultColorTex)
 		d.defaultColorTex = 0
+	}
+	if d.screenBuffer != 0 {
+		mtl.BufferRelease(d.screenBuffer)
+		d.screenBuffer = 0
 	}
 	if d.commandQueue != 0 {
 		mtl.Release(uintptr(d.commandQueue))
@@ -310,11 +352,7 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 
 // Encoder returns the command encoder.
 func (d *Device) Encoder() backend.CommandEncoder {
-	return &Encoder{
-		dev:    d,
-		width:  d.width,
-		height: d.height,
-	}
+	return &Encoder{dev: d}
 }
 
 // bytesPerPixel returns the bytes per pixel for a texture format.
