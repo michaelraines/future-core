@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
 	"unsafe"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -71,6 +72,14 @@ func (s *Shader) compile() error {
 
 		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, msl)
 		if err != nil {
+			// Diagnostic: emit the failed MSL source plus the
+			// localizedDescription from the NSError so a translator
+			// regression surfaces as a readable build error rather than
+			// a silent black render. Compile failures should not happen
+			// in steady state — every shader the framework ships
+			// translates cleanly — but new game-side Kage shaders that
+			// hit a translator gap will be caught here.
+			fmt.Fprintf(os.Stderr, "metal: vertex MSL compile failed:\n%s\nerror: %v\n", msl, err)
 			s.compileError = fmt.Errorf("metal: compile vertex MSL: %w", err)
 			return s.compileError
 		}
@@ -94,6 +103,7 @@ func (s *Shader) compile() error {
 
 		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, msl)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "metal: fragment MSL compile failed:\n%s\nerror: %v\n", msl, err)
 			s.compileError = fmt.Errorf("metal: compile fragment MSL: %w", err)
 			return s.compileError
 		}

@@ -800,9 +800,42 @@ func DeviceNewLibraryWithSource(dev Device, source string) (Library, error) {
 	var errObj uintptr
 	lib := Library(msgSend(uintptr(dev), selNewLibraryWithSource, src, 0, uintptr(unsafe.Pointer(&errObj))))
 	if lib == 0 {
-		return 0, fmt.Errorf("mtl: shader compilation failed")
+		// Extract the NSError's localizedDescription so callers see the
+		// real compiler diagnostic instead of "shader compilation failed".
+		if errObj != 0 {
+			descSel := sel("localizedDescription")
+			descObj := msgSend(errObj, descSel)
+			if descObj != 0 {
+				utf8Sel := sel("UTF8String")
+				cstr := msgSend(descObj, utf8Sel)
+				if cstr != 0 {
+					return 0, fmt.Errorf("mtl: shader compilation failed: %s", goStringFromCStr(cstr))
+				}
+			}
+		}
+		return 0, fmt.Errorf("mtl: shader compilation failed (no diagnostic)")
 	}
 	return lib, nil
+}
+
+// goStringFromCStr copies a NUL-terminated C string at the given pointer
+// into a Go string. Used for extracting NSError localizedDescription.
+func goStringFromCStr(ptr uintptr) string {
+	if ptr == 0 {
+		return ""
+	}
+	var n int
+	for {
+		b := *(*byte)(unsafe.Pointer(ptr + uintptr(n)))
+		if b == 0 {
+			break
+		}
+		n++
+		if n > 8192 {
+			break // safety cap
+		}
+	}
+	return string(unsafe.Slice((*byte)(unsafe.Pointer(ptr)), n))
 }
 
 // LibraryNewFunctionWithName gets a function from a library.
