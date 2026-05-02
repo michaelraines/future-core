@@ -427,6 +427,29 @@ at 640×480/5 frames takes <60s wall-clock with cache primed.
   composite then darkened the whole scene. Adding `case [3]float32:`
   writes 12 bytes (matching the layout table's declared `Size: 12`).
 
+### Parity scoreboard (Metal vs WebGPU, 5×2 grid worst-cell metric)
+
+| Scene             | Worst-cell | Status |
+|-------------------|-----------|--------|
+| scene-selector    | 0.25%     | PASS   |
+| vector-showcase   | 0.57%     | PASS   |
+| sprite-demo       | 2.18%     | PASS   |
+| isometric-combat  | 2.37%     | PASS   |
+| lighting          | 7.89%*    | FAIL†  |
+
+\* lighting also varies run-to-run because the demo itself is
+non-deterministic at the ECS-query-order level. WebGPU vs **WebGPU**
+on the same scene already shows a ~7% worst-cell diff via
+`scripts/parity-diff.sh --ref webgpu --test webgpu` (see the
+`parity-diff.sh` distinct-paths fix). So the Metal-side residual is
+within the demo's intrinsic noise floor.
+
+† fixing the demo's nondeterminism (most likely candidates: ECS
+`Query2` map-iteration order in `lighting_frame.go`'s
+`collectLights`, and `state.ShadowCasters` ordering feeding
+`collectRelevantEdges` → `ComputeVisibilityPolygon`) is the next
+parity step. It will benefit *every* backend, not just Metal.
+
 ### What Works End-to-End
 - Clear and ReadPixels cycle (GPU test passing)
 - Shader compilation (GLSL→MSL→MTLLibrary)
