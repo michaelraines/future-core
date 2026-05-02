@@ -429,13 +429,14 @@ at 640×480/5 frames takes <60s wall-clock with cache primed.
 
 ### Parity scoreboard (Metal vs WebGPU, 5×2 grid worst-cell metric)
 
-| Scene             | Worst-cell | Status |
-|-------------------|-----------|--------|
-| scene-selector    | 0.25%     | PASS   |
-| vector-showcase   | 0.57%     | PASS   |
-| sprite-demo       | 2.18%     | PASS   |
-| isometric-combat  | 2.37%     | PASS   |
-| lighting          | 2-4%      | PASS   |
+| Scene             | Overall | Worst-cell | Status |
+|-------------------|---------|-----------|--------|
+| scene-selector    | 0.03%   | 0.25%     | PASS   |
+| vector-showcase   | 0.09%   | 0.57%     | PASS   |
+| sprite-demo       | 0.49%   | 2.09%     | PASS   |
+| isometric-combat  | 1.02%   | 2.31%     | PASS   |
+| lighting          | 1.09%   | 4.63%     | PASS   |
+| woodland          | 0.86%   | 2.67%     | PASS   |
 
 The lighting demo had hidden run-to-run nondeterminism from ECS
 `Query2`'s map-iteration order — WebGPU vs WebGPU disagreed with
