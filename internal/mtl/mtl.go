@@ -41,11 +41,19 @@ type (
 	RenderPipelineState uintptr
 	// DepthStencilState is an id<MTLDepthStencilState>.
 	DepthStencilState uintptr
+	// Fence is an id<MTLFence>.
+	Fence uintptr
 
 	// Selector is an Objective-C SEL.
 	Selector uintptr
 	// Class is an Objective-C Class.
 	Class uintptr
+)
+
+// MTLRenderStages bitmask values.
+const (
+	RenderStageVertex   = 1 << 0
+	RenderStageFragment = 1 << 1
 )
 
 // ---------------------------------------------------------------------------
@@ -482,6 +490,35 @@ func RenderCommandEncoderSetVertexBuffer(enc RenderCommandEncoder, buf Buffer, o
 	msgSend(uintptr(enc), selSetVertexBuffer, uintptr(buf), uintptr(offset), uintptr(index))
 }
 
+// DeviceNewFence allocates a new MTLFence on the device.
+func DeviceNewFence(dev Device) Fence {
+	return Fence(msgSend(uintptr(dev), sel("newFence")))
+}
+
+// FenceRelease releases an MTLFence object.
+func FenceRelease(f Fence) {
+	if f != 0 {
+		msgSend(uintptr(f), selRelease)
+	}
+}
+
+// RenderCommandEncoderUpdateFence signals the given fence after the
+// specified render stages of this encoder complete on the GPU.
+func RenderCommandEncoderUpdateFence(enc RenderCommandEncoder, fence Fence, stages uint64) {
+	msgSend(uintptr(enc), sel("updateFence:afterStages:"), uintptr(fence), uintptr(stages))
+}
+
+// RenderCommandEncoderWaitForFence blocks the specified render stages
+// of this encoder from starting until the given fence has been signalled.
+func RenderCommandEncoderWaitForFence(enc RenderCommandEncoder, fence Fence, stages uint64) {
+	msgSend(uintptr(enc), sel("waitForFence:beforeStages:"), uintptr(fence), uintptr(stages))
+}
+
+// RenderCommandEncoderSetFragmentBuffer binds a buffer to a fragment buffer slot.
+func RenderCommandEncoderSetFragmentBuffer(enc RenderCommandEncoder, buf Buffer, offset, index uint64) {
+	msgSend(uintptr(enc), selSetFragmentBuffer, uintptr(buf), uintptr(offset), uintptr(index))
+}
+
 // RenderCommandEncoderDrawPrimitives issues a draw call.
 func RenderCommandEncoderDrawPrimitives(enc RenderCommandEncoder, primType, vertexStart, vertexCount, instanceCount uint64) {
 	msgSend(uintptr(enc), selDrawPrimitives, uintptr(primType), uintptr(vertexStart), uintptr(vertexCount), uintptr(instanceCount))
@@ -752,8 +789,23 @@ func initPipelineSelectors() {
 	selSetCullMode = sel("setCullMode:")
 }
 
-// MTLBlendFactor constants.
+// MTLBlendFactor constants — Apple's MTLBlendFactor enum.
 // https://developer.apple.com/documentation/metal/mtlblendfactor
+//
+// CAREFUL: this is a hand-maintained mirror of Apple's NS_ENUM values.
+// They MUST match the Objective-C runtime's expectations exactly —
+// when these were last off-by-two (DestinationColor=8 instead of 6,
+// dating from the original purego port), every multiply-blend draw
+// silently selected DestinationAlpha as the source factor instead of
+// DestinationColor. Visible as the lighting-demo and isometric-combat
+// scenes rendering as the engine's whiteTexture content underneath
+// the lights — the ApplyLightmap (multiply) blend acted as
+// "src*dstA + dst*0", with dstA=1 on the cleared scene RT, which
+// reduces to plain src-replace; the lit areas got lights but the
+// scene that should have multiplied through stayed white. Fix:
+// renumber to match Apple. Confirmed against the public header:
+//   MTLBlendFactorDestinationColor = 6
+//   MTLBlendFactorDestinationAlpha = 8
 const (
 	BlendFactorZero                     = 0
 	BlendFactorOne                      = 1
@@ -761,10 +813,15 @@ const (
 	BlendFactorOneMinusSourceColor      = 3
 	BlendFactorSourceAlpha              = 4
 	BlendFactorOneMinusSourceAlpha      = 5
-	BlendFactorDestinationColor         = 8
-	BlendFactorOneMinusDestinationColor = 9
-	BlendFactorDestinationAlpha         = 10
-	BlendFactorOneMinusDestinationAlpha = 11
+	BlendFactorDestinationColor         = 6
+	BlendFactorOneMinusDestinationColor = 7
+	BlendFactorDestinationAlpha         = 8
+	BlendFactorOneMinusDestinationAlpha = 9
+	BlendFactorSourceAlphaSaturated     = 10
+	BlendFactorBlendColor               = 11
+	BlendFactorOneMinusBlendColor       = 12
+	BlendFactorBlendAlpha               = 13
+	BlendFactorOneMinusBlendAlpha       = 14
 )
 
 // MTLBlendOperation constants.

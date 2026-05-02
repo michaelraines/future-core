@@ -263,29 +263,36 @@ func (w *Window) Size() (int, int) {
 	return int(frame.Size.Width), int(frame.Size.Height)
 }
 
-// FramebufferSize returns the framebuffer size in physical pixels.
+// FramebufferSize returns the framebuffer size each backend expects.
 //
-// Every Cocoa backend renders at this size and presents into a
-// drawable of the same size, so cross-backend parity comparison is
-// dimension-correct. The two paths:
+// Two distinct contracts for two distinct presentation paths:
 //
 //   - GL path (OpenGL, Metal-via-GL-presenter, DX12-via-GL-presenter):
-//     NSOpenGLContext attached to a non-layer-backed NSView produces
-//     a backbuffer at backingScaleFactor × view-bounds (i.e. physical
-//     pixels on Retina). The engine renders to its own offscreen at
-//     this same size and the GL presenter blits 1:1.
-//   - noGL path (Vulkan, WebGPU): CAMetalLayer's drawableSize defaults
-//     to bounds × contentsScale (physical pixels on Retina). The
-//     engine configures the surface at this size and renders into the
-//     drawable directly.
+//     returns PHYSICAL pixels via convertRectToBacking. The
+//     NSOpenGLContext attached to the FRContentView produces a
+//     backbuffer at backingScaleFactor × view-bounds; rendering at
+//     that resolution gives Retina-sharp output and a 1:1 blit from
+//     the engine's offscreen target into the GL framebuffer.
+//   - noGL path (Vulkan, WebGPU): returns LOGICAL pixels (Size()).
+//     The CAMetalLayer that backs the FRContentView for these
+//     backends is configured (implicitly) so that the swapchain /
+//     surface matches the layer bounds in points; configuring at
+//     physical pixels produced wildly-magnified interactive output
+//     under MoltenVK because the rendered frame was 2× the layer's
+//     logical extent and got composited as if it were the layer's
+//     full-bounds content.
 //
-// Earlier revisions returned logical pixels for the noGL path — that
-// produced a 2× capture-dimension mismatch in cross-backend parity
-// runs and a quadrant-only render on Retina interactive Metal.
-// Physical-everywhere is the only consistent option.
+// Cross-backend parity captures will differ in dimensions on Retina
+// hosts because of this asymmetry — the parity runner compares
+// scaled copies, not the raw captures. Do NOT unify this function
+// without also reworking the parity runner AND verifying interactive
+// presentation on every backend.
 func (w *Window) FramebufferSize() (int, int) {
 	if w.contentView == 0 {
 		return 0, 0
+	}
+	if w.noGL {
+		return w.Size()
 	}
 	frame := objc.Send[CGRect](w.contentView, selFrame)
 	backing := objc.Send[CGRect](w.contentView, selConvertRectToBacking, frame)

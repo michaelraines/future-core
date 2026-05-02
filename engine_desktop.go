@@ -498,6 +498,17 @@ func (e *engine) run() error {
 
 		// Draw.
 		fbW, fbH = win.FramebufferSize()
+		// Parity captures: FUTURE_FORCE_DPR=1 forces logical-size
+		// framebuffer for GL-presenter backends (Metal, OpenGL, DX12)
+		// so headless captures match the noGL backends (Vulkan,
+		// WebGPU) that already return logical from FramebufferSize().
+		// Without this, Metal renders at 2x on Retina hosts while
+		// WebGPU renders at 1x — the dimension mismatch alone causes
+		// parity-diff to report 100%. Opt-in only; interactive runs
+		// keep their native backing-scale rendering.
+		if !e.noGL && os.Getenv("FUTURE_FORCE_DPR") == "1" {
+			fbW, fbH = win.Size()
+		}
 		screenW, screenH := e.game.Layout(win.Size())
 
 		// Resize the backend's internal screen render target if needed.

@@ -398,6 +398,35 @@ at 640×480/5 frames takes <60s wall-clock with cache primed.
 - Full sprite pipeline integration with engine loop not yet validated
 - MSL translator covers common GLSL patterns but may miss edge cases
 
+### Parity-relevant fixes
+- **Per-blend pipeline variants**: Metal bakes blend state into
+  `MTLRenderPipelineState`, so a single `Pipeline` instance maintains a
+  `map[BlendMode]MTLRenderPipelineState`. Every `SetBlendMode` +
+  `SetPipeline` pair lazily compiles and caches the matching state. Without
+  this, every additive / multiply / custom-blend draw silently rendered
+  with the descriptor's default (typically SourceOver), causing iso-combat
+  lightmaps to replace the scene and lighting demos to show no light
+  contribution. WebGPU and Vulkan have the equivalent cache.
+- **MTL blend-factor enum values**: `MTLBlendFactorDestinationColor` is 6
+  (not 8); the trailing four factors (`{One,}MinusDestination{Color,Alpha}`
+  and `SourceAlphaSaturated`) follow the same order. Mismatched constants
+  silently produce wrong blend output.
+- **Hand-written MSL `vec3` packing**: framework uniforms write three
+  contiguous floats for `vec3` (size 12, no trailing pad), but MSL's
+  `float3` is alignment-16/size-16. The lighting MSL shaders use three
+  individual `float` fields (`LightColorR`, `LightColorG`, `LightColorB`)
+  with explicit `_pad152` to push past the std140 boundary. Reconstruct the
+  vec3 at the use site via `float3(LightColorR, LightColorG, LightColorB)`.
+- **`writeUniformValue` must handle `[3]float32`**: the per-draw uniform
+  packer in `shader_gpu.go` originally only matched `float32`,
+  `[2]float32`, `[4]float32`, and `[16]float32`. Slice-form uniforms like
+  `[]float32{r,g,b}` (lighting `LightColor`, `LightDir`) reach
+  `SetUniformVec3` as `[3]float32`. Without an explicit case the value was
+  dropped and the GPU read zeros — every light shader produced black
+  output, the lightmap stayed at ambient, and the multiply-dither final
+  composite then darkened the whole scene. Adding `case [3]float32:`
+  writes 12 bytes (matching the layout table's declared `Size: 12`).
+
 ### What Works End-to-End
 - Clear and ReadPixels cycle (GPU test passing)
 - Shader compilation (GLSL→MSL→MTLLibrary)
