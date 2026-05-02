@@ -435,20 +435,15 @@ at 640×480/5 frames takes <60s wall-clock with cache primed.
 | vector-showcase   | 0.57%     | PASS   |
 | sprite-demo       | 2.18%     | PASS   |
 | isometric-combat  | 2.37%     | PASS   |
-| lighting          | 7.89%*    | FAIL†  |
+| lighting          | 2-4%      | PASS   |
 
-\* lighting also varies run-to-run because the demo itself is
-non-deterministic at the ECS-query-order level. WebGPU vs **WebGPU**
-on the same scene already shows a ~7% worst-cell diff via
-`scripts/parity-diff.sh --ref webgpu --test webgpu` (see the
-`parity-diff.sh` distinct-paths fix). So the Metal-side residual is
-within the demo's intrinsic noise floor.
-
-† fixing the demo's nondeterminism (most likely candidates: ECS
-`Query2` map-iteration order in `lighting_frame.go`'s
-`collectLights`, and `state.ShadowCasters` ordering feeding
-`collectRelevantEdges` → `ComputeVisibilityPolygon`) is the next
-parity step. It will benefit *every* backend, not just Metal.
+The lighting demo had hidden run-to-run nondeterminism from ECS
+`Query2`'s map-iteration order — WebGPU vs WebGPU disagreed with
+itself by ~7% on the same scene. Fixed in the future repo by
+sorting `state.Lights` and `state.ShadowCasters` by entity ID after
+collection (see future commit "lighting: sort collected lights +
+casters by Entity for stable order"). This benefits every backend,
+not just Metal.
 
 ### What Works End-to-End
 - Clear and ReadPixels cycle (GPU test passing)
