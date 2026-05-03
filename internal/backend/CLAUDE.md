@@ -296,3 +296,27 @@ on each call site.
 - Target: 90%+ (all current backends achieve this)
 - The conformance test alone covers most Device/Encoder paths
 - Add unit tests for type mapping functions, error paths, and API-specific logic
+
+## Metal-specific gotchas (from the lighting parity hunt)
+
+- **Per-blend pipeline cache**: blend state is baked into
+  `MTLRenderPipelineState`, so a single `Pipeline` must keep
+  `map[BlendMode]MTLRenderPipelineState`. Without it,
+  `BlendLighter` / multiply / custom blends silently render as
+  SourceOver (whatever the descriptor's default was).
+- **`writeUniformValue` must handle every concrete type the engine
+  hands it**: missing `case [3]float32:` left vec3 uniforms
+  (LightColor, LightDir) at zero. Mirror `case [3]float32:` from
+  WebGPU/Vulkan in any new GPU backend.
+- **MSL std140 vec3**: framework writes 12 bytes; Apple's `float3`
+  is alignment-16/size-16. Hand-written MSL must use three
+  individual `float`s + explicit pad and reconstruct via
+  `float3(R,G,B)` at the use site (see
+  `future/libs/comp/lighting/point_light.frag.msl`).
+- **`MTLBlendFactorDestinationColor` is 6, not 8** — cross-check
+  against Apple's MTLBlendFactor enum. Off-by-one silently swaps
+  multiply/add.
+- **GL presenter path**: Metal and DX12 still use the GL presenter
+  (only Vulkan/WebGPU set `NoGL`). `ReadScreen` and the
+  GL-presenter blit are separate code paths and can disagree —
+  verify both before declaring parity.
