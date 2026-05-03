@@ -344,3 +344,44 @@ on each call site.
   sub-rect. Both silently constrain the clear. Reset before, restore
   after, or accept that the next `SetPipeline` / `SetScissor` will
   re-establish state.
+
+## WebGL2-specific gotchas (from the parity hunt)
+
+- **No `glProgramUniform*` equivalent**: WebGL2 only has
+  `gl.uniform*`, which targets the currently-bound program. The
+  shader caches uniform values in `SetUniform*` and apply()'s them
+  pre-draw via `Encoder.applyShaderUniforms` (called from
+  `Draw` / `DrawIndexed`). Pipeline.bind() must run `useProgram`
+  before the next draw fires or every uniform silently no-ops.
+- **Eager shader compile in `NewShader`**: WebGL2 needs program
+  compile + link to look up uniform locations. The `_js.go` path
+  compiles in `NewShader` (not lazily in `Pipeline.bind()`) so
+  `getUniformLocation` returns a real handle when the engine starts
+  pushing per-frame uniforms before any pipeline is bound.
+- **Same `SetBlendMode` sticky-override + per-pass state-reset
+  rules as OpenGL**: see the OpenGL section above. The bugs are
+  identical in shape.
+- **Detached canvases are invisible**: a canvas created via
+  `document.createElement("canvas")` and never attached to the DOM
+  doesn't display anything, even if WebGL is rendering into it
+  perfectly. Use the page's existing `#game-canvas` (the same
+  canvas the WebGPU and ebiten paths use) so the engine's CSS
+  sizing applies and the result actually shows.
+- **`PresentsToCanvas() = true` skips the readback path**: the
+  engine's default fallback in `engine_js.go` is
+  `ReadScreen + putImageData` for backends that render to an
+  offscreen buffer (the soft rasterizer). WebGL2 renders to a real
+  canvas, so advertising this avoids both an allocation and a
+  per-frame `Uint8ClampedArray` round-trip.
+- **GLSL ES 3.00 is the dialect WebGL2 accepts**: not GLSL 330
+  core, even though the syntax overlaps almost entirely. The
+  translator in `webgl/types.go` rewrites the `#version` line and
+  injects fragment-shader `precision highp float / int /
+  sampler2D` qualifiers when missing. Without the precision lines,
+  the fragment shader fails to compile silently (the engine sees
+  a NewShader error and never calls Draw).
+- **Y-flip on offscreen FBOs only**: same as OpenGL desktop. The
+  default framebuffer is flipped at display time by the browser,
+  so `uProjection` must NOT flip for the screen target. Offscreen
+  FBOs sampled as textures need row-1 negation in
+  `Shader.apply(yFlip=true)`.
