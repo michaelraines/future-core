@@ -35,6 +35,19 @@ type commandEncoder struct {
 	stencilEnabled  bool
 	stencilFunc     uint32
 	stencilReadMask uint32
+
+	// pendingBlend is the override recorded by the most recent
+	// SetBlendMode call. Once set it sticks across SetPipeline calls,
+	// matching the WebGPU/Vulkan/Metal contract: the engine calls
+	// SetBlendMode BEFORE SetPipeline so the next pipeline-bind picks
+	// up the override blend rather than the pipeline-descriptor
+	// default. Without this, every additive / multiply / custom-blend
+	// draw silently rendered with the pipeline's default (typically
+	// SourceOver) — additive lights stacked as SourceOver replaced
+	// instead of accumulating, the lightmap stayed at ambient, and the
+	// multiply-dither composite produced a dark scene.
+	pendingBlend    backend.BlendMode
+	pendingBlendSet bool
 }
 
 // BeginRenderPass begins a render pass.
@@ -74,8 +87,14 @@ func (e *commandEncoder) SetPipeline(pipeline backend.Pipeline) {
 	s := ps.desc.Shader.(*shader)
 	gl.UseProgram(s.program)
 
-	// Blend mode.
-	applyBlendMode(ps.desc.BlendMode)
+	// Blend mode. SetBlendMode-recorded override wins over the
+	// pipeline descriptor default — see pendingBlend doc on
+	// commandEncoder.
+	blend := ps.desc.BlendMode
+	if e.pendingBlendSet {
+		blend = e.pendingBlend
+	}
+	applyBlendMode(blend)
 
 	// Depth.
 	if ps.desc.DepthTest {
@@ -282,10 +301,18 @@ func glOffset(offset int) unsafe.Pointer {
 	return unsafe.Pointer(uintptr(offset))
 }
 
-// Flush submits all recorded commands. For OpenGL this is a no-op since
-// commands execute immediately.
-// SetBlendMode is a no-op for this backend.
-func (e *commandEncoder) SetBlendMode(_ backend.BlendMode) {}
+// SetBlendMode records and immediately applies the override blend
+// state. The recorded value sticks across subsequent SetPipeline calls
+// so that pipelines bound after a SetBlendMode pick up the override
+// instead of their descriptor default. Mirrors the
+// WebGPU/Vulkan/Metal pendingBlend pattern; OpenGL is dynamic state so
+// the apply happens here directly rather than via a per-blend pipeline
+// cache.
+func (e *commandEncoder) SetBlendMode(b backend.BlendMode) {
+	e.pendingBlend = b
+	e.pendingBlendSet = true
+	applyBlendMode(b)
+}
 
 func (e *commandEncoder) Flush() {
 	gl.Flush()
