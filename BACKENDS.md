@@ -195,6 +195,45 @@ sprites, text, custom shaders, render targets, blend modes, stencil.
 - Consider OpenGL 4.x path for compute shader support
 - Otherwise feature-complete for Phase 1
 
+### Parity-relevant fixes
+- **`SetBlendMode` must override the pipeline-descriptor default**: the
+  engine's sprite pass calls `SetBlendMode` BEFORE `SetPipeline` so each
+  batch can pick its own blend (BlendLighter for additive lights,
+  multiply for the lightmap composite, the three-pass alpha-stamp dance
+  for shadow casters). The original encoder's `SetBlendMode` was a
+  no-op and `SetPipeline` unconditionally re-applied the pipeline's
+  baked-in blend (SourceOver), so additive lights stacked as
+  SourceOver replaced instead of accumulating, the lightmap stayed at
+  ambient, and the multiply-dither composite produced a dark scene.
+  Mirrored the WebGPU/Vulkan/Metal `pendingBlend` pattern: SetBlendMode
+  records and applies the override; SetPipeline picks up the recorded
+  override (sticky) instead of the pipeline default. OpenGL is
+  dynamic-state, so the apply happens directly via
+  `glBlendFuncSeparate` — no per-blend pipeline cache like Metal needs.
+- **Per-pass dynamic state reset**: WebGPU/Vulkan/Metal scope scissor
+  and color mask to the render pass, but OpenGL leaks both across
+  `glBindFramebuffer`. A stencil-write pipeline from a prior pass
+  leaves `ColorMask=(F,F,F,F)`, which silently turns the next pass's
+  `gl.Clear(GL_COLOR_BUFFER_BIT)` into a no-op — the freshly bound FBO
+  retains uninitialized GPU memory (usually white on macOS), which
+  rendered vector-showcase as almost-entirely-white. Similarly, an
+  active scissor box leaks across pass boundaries and constrains
+  draws on the next FBO. The encoder's `BeginRenderPass` now
+  unconditionally re-enables full color writes and disables scissor;
+  the next `SetPipeline` / `SetScissor` / `SetColorWrite` call
+  re-establishes whatever state the engine actually wants.
+
+### Parity scoreboard (OpenGL vs WebGPU, 5×2 grid worst-cell metric)
+
+| Scene             | Overall | Worst-cell | Status |
+|-------------------|---------|-----------|--------|
+| scene-selector    | 0.01%   | 0.08%     | PASS   |
+| vector-showcase   | 0.01%   | 0.08%     | PASS   |
+| sprite-demo       | 0.38%   | 1.81%     | PASS   |
+| isometric-combat  | 0.35%   | 0.83%     | PASS   |
+| lighting          | 0.05%   | 0.37%     | PASS   |
+| woodland          | 0.24%   | 0.63%     | PASS   |
+
 ---
 
 ## Vulkan
