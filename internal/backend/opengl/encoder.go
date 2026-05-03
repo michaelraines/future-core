@@ -60,6 +60,22 @@ func (e *commandEncoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 	}
 
+	// Reset per-pass dynamic state that WebGPU/Vulkan/Metal scope to
+	// the render pass automatically. OpenGL leaks scissor and color
+	// mask across glBindFramebuffer, so a stencil-write pipeline from
+	// a prior pass leaves ColorMask=(F,F,F,F) — making `gl.Clear` a
+	// silent no-op so the freshly bound FBO retains uninitialized GPU
+	// memory (usually white on macOS) — and a clipped batch from a
+	// prior pass leaves a stale scissor rect that constrains draws on
+	// the new target. The engine's SpritePass forgets `lastClip` /
+	// `lastTextureID` on each pass-boundary on the assumption that the
+	// backend resets per-pass; the other GPU backends honour that.
+	// Match them here. Subsequent SetPipeline / SetScissor /
+	// SetColorWrite calls re-establish whatever state the next batch
+	// actually needs.
+	gl.ColorMask(true, true, true, true)
+	gl.Disable(gl.SCISSOR_TEST)
+
 	if desc.LoadAction == backend.LoadActionClear {
 		var mask uint32
 		c := desc.ClearColor
