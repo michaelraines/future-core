@@ -9,12 +9,22 @@ import (
 )
 
 // Pipeline implements backend.Pipeline for WebGL2.
-// In WebGL2, pipeline state is applied imperatively via GL calls.
+//
+// WebGL2 has no compiled "pipeline state object". The pipeline holds
+// the shader program reference + a VAO that captures the enabled
+// vertex attribute arrays, plus the vertex format used to lay out
+// the per-attribute pointers. The actual `vertexAttribPointer` calls
+// happen in Encoder.SetVertexBuffer — when the buffer is finally
+// bound. Calling them earlier (e.g. at pipeline creation) raises
+// `INVALID_OPERATION: vertexAttribPointer: no ARRAY_BUFFER is bound
+// and offset is non-zero`, because the VAO captures the buffer
+// currently bound to ARRAY_BUFFER at the moment of the pointer call,
+// and at pipeline creation no buffer is bound yet.
 type Pipeline struct {
 	gl   js.Value
 	desc backend.PipelineDescriptor
 
-	// Cached shader program and VAO.
+	// Cached shader program (owned by the Shader) and VAO. Both lazy.
 	program js.Value
 	vao     js.Value
 	ready   bool
@@ -23,42 +33,37 @@ type Pipeline struct {
 // InnerPipeline returns nil for GPU pipelines (no soft delegation).
 func (p *Pipeline) InnerPipeline() backend.Pipeline { return nil }
 
-// bind compiles the shader program and sets up vertex attributes.
+// bind compiles the shader program (if needed), creates the VAO on
+// first use, and binds both. Vertex attribute pointers are NOT set
+// here — see Encoder.SetVertexBuffer.
 func (p *Pipeline) bind() {
-	if p.ready {
-		if !p.program.IsNull() && !p.program.IsUndefined() {
-			p.gl.Call("useProgram", p.program)
-			if !p.vao.IsNull() && !p.vao.IsUndefined() {
-				p.gl.Call("bindVertexArray", p.vao)
-			}
+	if !p.ready {
+		shader, ok := p.desc.Shader.(*Shader)
+		if !ok || shader == nil {
+			return
 		}
-		return
+		if !shader.compile() {
+			return
+		}
+		p.program = shader.program
+		p.vao = p.gl.Call("createVertexArray")
+		p.gl.Call("bindVertexArray", p.vao)
+		// Enable each attribute array up-front. Enabling is sticky in
+		// the VAO state; the per-buffer vertexAttribPointer call still
+		// runs every SetVertexBuffer because the engine rotates
+		// through ring-buffer offsets and the pointer call is what
+		// records the current ARRAY_BUFFER + offset into the VAO.
+		for i := range p.desc.VertexFormat.Attributes {
+			p.gl.Call("enableVertexAttribArray", i)
+		}
+		p.ready = true
 	}
-	p.ready = true
 
-	shader, ok := p.desc.Shader.(*Shader)
-	if !ok || shader == nil {
-		return
+	if !p.program.IsNull() && !p.program.IsUndefined() {
+		p.gl.Call("useProgram", p.program)
 	}
-
-	if !shader.compile() {
-		return
-	}
-
-	p.program = shader.program
-	p.gl.Call("useProgram", p.program)
-
-	// Create VAO and set up vertex attributes.
-	p.vao = p.gl.Call("createVertexArray")
-	p.gl.Call("bindVertexArray", p.vao)
-
-	stride := p.desc.VertexFormat.Stride
-	for i, attr := range p.desc.VertexFormat.Attributes {
-		loc := i
-		p.gl.Call("enableVertexAttribArray", loc)
-		comps, glType, normalized := glVertexAttrib(p.gl, attr.Format)
-		p.gl.Call("vertexAttribPointer", loc, comps, glType, normalized,
-			stride, attr.Offset)
+	if !p.vao.IsNull() && !p.vao.IsUndefined() {
+		p.gl.Call("bindVertexArray", p.vao)
 	}
 }
 
