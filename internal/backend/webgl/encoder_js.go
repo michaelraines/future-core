@@ -17,6 +17,18 @@ type Encoder struct {
 	currentPipeline *Pipeline
 	indexFormat     backend.IndexFormat
 
+	// Tracks the most recently bound vertex/index buffers + the VAO
+	// they were last applied to. The sprite pass calls SetVertexBuffer
+	// once per Flush() and then switches between the stencil-write
+	// and color-pass pipelines mid-flush — each pipeline owns its own
+	// VAO, and the per-VAO attribute pointer + IBO state is fresh on
+	// first bind. SetPipeline replays the bound buffers into the new
+	// VAO when this happens, otherwise drawElements raises
+	// "no buffer is bound to enabled attribute" because the attribs
+	// were enabled by Pipeline.bind() but never pointed at anything.
+	currentVertexBuffer js.Value
+	currentIndexBuffer  js.Value
+
 	// targetIsOffscreen is set by BeginRenderPass and read by the
 	// pre-draw shader.apply() to decide whether to flip uProjection.
 	// WebGL's NDC is Y-up; the engine's ortho is Y-down. The window FB
@@ -131,6 +143,22 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 		e.applyBlendMode(p.desc.BlendMode)
 	}
 	p.bind()
+
+	// Replay the most-recent vertex/index buffer bindings into the
+	// pipeline's VAO. Each Pipeline owns its own VAO; the sprite pass
+	// switches pipelines mid-flush (stencil-write → color-pass) but
+	// only calls SetVertexBuffer / SetIndexBuffer once at the start
+	// of the flush. Without this, the new VAO has its attribute
+	// arrays enabled (from Pipeline.bind) but no buffer bindings —
+	// drawElements then fails with "no buffer is bound to enabled
+	// attribute".
+	if !e.currentVertexBuffer.IsNull() && !e.currentVertexBuffer.IsUndefined() {
+		e.gl.Call("bindBuffer", e.gl.Get("ARRAY_BUFFER").Int(), e.currentVertexBuffer)
+		e.applyVertexPointers()
+	}
+	if !e.currentIndexBuffer.IsNull() && !e.currentIndexBuffer.IsUndefined() {
+		e.gl.Call("bindBuffer", e.gl.Get("ELEMENT_ARRAY_BUFFER").Int(), e.currentIndexBuffer)
+	}
 
 	// Color write mask baked into the pipeline. Stencil-only passes set
 	// ColorWriteDisabled=true so the draw updates the stencil buffer
@@ -295,16 +323,16 @@ func glBlendOp(gl js.Value, op backend.BlendOperation) int {
 // the current pipeline's vertex attribute pointers against it.
 //
 // WebGL2's `vertexAttribPointer` records "the buffer currently bound
-// to ARRAY_BUFFER at this moment" into the VAO; calling it at
-// pipeline-creation time (when no buffer is bound) raises
-// INVALID_OPERATION. The engine also rotates through ring-buffer
-// offsets per batch — every SetVertexBuffer call brings a different
-// (buffer, offset) tuple — so the pointer setup must run here, not
-// once at pipeline creation.
+// to ARRAY_BUFFER at this moment" into the active VAO; calling it
+// before binding a buffer raises INVALID_OPERATION. The engine also
+// rotates through ring-buffer offsets per batch — every
+// SetVertexBuffer call brings a different (buffer, offset) tuple —
+// so the pointer setup runs here, not once at pipeline creation.
 //
-// The pipeline's VAO is assumed already bound by the preceding
-// SetPipeline; that's what enables the attribute arrays this code
-// then points at the freshly-bound buffer.
+// The encoder caches the buffer in `currentVertexBuffer` so that a
+// later SetPipeline (e.g. switching from a stencil-write pipeline to
+// the color-pass pipeline mid-flush) can replay the pointer setup
+// into the new pipeline's fresh VAO.
 func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 	b, ok := buf.(*Buffer)
 	if !ok {
@@ -312,8 +340,20 @@ func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 	}
 	target := glBufferTarget(e.gl, b.usage)
 	e.gl.Call("bindBuffer", target, b.handle)
+	e.currentVertexBuffer = b.handle
+	e.applyVertexPointers()
+}
 
+// applyVertexPointers issues vertexAttribPointer for every attribute
+// in the current pipeline's vertex format against the bound vertex
+// buffer. The caller is responsible for bindBuffer(ARRAY_BUFFER, ...)
+// having been done — either immediately (SetVertexBuffer) or via
+// the bind below (SetPipeline replay path).
+func (e *Encoder) applyVertexPointers() {
 	if e.currentPipeline == nil {
+		return
+	}
+	if e.currentVertexBuffer.IsNull() || e.currentVertexBuffer.IsUndefined() {
 		return
 	}
 	stride := e.currentPipeline.desc.VertexFormat.Stride
@@ -324,12 +364,18 @@ func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
 	}
 }
 
-// SetIndexBuffer binds an index buffer.
+// SetIndexBuffer binds an index buffer. The handle is cached so that
+// a later SetPipeline replay can re-bind it into the new pipeline's
+// VAO (IBO binding, like attribute pointers, is captured by the VAO
+// rather than being global encoder state).
 func (e *Encoder) SetIndexBuffer(buf backend.Buffer, format backend.IndexFormat) {
-	if b, ok := buf.(*Buffer); ok {
-		e.gl.Call("bindBuffer", e.gl.Get("ELEMENT_ARRAY_BUFFER").Int(), b.handle)
-		e.indexFormat = format
+	b, ok := buf.(*Buffer)
+	if !ok {
+		return
 	}
+	e.gl.Call("bindBuffer", e.gl.Get("ELEMENT_ARRAY_BUFFER").Int(), b.handle)
+	e.indexFormat = format
+	e.currentIndexBuffer = b.handle
 }
 
 // SetTexture binds a texture to a texture unit.
