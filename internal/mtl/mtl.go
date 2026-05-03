@@ -804,8 +804,9 @@ func initPipelineSelectors() {
 // reduces to plain src-replace; the lit areas got lights but the
 // scene that should have multiplied through stayed white. Fix:
 // renumber to match Apple. Confirmed against the public header:
-//   MTLBlendFactorDestinationColor = 6
-//   MTLBlendFactorDestinationAlpha = 8
+//
+//	MTLBlendFactorDestinationColor = 6
+//	MTLBlendFactorDestinationAlpha = 8
 const (
 	BlendFactorZero                     = 0
 	BlendFactorOne                      = 1

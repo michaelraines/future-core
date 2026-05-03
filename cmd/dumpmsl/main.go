@@ -1,8 +1,9 @@
 package main
 
 import (
-    "fmt"
-    "github.com/michaelraines/future-core/internal/shadertranslate"
+	"fmt"
+
+	"github.com/michaelraines/future-core/internal/shadertranslate"
 )
 
 const vertexSource = `#version 330 core
@@ -20,11 +21,14 @@ void main() {
 `
 
 func main() {
-    result, err := shadertranslate.GLSLToMSLVertex(vertexSource)
-    if err != nil { fmt.Println(err); return }
-    fmt.Println(result.Source)
-    fmt.Println("--- Uniforms ---")
-    for _, u := range result.Uniforms {
-        fmt.Printf("  %+v\n", u)
-    }
+	result, err := shadertranslate.GLSLToMSLVertex(vertexSource)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(result.Source)
+	fmt.Println("--- Uniforms ---")
+	for _, u := range result.Uniforms {
+		fmt.Printf("  %+v\n", u)
+	}
 }
