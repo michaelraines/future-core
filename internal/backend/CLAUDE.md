@@ -320,3 +320,27 @@ on each call site.
   (only Vulkan/WebGPU set `NoGL`). `ReadScreen` and the
   GL-presenter blit are separate code paths and can disagree —
   verify both before declaring parity.
+
+## OpenGL-specific gotchas (from the parity hunt)
+
+- **`SetBlendMode` is a sticky-override contract, not a Metal quirk**:
+  every backend (WebGPU, Vulkan, Metal, OpenGL) records the override
+  in `pendingBlend` and applies it on the next `SetPipeline`. The
+  engine calls `SetBlendMode` BEFORE `SetPipeline` per batch;
+  pipelines must pick up the override instead of their descriptor
+  default. OpenGL is dynamic-state so it applies via
+  `glBlendFuncSeparate` directly — no per-blend pipeline cache like
+  Metal needs — but the sticky semantics still matter.
+- **OpenGL leaks state across `glBindFramebuffer`**: scissor and
+  ColorMask persist across pass boundaries. A stencil-write pipeline
+  leaves `ColorMask=(F,F,F,F)`; the next pass's
+  `gl.Clear(GL_COLOR_BUFFER_BIT)` becomes a silent no-op (FBO retains
+  uninitialized memory, usually white on macOS). The sprite pass
+  scopes dynamic state to the pass on the assumption the backend
+  resets per-pass (see `sprite_pass.go:352` comment); OpenGL must
+  force-reset both in `BeginRenderPass`.
+- **`glClear` is masked by both ColorMask and Scissor**: never call
+  `gl.Clear` while ColorMask is partial or scissor is enabled to a
+  sub-rect. Both silently constrain the clear. Reset before, restore
+  after, or accept that the next `SetPipeline` / `SetScissor` will
+  re-establish state.

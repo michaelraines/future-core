@@ -333,6 +333,27 @@ func (s *shader) SetUniformVec4(name string, v [4]float32) {
 }
 
 func (s *shader) SetUniformMat4(name string, v [16]float32) {
+	// Y-flip projection when rendering to an FBO. OpenGL's NDC is Y-up
+	// while the engine (and every other backend) treats world y=0 as the
+	// top of the screen. For default-framebuffer rendering the window
+	// system flips the FB on display so the engine's Y-down ortho
+	// projection lands the right way up. For texture-backed FBOs there
+	// is no such flip — sampling the FBO as a texture in a follow-up
+	// pass reads UV(0,0)=bottom of FBO storage, which is the engine's
+	// world-bottom, so the entire FBO content appears upside-down when
+	// composited onto the screen quad. Mirror Vulkan's row-1 negation,
+	// but only when a non-zero framebuffer is bound — the screen path
+	// stays untouched.
+	if name == "uProjection" {
+		var fb int32
+		gl.GetIntegerv(gl.FRAMEBUFFER_BINDING, &fb)
+		if fb != 0 {
+			v[1] = -v[1]
+			v[5] = -v[5]
+			v[9] = -v[9]
+			v[13] = -v[13]
+		}
+	}
 	loc := gl.GetUniformLocation(s.program, gl.Str(name+"\x00"))
 	gl.ProgramUniformMatrix4fv(s.program, loc, 1, false, &v[0])
 }
