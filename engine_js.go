@@ -136,6 +136,21 @@ func (e *engine) registerTexture(id uint32, tex backend.Texture) {
 }
 
 func (e *engine) run() error {
+	// Allow ?backend=<name> in the URL to override FUTURE_CORE_BACKEND
+	// for the parity harness. Browser test runners can set this without
+	// rebuilding the WASM, so the same artefact serves WebGPU and WebGL
+	// captures from one server. Falls through to the env var (and
+	// ultimately "auto") when the param is missing or empty.
+	if loc := js.Global().Get("location"); !loc.IsUndefined() && !loc.IsNull() {
+		if search := loc.Get("search"); !search.IsUndefined() && !search.IsNull() {
+			params := js.Global().Get("URLSearchParams").New(search)
+			b := params.Call("get", "backend")
+			if !b.IsNull() && !b.IsUndefined() && b.String() != "" {
+				_ = os.Setenv("FUTURE_CORE_BACKEND", b.String())
+			}
+		}
+	}
+
 	// Create platform window.
 	win := newPlatformWindow()
 
