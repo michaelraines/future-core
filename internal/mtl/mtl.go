@@ -41,11 +41,19 @@ type (
 	RenderPipelineState uintptr
 	// DepthStencilState is an id<MTLDepthStencilState>.
 	DepthStencilState uintptr
+	// Fence is an id<MTLFence>.
+	Fence uintptr
 
 	// Selector is an Objective-C SEL.
 	Selector uintptr
 	// Class is an Objective-C Class.
 	Class uintptr
+)
+
+// MTLRenderStages bitmask values.
+const (
+	RenderStageVertex   = 1 << 0
+	RenderStageFragment = 1 << 1
 )
 
 // ---------------------------------------------------------------------------
@@ -203,6 +211,14 @@ var (
 	fnObjcGetClass    func(name *byte) Class
 	fnSelRegisterName func(name *byte) Selector
 
+	// Lightweight autorelease pool API. Each pair forms a scope: tokens
+	// returned by Push must be passed to Pop in LIFO order. Drains every
+	// object autoreleased between the two calls. Required for any code
+	// that runs outside Cocoa's main run loop (e.g. our headless render
+	// loop) — without it autoreleased Metal objects leak forever.
+	fnObjcAutoreleasePoolPush func() uintptr
+	fnObjcAutoreleasePoolPop  func(token uintptr)
+
 	// Cached selectors for Metal methods.
 	selNewCommandQueue          Selector
 	selCommandBuffer            Selector
@@ -273,6 +289,12 @@ func Init() error {
 	if err := resolveSymbol(objcLib, "sel_registerName", &fnSelRegisterName); err != nil {
 		return err
 	}
+	if err := resolveSymbol(objcLib, "objc_autoreleasePoolPush", &fnObjcAutoreleasePoolPush); err != nil {
+		return err
+	}
+	if err := resolveSymbol(objcLib, "objc_autoreleasePoolPop", &fnObjcAutoreleasePoolPop); err != nil {
+		return err
+	}
 
 	// Load Metal framework.
 	lib, err = purego.Dlopen("/System/Library/Frameworks/Metal.framework/Metal", purego.RTLD_LAZY|purego.RTLD_GLOBAL)
@@ -332,6 +354,18 @@ func Init() error {
 func CreateSystemDefaultDevice() Device {
 	return fnMTLCreateSystemDefaultDevice()
 }
+
+// AutoreleasePoolPush opens a new autorelease pool and returns the token
+// that must be passed to AutoreleasePoolPop. Use to bound the lifetime
+// of autoreleased Cocoa/Metal objects (NSCommandBuffer,
+// MTLRenderPassDescriptor, NSRenderCommandEncoder, ...) when running
+// outside Cocoa's main run loop. Pools nest; tokens must be popped in
+// LIFO order.
+func AutoreleasePoolPush() uintptr { return fnObjcAutoreleasePoolPush() }
+
+// AutoreleasePoolPop drains all objects autoreleased since the matching
+// AutoreleasePoolPush.
+func AutoreleasePoolPop(token uintptr) { fnObjcAutoreleasePoolPop(token) }
 
 // DeviceNewCommandQueue creates a new command queue.
 func DeviceNewCommandQueue(dev Device) CommandQueue {
@@ -454,6 +488,35 @@ func RenderCommandEncoderSetScissorRect(enc RenderCommandEncoder, rect ScissorRe
 // RenderCommandEncoderSetVertexBuffer binds a vertex buffer.
 func RenderCommandEncoderSetVertexBuffer(enc RenderCommandEncoder, buf Buffer, offset, index uint64) {
 	msgSend(uintptr(enc), selSetVertexBuffer, uintptr(buf), uintptr(offset), uintptr(index))
+}
+
+// DeviceNewFence allocates a new MTLFence on the device.
+func DeviceNewFence(dev Device) Fence {
+	return Fence(msgSend(uintptr(dev), sel("newFence")))
+}
+
+// FenceRelease releases an MTLFence object.
+func FenceRelease(f Fence) {
+	if f != 0 {
+		msgSend(uintptr(f), selRelease)
+	}
+}
+
+// RenderCommandEncoderUpdateFence signals the given fence after the
+// specified render stages of this encoder complete on the GPU.
+func RenderCommandEncoderUpdateFence(enc RenderCommandEncoder, fence Fence, stages uint64) {
+	msgSend(uintptr(enc), sel("updateFence:afterStages:"), uintptr(fence), uintptr(stages))
+}
+
+// RenderCommandEncoderWaitForFence blocks the specified render stages
+// of this encoder from starting until the given fence has been signalled.
+func RenderCommandEncoderWaitForFence(enc RenderCommandEncoder, fence Fence, stages uint64) {
+	msgSend(uintptr(enc), sel("waitForFence:beforeStages:"), uintptr(fence), uintptr(stages))
+}
+
+// RenderCommandEncoderSetFragmentBuffer binds a buffer to a fragment buffer slot.
+func RenderCommandEncoderSetFragmentBuffer(enc RenderCommandEncoder, buf Buffer, offset, index uint64) {
+	msgSend(uintptr(enc), selSetFragmentBuffer, uintptr(buf), uintptr(offset), uintptr(index))
 }
 
 // RenderCommandEncoderDrawPrimitives issues a draw call.
@@ -726,8 +789,24 @@ func initPipelineSelectors() {
 	selSetCullMode = sel("setCullMode:")
 }
 
-// MTLBlendFactor constants.
+// MTLBlendFactor constants — Apple's MTLBlendFactor enum.
 // https://developer.apple.com/documentation/metal/mtlblendfactor
+//
+// CAREFUL: this is a hand-maintained mirror of Apple's NS_ENUM values.
+// They MUST match the Objective-C runtime's expectations exactly —
+// when these were last off-by-two (DestinationColor=8 instead of 6,
+// dating from the original purego port), every multiply-blend draw
+// silently selected DestinationAlpha as the source factor instead of
+// DestinationColor. Visible as the lighting-demo and isometric-combat
+// scenes rendering as the engine's whiteTexture content underneath
+// the lights — the ApplyLightmap (multiply) blend acted as
+// "src*dstA + dst*0", with dstA=1 on the cleared scene RT, which
+// reduces to plain src-replace; the lit areas got lights but the
+// scene that should have multiplied through stayed white. Fix:
+// renumber to match Apple. Confirmed against the public header:
+//
+//	MTLBlendFactorDestinationColor = 6
+//	MTLBlendFactorDestinationAlpha = 8
 const (
 	BlendFactorZero                     = 0
 	BlendFactorOne                      = 1
@@ -735,10 +814,15 @@ const (
 	BlendFactorOneMinusSourceColor      = 3
 	BlendFactorSourceAlpha              = 4
 	BlendFactorOneMinusSourceAlpha      = 5
-	BlendFactorDestinationColor         = 8
-	BlendFactorOneMinusDestinationColor = 9
-	BlendFactorDestinationAlpha         = 10
-	BlendFactorOneMinusDestinationAlpha = 11
+	BlendFactorDestinationColor         = 6
+	BlendFactorOneMinusDestinationColor = 7
+	BlendFactorDestinationAlpha         = 8
+	BlendFactorOneMinusDestinationAlpha = 9
+	BlendFactorSourceAlphaSaturated     = 10
+	BlendFactorBlendColor               = 11
+	BlendFactorOneMinusBlendColor       = 12
+	BlendFactorBlendAlpha               = 13
+	BlendFactorOneMinusBlendAlpha       = 14
 )
 
 // MTLBlendOperation constants.
@@ -774,9 +858,42 @@ func DeviceNewLibraryWithSource(dev Device, source string) (Library, error) {
 	var errObj uintptr
 	lib := Library(msgSend(uintptr(dev), selNewLibraryWithSource, src, 0, uintptr(unsafe.Pointer(&errObj))))
 	if lib == 0 {
-		return 0, fmt.Errorf("mtl: shader compilation failed")
+		// Extract the NSError's localizedDescription so callers see the
+		// real compiler diagnostic instead of "shader compilation failed".
+		if errObj != 0 {
+			descSel := sel("localizedDescription")
+			descObj := msgSend(errObj, descSel)
+			if descObj != 0 {
+				utf8Sel := sel("UTF8String")
+				cstr := msgSend(descObj, utf8Sel)
+				if cstr != 0 {
+					return 0, fmt.Errorf("mtl: shader compilation failed: %s", goStringFromCStr(cstr))
+				}
+			}
+		}
+		return 0, fmt.Errorf("mtl: shader compilation failed (no diagnostic)")
 	}
 	return lib, nil
+}
+
+// goStringFromCStr copies a NUL-terminated C string at the given pointer
+// into a Go string. Used for extracting NSError localizedDescription.
+func goStringFromCStr(ptr uintptr) string {
+	if ptr == 0 {
+		return ""
+	}
+	var n int
+	for {
+		b := *(*byte)(unsafe.Pointer(ptr + uintptr(n)))
+		if b == 0 {
+			break
+		}
+		n++
+		if n > 8192 {
+			break // safety cap
+		}
+	}
+	return string(unsafe.Slice((*byte)(unsafe.Pointer(ptr)), n))
 }
 
 // LibraryNewFunctionWithName gets a function from a library.

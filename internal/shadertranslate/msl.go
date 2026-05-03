@@ -313,6 +313,43 @@ func GLSLToMSLFragment(glsl string) (MSLResult, error) {
 		b.WriteString("};\n\n")
 	}
 
+	// Emit Kage image helper functions before fragmentMain. The Kage→GLSL
+	// compiler emits helpers like imageSrc0At / imageDstSize as GLSL
+	// functions outside main(); we never see those declarations because
+	// extractFragment only returns the main() body. Instead we scan
+	// bodyLines for calls and emit MSL equivalents that take the texture
+	// + sampler as arguments.
+	usedSrcImages := map[int]bool{}
+	useImageDst := false
+	bodyJoined := strings.Join(bodyLines, "\n")
+	for _, m := range reImageSrcFunc.FindAllStringSubmatch(bodyJoined, -1) {
+		idx := int(m[1][0] - '0')
+		usedSrcImages[idx] = true
+	}
+	if reImageDstFunc.MatchString(bodyJoined) {
+		useImageDst = true
+	}
+	for i := 0; i < 4; i++ {
+		if !usedSrcImages[i] {
+			continue
+		}
+		// imageSrcNAt — bounds-checked sample. Kage's `kage:unit pixels`
+		// directive passes pixel coordinates; texture.sample expects
+		// normalized UVs, so divide by texture dimensions.
+		fmt.Fprintf(&b, "static float4 imageSrc%dAt(float2 pos, texture2d<float> tex, sampler smp) {\n", i)
+		b.WriteString("    float2 texDim = float2(tex.get_width(), tex.get_height());\n")
+		b.WriteString("    bool inBounds = pos.x >= 0.0 && pos.y >= 0.0 && pos.x < texDim.x && pos.y < texDim.y;\n")
+		b.WriteString("    float4 sampled = tex.sample(smp, pos / texDim, level(0.0));\n")
+		b.WriteString("    return inBounds ? sampled : float4(0.0);\n")
+		b.WriteString("}\n\n")
+		// imageSrcNUnsafeAt — no bounds check.
+		fmt.Fprintf(&b, "static float4 imageSrc%dUnsafeAt(float2 pos, texture2d<float> tex, sampler smp) {\n", i)
+		b.WriteString("    float2 texDim = float2(tex.get_width(), tex.get_height());\n")
+		b.WriteString("    return tex.sample(smp, pos / texDim, level(0.0));\n")
+		b.WriteString("}\n\n")
+	}
+	_ = useImageDst // imageDstOrigin/Size and imageSrcNOrigin/Size translate inline via translateFragmentLine
+
 	// Fragment function signature.
 	b.WriteString("fragment float4 fragmentMain(\n")
 	b.WriteString("    FragmentIn in [[stage_in]]")
@@ -325,8 +362,12 @@ func GLSLToMSLFragment(glsl string) (MSLResult, error) {
 	}
 	b.WriteString("\n) {\n")
 
-	// Translate body.
-	for _, line := range bodyLines {
+	// Translate body. Drop a trailing bare `return;` if the previous
+	// non-empty line was already a return-with-value: GLSL allows it
+	// (treated as unreachable) but MSL's stricter `-Wreturn-type` rejects
+	// `return;` from a non-void function as an error.
+	cleanedBody := dropTrailingBareReturn(bodyLines, fragOutName)
+	for _, line := range cleanedBody {
 		translated := translateFragmentLine(line, uniforms, varyings, samplerUniforms, fragOutName)
 		b.WriteString("    " + translated + "\n")
 	}
@@ -334,6 +375,40 @@ func GLSLToMSLFragment(glsl string) (MSLResult, error) {
 	b.WriteString("}\n")
 
 	return MSLResult{Source: b.String(), Uniforms: uniformLayout}, nil
+}
+
+// dropTrailingBareReturn strips any `return;` that immediately follows a
+// return-with-value (or a `fragColor = …;` assignment that
+// translateFragmentLine will rewrite into a return). Kage→GLSL emits
+// these redundant `return;` lines after every assignment to fragColor —
+// harmless in GLSL but fatal in MSL because Metal's stricter
+// `-Wreturn-type` rejects bare `return;` from a non-void function.
+// Both function-level and nested-block (e.g. inside `if`) occurrences
+// are handled.
+func dropTrailingBareReturn(lines []string, fragOutName string) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "return;" && len(out) > 0 {
+			// Walk back over blank lines to find the nearest non-blank.
+			prev := ""
+			for i := len(out) - 1; i >= 0; i-- {
+				p := strings.TrimSpace(out[i])
+				if p != "" {
+					prev = p
+					break
+				}
+			}
+			isReturn := strings.HasPrefix(prev, "return ") || strings.HasPrefix(prev, "return(")
+			isFragOutAssign := fragOutName != "" &&
+				(strings.HasPrefix(prev, fragOutName+" =") || strings.HasPrefix(prev, fragOutName+"="))
+			if isReturn || isFragOutAssign {
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // translateVertexLine translates a single line of vertex shader body.
@@ -373,6 +448,43 @@ func translateFragmentLine(line string, uniforms []uniform, varyings []varying, 
 	// Type names.
 	s = replaceTypes(s)
 
+	// Kage image helpers — translate before the generic texture(...) replacer
+	// so it doesn't try to chew on the helper-function names.
+	//
+	// imageSrcNAt(pos)         → imageSrcNAt(pos, uTextureN, uTextureN_sampler)
+	// imageSrcNUnsafeAt(pos)   → same with unsafe variant
+	// imageSrcNOrigin()        → uniforms.uImageSrcNOrigin
+	// imageSrcNSize()          → uniforms.uImageSrcNSize
+	// imageDstOrigin()         → uniforms.uImageDstOrigin
+	// imageDstSize()           → uniforms.uImageDstSize
+	for i := 0; i < 4; i++ {
+		texName := fmt.Sprintf("uTexture%d", i)
+		// First check the sampler list — if uTextureN isn't bound we
+		// shouldn't rewrite (the source wouldn't compile anyway, but we
+		// avoid emitting a reference to an unbound texture).
+		hasTex := false
+		for _, samp := range samplers {
+			if samp.name == texName {
+				hasTex = true
+				break
+			}
+		}
+		if !hasTex {
+			continue
+		}
+		// Inject texture+sampler as extra args. The argument expression
+		// may itself contain nested parentheses (e.g.
+		// `imageSrc0At((srcPos - (dir * shift)))`), so we can't use a
+		// `[^()]*` regex; scan for the balanced closing paren.
+		s = injectTextureArgs(s, fmt.Sprintf("imageSrc%dAt", i), texName, texName+"_sampler")
+		s = injectTextureArgs(s, fmt.Sprintf("imageSrc%dUnsafeAt", i), texName, texName+"_sampler")
+		// imageSrcNOrigin / imageSrcNSize — inline to uniform field.
+		s = strings.ReplaceAll(s, fmt.Sprintf("imageSrc%dOrigin()", i), fmt.Sprintf("uniforms.uImageSrc%dOrigin", i))
+		s = strings.ReplaceAll(s, fmt.Sprintf("imageSrc%dSize()", i), fmt.Sprintf("uniforms.uImageSrc%dSize", i))
+	}
+	s = strings.ReplaceAll(s, "imageDstOrigin()", "uniforms.uImageDstOrigin")
+	s = strings.ReplaceAll(s, "imageDstSize()", "uniforms.uImageDstSize")
+
 	// texture(sampler, uv) → sampler.sample(sampler_sampler, uv)
 	for _, samp := range samplers {
 		s = replaceTextureCall(s, samp.name)
@@ -397,6 +509,66 @@ func translateFragmentLine(line string, uniforms []uniform, varyings []varying, 
 	}
 
 	return s
+}
+
+// injectTextureArgs rewrites every `funcName(<expr>)` call in s to
+// `funcName(<expr>, texArg, samplerArg)` — handling nested parentheses
+// in the argument expression. Returns s unchanged if funcName isn't
+// called. Used to convert the Kage helpers (imageSrcNAt, imageSrcNUnsafeAt)
+// from no-arg-implicit-texture to explicit-texture form for MSL.
+func injectTextureArgs(s, funcName, texArg, samplerArg string) string {
+	prefix := funcName + "("
+	var b strings.Builder
+	rest := s
+	for {
+		idx := strings.Index(rest, prefix)
+		if idx < 0 {
+			b.WriteString(rest)
+			return b.String()
+		}
+		// Reject matches that are part of a longer identifier
+		// (e.g. xImageSrc0At where x is alphanumeric or '_').
+		if idx > 0 {
+			c := rest[idx-1]
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
+				b.WriteString(rest[:idx+len(prefix)])
+				rest = rest[idx+len(prefix):]
+				continue
+			}
+		}
+		b.WriteString(rest[:idx])
+		b.WriteString(prefix)
+		// Scan from after the opening paren until the matching close.
+		depth := 1
+		argEnd := -1
+		for j := idx + len(prefix); j < len(rest); j++ {
+			switch rest[j] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					argEnd = j
+				}
+			}
+			if argEnd >= 0 {
+				break
+			}
+		}
+		if argEnd < 0 {
+			// Unbalanced — bail. Emit the rest as-is.
+			b.WriteString(rest[idx+len(prefix):])
+			return b.String()
+		}
+		// Emit the argument expression, then the injected args, then `)`.
+		b.WriteString(rest[idx+len(prefix) : argEnd])
+		b.WriteString(", ")
+		b.WriteString(texArg)
+		b.WriteString(", ")
+		b.WriteString(samplerArg)
+		b.WriteString(")")
+		rest = rest[argEnd+1:]
+	}
 }
 
 // replaceTypes replaces GLSL type constructors with MSL equivalents.

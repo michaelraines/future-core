@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
 	"unsafe"
 
 	"github.com/michaelraines/future-core/internal/backend"
@@ -71,6 +72,14 @@ func (s *Shader) compile() error {
 
 		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, msl)
 		if err != nil {
+			// Diagnostic: emit the failed MSL source plus the
+			// localizedDescription from the NSError so a translator
+			// regression surfaces as a readable build error rather than
+			// a silent black render. Compile failures should not happen
+			// in steady state — every shader the framework ships
+			// translates cleanly — but new game-side Kage shaders that
+			// hit a translator gap will be caught here.
+			fmt.Fprintf(os.Stderr, "metal: vertex MSL compile failed:\n%s\nerror: %v\n", msl, err)
 			s.compileError = fmt.Errorf("metal: compile vertex MSL: %w", err)
 			return s.compileError
 		}
@@ -94,6 +103,7 @@ func (s *Shader) compile() error {
 
 		lib, err := mtl.DeviceNewLibraryWithSource(s.dev.device, msl)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "metal: fragment MSL compile failed:\n%s\nerror: %v\n", msl, err)
 			s.compileError = fmt.Errorf("metal: compile fragment MSL: %w", err)
 			return s.compileError
 		}
@@ -137,12 +147,21 @@ func writeUniformValue(dst []byte, v any) {
 	case [2]float32:
 		binary.LittleEndian.PutUint32(dst[0:4], math.Float32bits(val[0]))
 		binary.LittleEndian.PutUint32(dst[4:8], math.Float32bits(val[1]))
+	case [3]float32:
+		// vec3 is packed as three contiguous floats (size=12). The MSL
+		// uniform struct uses explicit pad fields (e.g. `_pad152` in
+		// lighting/point_light.frag.msl) so that the field following a
+		// vec3 lands on a 16-byte boundary; the writer here just emits
+		// the 12 raw bytes the layout table declares.
+		binary.LittleEndian.PutUint32(dst[0:4], math.Float32bits(val[0]))
+		binary.LittleEndian.PutUint32(dst[4:8], math.Float32bits(val[1]))
+		binary.LittleEndian.PutUint32(dst[8:12], math.Float32bits(val[2]))
 	case [4]float32:
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			binary.LittleEndian.PutUint32(dst[i*4:(i+1)*4], math.Float32bits(val[i]))
 		}
 	case [16]float32:
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			binary.LittleEndian.PutUint32(dst[i*4:(i+1)*4], math.Float32bits(val[i]))
 		}
 	case int32:

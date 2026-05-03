@@ -355,6 +355,17 @@ func (sp *SpritePass) Execute(enc backend.CommandEncoder, ctx *PassContext) {
 			// pass re-issues SetScissor if needed.
 			sp.lastClipSet = false
 			sp.lastClip = backend.ScissorRect{}
+			// Texture / sampler bindings are also per-render-pass on
+			// some backends. Metal's encoder, in particular, binds a
+			// default placeholder at slot-0..3 on every BeginRenderPass
+			// so multi-texture shaders don't trip Metal validation;
+			// without forgetting `lastTextureID` here the next batch's
+			// `if b.TextureID != lastTextureID` skips the SetTexture
+			// call and the placeholder stays bound — that was painting
+			// isometric-combat's terrain solid white. Reset filter too
+			// so the encoder re-applies the correct sampler state.
+			sp.lastTextureID = 0
+			sp.lastFilter = 0
 			sp.beginTargetPass(enc, ctx, currentTargetID)
 			sp.bindDefaultShader(enc)
 			sp.setProjectionForTarget(enc, ctx, currentTargetID)

@@ -263,18 +263,35 @@ func (w *Window) Size() (int, int) {
 	return int(frame.Size.Width), int(frame.Size.Height)
 }
 
-// FramebufferSize returns the framebuffer size in physical pixels.
-// When NoGL is set (Vulkan presentation), returns the logical window size to
-// match the GL path's behavior. The swapchain/CAMetalLayer handles Retina
-// upscaling automatically during presentation.
+// FramebufferSize returns the framebuffer size each backend expects.
+//
+// Two distinct contracts for two distinct presentation paths:
+//
+//   - GL path (OpenGL, Metal-via-GL-presenter, DX12-via-GL-presenter):
+//     returns PHYSICAL pixels via convertRectToBacking. The
+//     NSOpenGLContext attached to the FRContentView produces a
+//     backbuffer at backingScaleFactor × view-bounds; rendering at
+//     that resolution gives Retina-sharp output and a 1:1 blit from
+//     the engine's offscreen target into the GL framebuffer.
+//   - noGL path (Vulkan, WebGPU): returns LOGICAL pixels (Size()).
+//     The CAMetalLayer that backs the FRContentView for these
+//     backends is configured (implicitly) so that the swapchain /
+//     surface matches the layer bounds in points; configuring at
+//     physical pixels produced wildly-magnified interactive output
+//     under MoltenVK because the rendered frame was 2× the layer's
+//     logical extent and got composited as if it were the layer's
+//     full-bounds content.
+//
+// Cross-backend parity captures will differ in dimensions on Retina
+// hosts because of this asymmetry — the parity runner compares
+// scaled copies, not the raw captures. Do NOT unify this function
+// without also reworking the parity runner AND verifying interactive
+// presentation on every backend.
 func (w *Window) FramebufferSize() (int, int) {
 	if w.contentView == 0 {
 		return 0, 0
 	}
 	if w.noGL {
-		// Match GL path: use logical size. The presentation layer handles
-		// Retina scaling. This keeps the projection/viewport math consistent
-		// across backends.
 		return w.Size()
 	}
 	frame := objc.Send[CGRect](w.contentView, selFrame)
