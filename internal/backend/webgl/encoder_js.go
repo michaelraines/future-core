@@ -291,11 +291,36 @@ func glBlendOp(gl js.Value, op backend.BlendOperation) int {
 	}
 }
 
-// SetVertexBuffer binds a vertex buffer to a slot.
+// SetVertexBuffer binds a vertex buffer to a slot and re-establishes
+// the current pipeline's vertex attribute pointers against it.
+//
+// WebGL2's `vertexAttribPointer` records "the buffer currently bound
+// to ARRAY_BUFFER at this moment" into the VAO; calling it at
+// pipeline-creation time (when no buffer is bound) raises
+// INVALID_OPERATION. The engine also rotates through ring-buffer
+// offsets per batch — every SetVertexBuffer call brings a different
+// (buffer, offset) tuple — so the pointer setup must run here, not
+// once at pipeline creation.
+//
+// The pipeline's VAO is assumed already bound by the preceding
+// SetPipeline; that's what enables the attribute arrays this code
+// then points at the freshly-bound buffer.
 func (e *Encoder) SetVertexBuffer(buf backend.Buffer, slot int) {
-	if b, ok := buf.(*Buffer); ok {
-		target := glBufferTarget(e.gl, b.usage)
-		e.gl.Call("bindBuffer", target, b.handle)
+	b, ok := buf.(*Buffer)
+	if !ok {
+		return
+	}
+	target := glBufferTarget(e.gl, b.usage)
+	e.gl.Call("bindBuffer", target, b.handle)
+
+	if e.currentPipeline == nil {
+		return
+	}
+	stride := e.currentPipeline.desc.VertexFormat.Stride
+	for i, attr := range e.currentPipeline.desc.VertexFormat.Attributes {
+		comps, glType, normalized := glVertexAttrib(e.gl, attr.Format)
+		e.gl.Call("vertexAttribPointer", i, comps, glType, normalized,
+			stride, attr.Offset)
 	}
 }
 
