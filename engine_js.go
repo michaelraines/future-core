@@ -19,6 +19,7 @@ import (
 
 	// Register backends available in the browser.
 	_ "github.com/michaelraines/future-core/internal/backend/soft"
+	_ "github.com/michaelraines/future-core/internal/backend/webgl"
 	_ "github.com/michaelraines/future-core/internal/backend/webgpu"
 )
 
@@ -154,7 +155,14 @@ func (e *engine) run() error {
 	e.window = win
 
 	// Resolve and create backend.
-	preferred := []string{"webgpu", "soft"}
+	//
+	// Default chain: WebGPU first (richest feature set, native dynamic
+	// uniforms), then WebGL2 (broadly available — no separate flag, no
+	// ORIGIN_TRIAL needed, runs on Safari and older Chrome/Firefox), and
+	// the soft rasterizer as the last-resort fallback. Override via
+	// FUTURE_CORE_BACKEND=webgl (or =webgpu) to pin a specific backend
+	// for parity comparison.
+	preferred := []string{"webgpu", "webgl", "soft"}
 	dev, resolvedName, err := backend.Resolve(backendName(), preferred)
 	if err != nil {
 		return err

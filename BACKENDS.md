@@ -133,7 +133,7 @@ fallback** for CI. Four of those (Vulkan, Metal, WebGPU, DX12) also have
 | Metal | Clear + draw working | Yes | 10/10 (soft) | GLSL→MSL (pure Go) |
 | WebGPU | Pipeline wired | Yes | 10/10 (soft) | GLSL→WGSL (pure Go) |
 | DirectX 12 | Early / incomplete | Yes | 10/10 (soft) | Planned (HLSL) |
-| WebGL2 | Soft-delegating only | Yes | 10/10 (soft) | GLSL ES 3.00 (stub) |
+| WebGL2 | Browser implementation in place; parity follow-up underway | Yes | 10/10 (soft) | GLSL 330 → GLSL ES 3.00 |
 
 ---
 
@@ -616,23 +616,60 @@ not just Metal.
 ## WebGL2
 
 **Package**: `internal/backend/webgl/`
-**Status**: Soft-delegating only — no real GPU bindings yet
+**Status**: Browser path live (sprite + stencil + offscreen FBOs); parity follow-up underway
 **Platform**: Browser (WASM) via `syscall/js`
-**Coverage**: 92%
+**Coverage**: 87.8%
 
 ### Implemented
-- Full soft-delegation wrapper with correct type unwrapping
+- Full soft-delegation wrapper with correct type unwrapping (CI conformance)
 - API-specific type mapping (GL format constants, buffer targets)
 - `ContextAttributes` for canvas creation
-- `device_js.go` with `syscall/js` WebGL2 bindings (structure only)
-- GLSL 330→GLSL ES 3.00 translator stub
+- `device_js.go` real WebGL2 bindings via `syscall/js` — uses the
+  page's `#game-canvas`, advertises `PresentsToCanvas() = true` so
+  the engine skips the readback round-trip
+- Eager shader compile + cached uniform locations + per-draw
+  `gl.uniform*` push (WebGL2 has no `glProgramUniform*` equivalent)
+- Sticky `SetBlendMode` override pattern (matches WebGPU/Vulkan/
+  Metal/OpenGL contract — engine calls SetBlendMode before
+  SetPipeline per batch)
+- Per-pass `ColorMask`/`SCISSOR_TEST` reset in `BeginRenderPass` to
+  defeat state leakage across `glBindFramebuffer` (same gotcha that
+  bit OpenGL desktop)
+- Y-flip on `uProjection` row 1 when rendering to an offscreen FBO
+  (mirrors the OpenGL desktop fix; default framebuffer's free
+  display-time flip cancels out for the screen target)
+- GLSL 330 → GLSL ES 3.00 translator: rewrites `#version` line and
+  injects fragment-shader precision qualifiers when missing
+- `ResizeScreen` to keep the GL viewport in sync with browser
+  resizes / DPR changes
+- Registered in `engine_js.go` so the resolver can pick `webgl` after
+  `webgpu` (or pin via `FUTURE_CORE_BACKEND=webgl`)
+
+### Parity-relevant fixes (the OpenGL/Metal playbook applied)
+- `Encoder.SetBlendMode` records `pendingBlend`; the next
+  `SetPipeline` consumes it instead of using the descriptor default.
+- `BeginRenderPass` force-resets `ColorMask=(T,T,T,T)` and
+  `SCISSOR_TEST=disable` before any `gl.Clear`. A previous
+  stencil-write pipeline can leave both clamped, silently turning
+  the clear into a no-op (white FBO contents on macOS).
+- `Shader.apply(yFlip)` is called pre-draw and negates row 1 of
+  `uProjection` when the encoder is bound to an offscreen FBO.
 
 ### Roadmap
-1. Web platform shim (`internal/platform/web/`) — canvas, rAF, DOM events
-2. Wire `syscall/js` WebGL2 context to Device methods
-3. Complete GLSL ES 3.00 shader translation
-4. Touch and pointer event mapping
-5. WASM build + HTML harness example
+1. Browser-side parity harness variant: capture a futurecore-WebGL
+   canvas alongside futurecore-WebGPU and ebiten-WebGL for the
+   six demo scenes (`scripts/parity-diff.sh` is native-only;
+   `parity-tests/runner.mjs` needs an extra build artefact).
+2. Hand-written `.frag.glsles` / `.vert.glsles` variants for the
+   five lighting shaders if the translator's auto-conversion turns
+   out to need fragment-precision-qualifier nuances the simple
+   inserter doesn't cover (Metal needed all five hand-written;
+   OpenGL didn't; WebGL is in between because it's a different
+   shader dialect).
+3. Touch and pointer event mapping (currently the WebGL backend
+   piggybacks on the engine's existing JS input pipeline, but
+   pointer-event delivery may need backend-specific tweaks if the
+   canvas element changes).
 
 ---
 
@@ -643,7 +680,7 @@ not just Metal.
 | GLSL 330 | OpenGL 3.3 | Native (no translation) | Production |
 | GLSL 330 | SPIR-V | `internal/shaderc/` (purego libshaderc) | Working |
 | GLSL 330 | MSL | `internal/shadertranslate/msl.go` (pure Go) | Working |
-| GLSL 330 | GLSL ES 3.00 | Stub translator in webgl/ | Planned |
+| GLSL 330 | GLSL ES 3.00 | Lightweight rewriter in webgl/types.go | Working (browser) |
 | GLSL 330 | WGSL | `internal/shadertranslate/wgsl.go` (pure Go) | Working |
 | GLSL 330 | HLSL | Not implemented | Planned |
 | Kage | GLSL 330 | `internal/shaderir/` transpiler | Production |
@@ -669,5 +706,6 @@ Based on current state and effort required:
 4. **DirectX 12** — Most work remaining. Minimal GPU implementation, no
    shader pipeline, Windows-only testing constraint.
 
-5. **WebGL2** — Soft-delegating is sufficient for now. Real implementation
-   depends on the web platform shim which is a separate effort.
+5. **WebGL2** — Real `syscall/js` rendering path is now in place
+   (uniforms, sticky blend, Y-flip, per-pass state reset). Remaining
+   work is a browser-side parity harness variant + visual triage.

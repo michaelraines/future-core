@@ -31,6 +31,12 @@ func New() *Device {
 }
 
 // Init initializes the WebGL2 device by acquiring a canvas and WebGL2 context.
+//
+// Looks up the existing #game-canvas element (the same canvas the
+// WebGPU backend uses and the engine's CSS sizing has already laid
+// out). Falls back to creating + appending a new canvas only if
+// #game-canvas isn't present, so this backend slots into either
+// existing host pages or bare smoke-test pages without HTML changes.
 func (d *Device) Init(cfg backend.DeviceConfig) error {
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return fmt.Errorf("webgl: invalid dimensions %dx%d", cfg.Width, cfg.Height)
@@ -43,7 +49,15 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		return fmt.Errorf("webgl: document not available")
 	}
 
-	d.canvas = doc.Call("createElement", "canvas")
+	d.canvas = doc.Call("getElementById", "game-canvas")
+	if d.canvas.IsNull() || d.canvas.IsUndefined() {
+		d.canvas = doc.Call("createElement", "canvas")
+		d.canvas.Set("id", "game-canvas")
+		body := doc.Get("body")
+		if !body.IsNull() && !body.IsUndefined() {
+			body.Call("appendChild", d.canvas)
+		}
+	}
 	d.canvas.Set("width", d.width)
 	d.canvas.Set("height", d.height)
 
@@ -82,8 +96,39 @@ func (d *Device) Dispose() {
 	// WebGL context is garbage-collected by the browser.
 }
 
-// ReadScreen returns false — WebGL renders directly to the canvas.
+// ReadScreen returns false — WebGL renders directly to the canvas, so
+// the engine's presentToCanvas (ReadScreen + putImageData) path is
+// skipped. PresentsToCanvas() advertises this so the engine doesn't
+// even allocate the readback buffer.
 func (d *Device) ReadScreen(_ []byte) bool { return false }
+
+// PresentsToCanvas signals the engine that this backend renders
+// directly to the host canvas; no CPU readback round-trip needed.
+// Mirrors the WebGPU browser path's GPUCanvasContext-based
+// presentation contract.
+func (d *Device) PresentsToCanvas() bool { return true }
+
+// ResizeScreen reconfigures the backbuffer when the canvas CSS size
+// changes (e.g. browser resize, devicePixelRatio change). Without
+// this the GL viewport stays at the original Init dimensions and
+// resized content gets stretched.
+func (d *Device) ResizeScreen(width, height int) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+	if width == d.width && height == d.height {
+		return
+	}
+	d.width = width
+	d.height = height
+	if !d.canvas.IsNull() && !d.canvas.IsUndefined() {
+		d.canvas.Set("width", width)
+		d.canvas.Set("height", height)
+	}
+	if !d.gl.IsNull() && !d.gl.IsUndefined() {
+		d.gl.Call("viewport", 0, 0, width, height)
+	}
+}
 
 // BeginFrame prepares for a new frame.
 func (d *Device) BeginFrame() {}
@@ -178,15 +223,18 @@ func (d *Device) NewBuffer(desc backend.BufferDescriptor) (backend.Buffer, error
 	}, nil
 }
 
-// NewShader creates a WebGL2 shader program.
+// NewShader creates a WebGL2 shader program. Compilation is eager so
+// uniform location lookups in apply() see a linked program; failures
+// surface as a NewShader error rather than a silent no-op at draw time.
 func (d *Device) NewShader(desc backend.ShaderDescriptor) (backend.Shader, error) {
-	return &Shader{
-		gl:             d.gl,
-		vertexSource:   translateGLSLES(desc.VertexSource),
-		fragmentSource: translateGLSLES(desc.FragmentSource),
-		attributes:     desc.Attributes,
-		uniforms:       make(map[string]interface{}),
-	}, nil
+	s := newShader(d.gl,
+		translateGLSLES(desc.VertexSource),
+		translateGLSLES(desc.FragmentSource),
+		desc.Attributes)
+	if !s.compile() {
+		return nil, fmt.Errorf("webgl: shader compile/link failed")
+	}
+	return s, nil
 }
 
 // NewRenderTarget creates a WebGL2 framebuffer object.
@@ -314,12 +362,13 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 	}
 }
 
-// Encoder returns the command encoder.
+// Encoder returns the command encoder. The encoder references the
+// device so screen-size changes via ResizeScreen propagate to the
+// viewport call in BeginRenderPass without recreating the encoder.
 func (d *Device) Encoder() backend.CommandEncoder {
 	return &Encoder{
-		gl:     d.gl,
-		width:  d.width,
-		height: d.height,
+		gl:  d.gl,
+		dev: d,
 	}
 }
 

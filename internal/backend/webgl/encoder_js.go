@@ -10,13 +10,30 @@ import (
 
 // Encoder implements backend.CommandEncoder for WebGL2 using syscall/js.
 type Encoder struct {
-	gl     js.Value
-	width  int
-	height int
+	gl  js.Value
+	dev *Device
 
 	inRenderPass    bool
 	currentPipeline *Pipeline
 	indexFormat     backend.IndexFormat
+
+	// targetIsOffscreen is set by BeginRenderPass and read by the
+	// pre-draw shader.apply() to decide whether to flip uProjection.
+	// WebGL's NDC is Y-up; the engine's ortho is Y-down. The window FB
+	// gets a free flip on display, but offscreen FBOs don't — sampling
+	// them as textures otherwise reads upside-down. Mirrors the
+	// OpenGL desktop and Vulkan handling.
+	targetIsOffscreen bool
+
+	// pendingBlend is the sticky SetBlendMode override. The engine
+	// calls SetBlendMode before SetPipeline per-batch so blend changes
+	// don't require pipeline rebuilds; the pipeline picks up the
+	// override here instead of using its descriptor default. Mirrors
+	// the WebGPU/Vulkan/Metal/OpenGL contract — without it,
+	// BlendLighter / multiply / additive batches silently render as
+	// SourceOver. has==false means "use pipeline default".
+	pendingBlend    backend.BlendMode
+	pendingBlendHas bool
 
 	// Cached stencil state from the most recently bound pipeline. WebGL2
 	// stencil ops are mutable per-draw (unlike WebGPU where they're
@@ -37,11 +54,23 @@ func (e *Encoder) BeginRenderPass(desc backend.RenderPassDescriptor) {
 		if rt, ok := desc.Target.(*RenderTarget); ok {
 			e.gl.Call("bindFramebuffer", e.gl.Get("FRAMEBUFFER").Int(), rt.fbo)
 			e.gl.Call("viewport", 0, 0, rt.w, rt.h)
+			e.targetIsOffscreen = true
 		}
 	} else {
 		e.gl.Call("bindFramebuffer", e.gl.Get("FRAMEBUFFER").Int(), js.Null())
-		e.gl.Call("viewport", 0, 0, e.width, e.height)
+		e.gl.Call("viewport", 0, 0, e.dev.width, e.dev.height)
+		e.targetIsOffscreen = false
 	}
+
+	// Reset per-pass dynamic state that leaks across glBindFramebuffer
+	// the same way OpenGL desktop does (see opengl/encoder.go for the
+	// full writeup): a previous stencil-write pipeline can leave
+	// ColorMask=(F,F,F,F) and a stale scissor enabled. Either silently
+	// suppresses the gl.Clear below — and on subsequent draws,
+	// suppresses the draw itself. SetPipeline / SetScissor will
+	// re-establish the correct state for the new pass.
+	e.gl.Call("colorMask", true, true, true, true)
+	e.gl.Call("disable", e.gl.Get("SCISSOR_TEST").Int())
 
 	if desc.LoadAction == backend.LoadActionClear {
 		c := desc.ClearColor
@@ -83,13 +112,24 @@ func (e *Encoder) EndRenderPass() {
 // stencil state: on WebGL2 these are mutable encoder state rather than
 // compiled into the pipeline object, so we re-issue them every time a
 // pipeline is bound.
+//
+// Honours the sticky SetBlendMode override (pendingBlend) before falling
+// back to the pipeline's descriptor blend. The override clears after
+// being consumed so the next pipeline rebind without an intervening
+// SetBlendMode picks up the descriptor default — same contract as
+// every other backend.
 func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	p, ok := pipeline.(*Pipeline)
 	if !ok {
 		return
 	}
 	e.currentPipeline = p
-	e.applyBlendMode(p.desc.BlendMode)
+	if e.pendingBlendHas {
+		e.applyBlendMode(e.pendingBlend)
+		e.pendingBlendHas = false
+	} else {
+		e.applyBlendMode(p.desc.BlendMode)
+	}
 	p.bind()
 
 	// Color write mask baked into the pipeline. Stencil-only passes set
@@ -327,6 +367,7 @@ func (e *Encoder) SetScissor(rect *backend.ScissorRect) {
 
 // Draw issues a non-indexed draw call.
 func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
+	e.applyShaderUniforms()
 	if instanceCount <= 1 {
 		e.gl.Call("drawArrays", e.gl.Get("TRIANGLES").Int(), firstVertex, vertexCount)
 	} else {
@@ -337,6 +378,7 @@ func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
 
 // DrawIndexed issues an indexed draw call.
 func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
+	e.applyShaderUniforms()
 	idxType := e.gl.Get("UNSIGNED_SHORT").Int()
 	byteOffset := firstIndex * 2
 	if e.indexFormat == backend.IndexUint32 {
@@ -352,8 +394,32 @@ func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
 	}
 }
 
-// Flush is a no-op for WebGL2 — presentation happens automatically.
-// SetBlendMode is a no-op for this backend.
-func (e *Encoder) SetBlendMode(_ backend.BlendMode) {}
+// SetBlendMode records a sticky blend-mode override that the next
+// SetPipeline picks up. The engine calls SetBlendMode BEFORE
+// SetPipeline per-batch; without this override the pipeline's
+// descriptor blend wins and BlendLighter/multiply/etc silently render
+// as SourceOver. Mirrors the contract on every other backend.
+func (e *Encoder) SetBlendMode(mode backend.BlendMode) {
+	e.pendingBlend = mode
+	e.pendingBlendHas = true
+}
 
+// applyShaderUniforms pushes the current shader's cached uniforms to
+// the GL program. Called before every draw — the cached map covers
+// uProjection + per-batch uniforms (uColorBody, uColorTranslation,
+// uTexture); pushing them per-draw is cheap relative to the JS bridge
+// crossing already happening per draw.
+func (e *Encoder) applyShaderUniforms() {
+	if e.currentPipeline == nil {
+		return
+	}
+	sh, ok := e.currentPipeline.desc.Shader.(*Shader)
+	if !ok || sh == nil {
+		return
+	}
+	sh.apply(e.targetIsOffscreen)
+}
+
+// Flush is a no-op for WebGL2 — presentation happens automatically as
+// the canvas is composited each frame.
 func (e *Encoder) Flush() {}

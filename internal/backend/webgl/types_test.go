@@ -49,6 +49,44 @@ func TestGLUsageFromBufferUsage(t *testing.T) {
 }
 
 func TestTranslateGLSLES(t *testing.T) {
-	src := "#version 330\nvoid main() {}"
-	require.Equal(t, src, translateGLSLES(src))
+	tests := []struct {
+		name    string
+		in      string
+		wantHas []string
+	}{
+		{
+			name: "330 core vertex",
+			in: "#version 330 core\n" +
+				"layout(location = 0) in vec2 aPosition;\n" +
+				"void main() { gl_Position = vec4(aPosition, 0.0, 1.0); }\n",
+			wantHas: []string{"#version 300 es"},
+		},
+		{
+			name: "330 core fragment gets precision",
+			in: "#version 330 core\n" +
+				"in vec2 vTexCoord;\nout vec4 fragColor;\n" +
+				"uniform sampler2D uTexture;\n" +
+				"void main() { fragColor = texture(uTexture, vTexCoord); }\n",
+			wantHas: []string{"#version 300 es", "precision highp float"},
+		},
+		{
+			name: "already es 300 untouched",
+			in: "#version 300 es\nprecision highp float;\n" +
+				"out vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n",
+			wantHas: []string{"#version 300 es", "precision highp float"},
+		},
+		{
+			name:    "missing version gets prepended",
+			in:      "void main() {}\n",
+			wantHas: []string{"#version 300 es"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := translateGLSLES(tt.in)
+			for _, sub := range tt.wantHas {
+				require.Contains(t, got, sub)
+			}
+		})
+	}
 }

@@ -55,10 +55,116 @@ func glUsageFromBufferUsage(u backend.BufferUsage) int {
 	}
 }
 
-// translateGLSLES performs a lightweight GLSL 330 → GLSL ES 3.00 translation.
-// In a real implementation this would rewrite version directives, add precision
-// qualifiers, and adjust in/out keywords. Currently a pass-through since the
-// soft rasterizer doesn't execute shaders.
+// translateGLSLES rewrites GLSL 330 core source as GLSL ES 3.00, the
+// dialect WebGL2 accepts. The transformations are limited to the
+// minimum needed for the engine's hand-written shaders — the
+// in/out/uniform/layout(location=) syntax is shared, so only the
+// version directive and ES-mandatory precision qualifiers need
+// adjustment.
+//
+// Specifically:
+//   - #version 330 core → #version 300 es (accept either case)
+//   - Insert default precision qualifiers immediately after the version
+//     line, gated to fragment shaders by detecting fragColor / out vec4
+//     / in vec2 vTexCoord-style declarations. Vertex shaders default to
+//     highp on every WebGL2 implementation; fragment shaders do not.
+//
+// Hand-written shaders that already include #version 300 es or explicit
+// precision qualifiers pass through with only the version line
+// normalised, so adding hand-written .glsles variants later doesn't
+// double-prefix.
 func translateGLSLES(source string) string {
-	return source
+	if source == "" {
+		return source
+	}
+
+	// Normalise the version directive. Accept #version 330 core, #version
+	// 330, #version 300 es. Always emit #version 300 es as the first
+	// non-empty line so WebGL2 parses it correctly.
+	out := source
+	for _, prefix := range []string{
+		"#version 330 core",
+		"#version 330",
+		"#version 300 core",
+		"#version 300 es",
+	} {
+		if hasLinePrefix(out, prefix) {
+			out = replaceLinePrefix(out, prefix, "#version 300 es")
+			break
+		}
+	}
+	if !hasLinePrefix(out, "#version 300 es") {
+		out = "#version 300 es\n" + out
+	}
+
+	// Detect fragment shader by presence of an `out` declaration that
+	// looks like a fragment color sink, OR explicit fragColor identifier.
+	// Vertex shaders write to gl_Position and don't need fragment
+	// precision defaults.
+	isFrag := containsToken(out, "fragColor") ||
+		containsToken(out, "FragColor") ||
+		containsToken(out, "gl_FragColor")
+
+	// Insert default precision qualifiers if absent.
+	if isFrag && !containsToken(out, "precision highp float") &&
+		!containsToken(out, "precision mediump float") {
+		out = injectAfterVersion(out,
+			"precision highp float;\n"+
+				"precision highp int;\n"+
+				"precision highp sampler2D;\n")
+	}
+
+	return out
+}
+
+// hasLinePrefix reports whether `s` has a line that starts with `prefix`.
+func hasLinePrefix(s, prefix string) bool {
+	if len(s) >= len(prefix) && s[:len(prefix)] == prefix {
+		return true
+	}
+	for i := 0; i+len(prefix) <= len(s); i++ {
+		if s[i] == '\n' && i+1+len(prefix) <= len(s) && s[i+1:i+1+len(prefix)] == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// replaceLinePrefix replaces the first occurrence of `prefix` (anchored
+// at the start of a line) with `replacement`.
+func replaceLinePrefix(s, prefix, replacement string) string {
+	if len(s) >= len(prefix) && s[:len(prefix)] == prefix {
+		return replacement + s[len(prefix):]
+	}
+	for i := 0; i+len(prefix) <= len(s); i++ {
+		if s[i] == '\n' && i+1+len(prefix) <= len(s) && s[i+1:i+1+len(prefix)] == prefix {
+			return s[:i+1] + replacement + s[i+1+len(prefix):]
+		}
+	}
+	return s
+}
+
+// containsToken reports whether `s` contains the substring `tok`. Used
+// for quick keyword presence checks; not a full GLSL parser.
+func containsToken(s, tok string) bool {
+	if tok == "" || len(s) < len(tok) {
+		return false
+	}
+	for i := 0; i+len(tok) <= len(s); i++ {
+		if s[i:i+len(tok)] == tok {
+			return true
+		}
+	}
+	return false
+}
+
+// injectAfterVersion inserts `block` immediately after the first line
+// in `s`, which is expected to be the #version directive.
+func injectAfterVersion(s, block string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			return s[:i+1] + block + s[i+1:]
+		}
+	}
+	return s + "\n" + block
 }
