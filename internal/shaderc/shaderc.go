@@ -10,6 +10,8 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+
+	"github.com/michaelraines/future-core/internal/dlopen"
 )
 
 // Shader stage constants matching shaderc_shader_kind enum.
@@ -71,7 +73,7 @@ func Init() error {
 	}
 
 	resolve := func(fn any, name string) error {
-		sym, e := purego.Dlsym(lib, name)
+		sym, e := dlopen.Sym(lib, name)
 		if e != nil {
 			return fmt.Errorf("shaderc: resolve %s: %w", name, e)
 		}
@@ -236,7 +238,7 @@ func openLib() (uintptr, error) {
 		names = []string{"shaderc_shared.dll"}
 	}
 	for _, name := range names {
-		h, err := purego.Dlopen(name, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+		h, err := dlopen.Open(name)
 		if err == nil {
 			return h, nil
 		}

@@ -12,6 +12,8 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+
+	"github.com/michaelraines/future-core/internal/dlopen"
 )
 
 // ---------------------------------------------------------------------------
@@ -1966,7 +1968,7 @@ func Init() error {
 	}
 
 	must := func(fn interface{}, name string) error {
-		addr, serr := purego.Dlsym(lib, name)
+		addr, serr := dlopen.Sym(lib, name)
 		if serr != nil {
 			return fmt.Errorf("vk: symbol %s: %w", name, serr)
 		}
@@ -2354,7 +2356,7 @@ func openVulkanLib() (uintptr, error) {
 
 	var firstErr error
 	for _, name := range names {
-		h, err := purego.Dlopen(name, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+		h, err := dlopen.Open(name)
 		if err == nil {
 			return h, nil
 		}
