@@ -16,7 +16,7 @@
 #   go 1.24+
 #   golangci-lint (https://golangci-lint.run/welcome/install/)
 
-.PHONY: all ci fmt vet lint test test-race bench build build-android clean fix check-lint cover cover-check cover-html docker-vulkan-build docker-vulkan-test docker-vulkan-conformance
+.PHONY: all ci fmt vet lint test test-race bench build build-android clean fix check-lint cover cover-check cover-html docker-vulkan-build docker-vulkan-test docker-vulkan-conformance docker-dx12-build
 
 # Minimum required test coverage per package (percentage).
 COVERAGE_MIN := 80
@@ -220,6 +220,15 @@ docker-vulkan-test:
 docker-vulkan-conformance:
 	@echo "==> Running Vulkan conformance with verbose output (lavapipe)..."
 	docker compose run --rm vulkan-conformance
+
+# DX12 dev/test image (Wine + vkd3d-proton + Mesa lavapipe). Lets
+# macOS-only developers iterate on the DX12 backend without a Windows
+# machine. Built on demand by the host wrapper at
+# `future-meta/scripts/capture-dx12.sh`. See docker/Dockerfile.dx12
+# for the stack writeup.
+docker-dx12-build:
+	@echo "==> Building DX12 (Wine + vkd3d-proton + lavapipe) test image..."
+	docker compose build dx12-parity
 
 # --- Tool Checks ---
 

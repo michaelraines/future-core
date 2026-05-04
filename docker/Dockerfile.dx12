@@ -1,0 +1,104 @@
+# DX12 dev/test harness on Linux for macOS-only developers.
+#
+# Stack:
+#   Wine                — runs Windows PE binaries on Linux
+#   vkd3d-proton        — Microsoft's d3d12.dll/dxgi.dll equivalent
+#                         that translates DX12 → Vulkan, used by
+#                         Steam Proton in production for AAA games
+#   Mesa lavapipe       — CPU Vulkan ICD (no GPU required)
+#   Xvfb                — virtual X display for windowed GLFW
+#   Go cross-compiler   — to build GOOS=windows GOARCH=amd64 binaries
+#                         that the host (macOS / Linux) can hand off
+#                         to the container without a Windows toolchain
+#
+# Why this exists: macOS Docker can't forward a real Windows DX12 GPU
+# into a Linux container, but a Wine + vkd3d-proton + lavapipe pipeline
+# runs a Windows binary that exercises the full d3d12.dll API surface
+# while staying entirely on the Mac. Mirrors the Vulkan / lavapipe
+# pattern (Dockerfile.vulkan) — strict where the host loop is
+# permissive.
+#
+# Caveat: this tests the API surface (ResourceBarrier sequences,
+# command-list recording, descriptor heap usage, root-signature
+# layouts) but not literal D3D12 driver behavior. NVIDIA / AMD /
+# Intel driver-specific bugs are caught by the Windows + WARP CI
+# job in .github/workflows/ci.yml, and ultimately by real-hardware
+# test on a Windows machine.
+
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Multi-arch enable: vkd3d-proton ships 64-bit Windows DLLs.
+RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      git \
+      gnupg \
+      libfreetype6 \
+      lsb-release \
+      software-properties-common \
+      wget \
+      xvfb \
+      xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Mesa Vulkan + lavapipe ICD. lavapipe is the CPU-only Vulkan that
+# vkd3d-proton's translated calls land on; it surfaces strict
+# validation issues that MoltenVK on the host loop tolerates.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      mesa-vulkan-drivers \
+      libvulkan1 \
+      vulkan-tools \
+      vulkan-validationlayers \
+    && rm -rf /var/lib/apt/lists/*
+
+# Wine — the Windows ABI translator. Use the WineHQ stable branch
+# rather than Ubuntu's bundled wine, which is too old for vkd3d-proton.
+RUN mkdir -p /etc/apt/keyrings \
+    && wget -O - https://dl.winehq.org/wine-builds/winehq.key | gpg --dearmor -o /etc/apt/keyrings/winehq-archive.key \
+    && wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        winehq-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# vkd3d-proton: the d3d12.dll/dxgi.dll DX12→Vulkan translation layer.
+# We pull a release tarball directly so the install pins to a known
+# version — DXVK/vkd3d-proton's API is stable but the dll layout
+# changes between releases.
+ARG VKD3D_PROTON_VERSION=2.14.1
+RUN cd /tmp \
+    && curl -L "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v${VKD3D_PROTON_VERSION}/vkd3d-proton-${VKD3D_PROTON_VERSION}.tar.zst" -o vkd3d-proton.tar.zst \
+    && apt-get update && apt-get install -y --no-install-recommends zstd && rm -rf /var/lib/apt/lists/* \
+    && tar --use-compress-program=unzstd -xf vkd3d-proton.tar.zst \
+    && mkdir -p /opt/vkd3d-proton \
+    && cp -r vkd3d-proton-${VKD3D_PROTON_VERSION}/* /opt/vkd3d-proton/ \
+    && rm -rf vkd3d-proton.tar.zst vkd3d-proton-${VKD3D_PROTON_VERSION}
+
+# Go toolchain. We build the future binary inside the container so a
+# host without Windows tooling can still iterate; the cost is one
+# `go build` per capture instead of a one-shot cross-compile, but it
+# keeps the host/container Go versions in lockstep.
+ARG GO_VERSION=1.24.0
+RUN curl -L "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOPATH=/go
+ENV PATH="${GOPATH}/bin:${PATH}"
+
+# Wine prefix initialisation. Pre-create a 64-bit prefix so each
+# `wine` invocation doesn't reinitialise from scratch (~30s saved
+# per run). vkd3d-proton ships a setup_vkd3d_proton.sh that copies
+# the right DLLs into the prefix's system32 / syswow64 dirs and
+# tells Wine to override the built-in d3d12 with vkd3d-proton's.
+ENV WINEPREFIX=/root/.wine
+ENV WINEARCH=win64
+# Suppress GUI dialogs Wine pops up during init (Mono / Gecko prompts).
+ENV WINEDLLOVERRIDES="mscoree=;mshtml="
+RUN wine wineboot --init 2>&1 | tail -5 || true \
+    && /opt/vkd3d-proton/setup_vkd3d_proton.sh install
+
+# Default command runs an interactive shell — the capture wrapper on
+# the host (scripts/capture-dx12.sh) overrides this with a specific
+# build + run + capture sequence.
+WORKDIR /workspace
+CMD ["/bin/bash"]
