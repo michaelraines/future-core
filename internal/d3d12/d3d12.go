@@ -104,14 +104,25 @@ const (
 // ---------------------------------------------------------------------------
 
 const (
-	ResourceStateCommon       = 0
-	ResourceStateVertexBuffer = 0x00000004
-	ResourceStateIndexBuffer  = 0x00000002
-	ResourceStateRenderTarget = 0x00000004
-	ResourceStateCopyDest     = 0x00000400
-	ResourceStateCopySrc      = 0x00000800
-	ResourceStateGenericRead  = 0x00000001 | 0x00000002 | 0x00000040 | 0x00000080 | 0x00000200 | 0x00000800
-	ResourceStatePresent      = 0
+	ResourceStateCommon               = 0
+	ResourceStateVertexAndConstBuffer = 0x00000001
+	ResourceStateIndexBuffer          = 0x00000002
+	ResourceStateRenderTarget         = 0x00000004
+	ResourceStateUnorderedAccess      = 0x00000008
+	ResourceStateDepthWrite           = 0x00000010
+	ResourceStateDepthRead            = 0x00000020
+	ResourceStateNonPixelShaderResrc  = 0x00000040
+	ResourceStatePixelShaderResource  = 0x00000080
+	ResourceStateCopyDest             = 0x00000400
+	ResourceStateCopySrc              = 0x00000800
+	ResourceStateGenericRead          = 0x00000001 | 0x00000002 | 0x00000040 | 0x00000080 | 0x00000200 | 0x00000800
+	ResourceStatePresent              = 0
+
+	// ResourceStateVertexBuffer is the legacy alias for
+	// VertexAndConstBuffer. Earlier bindings had this set to 0x4 by
+	// mistake (which collided with RenderTarget); the value is now
+	// the spec-correct 0x1, matching D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER.
+	ResourceStateVertexBuffer = ResourceStateVertexAndConstBuffer
 )
 
 // ---------------------------------------------------------------------------
@@ -197,21 +208,96 @@ type CPUDescriptorHandle struct {
 	Ptr uintptr
 }
 
-// TextureCopyLocation mirrors D3D12_TEXTURE_COPY_LOCATION (for placed footprint).
+// TextureCopyLocation mirrors D3D12_TEXTURE_COPY_LOCATION.
+//
+// The C struct is { ID3D12Resource* pResource; D3D12_TEXTURE_COPY_TYPE Type;
+// union { D3D12_PLACED_SUBRESOURCE_FOOTPRINT PlacedFootprint; UINT
+// SubresourceIndex; }; } — total 48 bytes on x64. The 4-byte gap after Type
+// is the union's 8-byte alignment requirement (PlacedFootprint contains a
+// UINT64). Go won't insert that automatically because the next field is a
+// byte array (alignment 1), so we add an explicit pad. Use the
+// NewTextureCopyLocation* helpers below to construct one safely.
 type TextureCopyLocation struct {
-	Resource               Resource
-	Type                   int32    // 0 = SubresourceIndex, 1 = PlacedFootprint
-	SubresourceOrFootprint [48]byte // Union — either uint32 index or PlacedFootprint
+	Resource Resource // 8 bytes
+	Type     int32    // 4 bytes — 0 = SubresourceIndex, 1 = PlacedFootprint
+	_        [4]byte  // 4 bytes pad — keeps the union 8-byte aligned
+	Union    [32]byte // PlacedSubresourceFootprint (32 bytes) OR SubresourceIndex (4 bytes, rest unused)
 }
 
 // PlacedSubresourceFootprint mirrors D3D12_PLACED_SUBRESOURCE_FOOTPRINT.
+// 32 bytes on x64 (uint64 Offset is 8-byte aligned; trailing pad keeps the
+// struct's tail 8-byte aligned).
 type PlacedSubresourceFootprint struct {
-	Offset   uint64
-	Format   int32
-	Width    uint32
-	Height   uint32
-	Depth    uint32
-	RowPitch uint32
+	Offset   uint64 // 8 bytes
+	Format   int32  // 4 bytes
+	Width    uint32 // 4 bytes
+	Height   uint32 // 4 bytes
+	Depth    uint32 // 4 bytes
+	RowPitch uint32 // 4 bytes — must be a multiple of D3D12_TEXTURE_DATA_PITCH_ALIGNMENT (256)
+	_        uint32 // trailing pad to 32-byte total
+}
+
+// NewTextureCopyLocationSubresource constructs a TextureCopyLocation
+// referencing a specific subresource (mip + array slice) of a texture
+// resource. Used as the source for copies from a texture.
+func NewTextureCopyLocationSubresource(res Resource, subresourceIndex uint32) TextureCopyLocation {
+	loc := TextureCopyLocation{Resource: res, Type: 0}
+	*(*uint32)(unsafe.Pointer(&loc.Union[0])) = subresourceIndex
+	return loc
+}
+
+// NewTextureCopyLocationFootprint constructs a TextureCopyLocation
+// referencing a buffer at a specific row-major footprint. Used as the
+// destination for texture-to-buffer copies (ReadScreen, downloads).
+func NewTextureCopyLocationFootprint(res Resource, fp PlacedSubresourceFootprint) TextureCopyLocation {
+	loc := TextureCopyLocation{Resource: res, Type: 1}
+	*(*PlacedSubresourceFootprint)(unsafe.Pointer(&loc.Union[0])) = fp
+	return loc
+}
+
+// ResourceBarrier mirrors D3D12_RESOURCE_BARRIER for the Transition flavor
+// (the only kind we use today — UAV / Aliasing barriers can be added later).
+//
+// C layout (48 bytes on x64):
+//
+//	D3D12_RESOURCE_BARRIER_TYPE Type;     // 4 bytes
+//	D3D12_RESOURCE_BARRIER_FLAGS Flags;   // 4 bytes
+//	union {
+//	    D3D12_RESOURCE_TRANSITION_BARRIER Transition;  // 24 bytes
+//	    D3D12_RESOURCE_ALIASING_BARRIER   Aliasing;
+//	    D3D12_RESOURCE_UAV_BARRIER        UAV;
+//	};
+//
+// The union region is 24 bytes wide (Transition has the largest layout:
+// pResource ptr + 3*UINT). We pad the struct to 32 bytes for an 8-byte
+// alignment of pResource within the transition.
+type ResourceBarrier struct {
+	Type       int32 // 0 = TRANSITION, 1 = ALIASING, 2 = UAV
+	Flags      int32 // 0 = NONE, 1 = BEGIN_ONLY, 2 = END_ONLY
+	Transition TransitionBarrier
+}
+
+// TransitionBarrier mirrors D3D12_RESOURCE_TRANSITION_BARRIER.
+type TransitionBarrier struct {
+	Resource    Resource // 8 bytes
+	Subresource uint32   // 4 bytes — D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES = 0xffffffff
+	StateBefore int32    // 4 bytes — D3D12_RESOURCE_STATES
+	StateAfter  int32    // 4 bytes
+	_           uint32   // 4 bytes trailing pad to 24
+}
+
+// NewTransitionBarrier constructs a ResourceBarrier that transitions a
+// resource between two states.
+func NewTransitionBarrier(res Resource, before, after int32) ResourceBarrier {
+	return ResourceBarrier{
+		Type: 0, // TRANSITION
+		Transition: TransitionBarrier{
+			Resource:    res,
+			Subresource: 0xffffffff, // ALL_SUBRESOURCES
+			StateBefore: before,
+			StateAfter:  after,
+		},
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -498,6 +584,39 @@ func CmdOMSetRenderTargets(list GraphicsCommandList, numRTs uint32, rtvHandle CP
 	vtable := comVtable(uintptr(list))
 	// OMSetRenderTargets is at vtable index 46.
 	callCOM5(vtable[46], uintptr(list), uintptr(numRTs), uintptr(unsafe.Pointer(&rtvHandle)), 0, 0)
+}
+
+// CmdResourceBarrier inserts a transition / aliasing / UAV barrier into the
+// command list. We typically pass a single transition barrier per call; the
+// numBarriers + array form supports batching but the binding here keeps the
+// shape simple.
+//
+// ID3D12GraphicsCommandList::ResourceBarrier vtable index = 26.
+func CmdResourceBarrier(list GraphicsCommandList, barrier *ResourceBarrier) {
+	vtable := comVtable(uintptr(list))
+	callCOM3(vtable[26], uintptr(list), 1, uintptr(unsafe.Pointer(barrier)))
+}
+
+// CmdCopyTextureRegion copies a region from a texture (or buffer) into
+// another. For the ReadScreen path we copy the default RT (a Texture2D) into
+// a buffer using a placed-footprint destination.
+//
+// ID3D12GraphicsCommandList::CopyTextureRegion vtable index = 16.
+//
+// Args (per Microsoft docs):
+//
+//	pDst : *D3D12_TEXTURE_COPY_LOCATION
+//	DstX, DstY, DstZ : UINT (destination offset within dst)
+//	pSrc : *D3D12_TEXTURE_COPY_LOCATION
+//	pSrcBox : *D3D12_BOX (NULL for whole resource)
+func CmdCopyTextureRegion(list GraphicsCommandList, dst, src *TextureCopyLocation) {
+	vtable := comVtable(uintptr(list))
+	callCOM7(vtable[16], uintptr(list),
+		uintptr(unsafe.Pointer(dst)),
+		0, 0, 0, // DstX, DstY, DstZ
+		uintptr(unsafe.Pointer(src)),
+		0, // pSrcBox = NULL → copy entire source subresource
+	)
 }
 
 // ---------------------------------------------------------------------------
