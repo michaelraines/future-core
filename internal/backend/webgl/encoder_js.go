@@ -29,6 +29,14 @@ type Encoder struct {
 	currentVertexBuffer js.Value
 	currentIndexBuffer  js.Value
 
+	// samplers caches one sampler object per backend.TextureFilter
+	// value. Sampler objects override the texture's stored MIN/MAG
+	// filter — required because the engine calls SetTextureFilter
+	// before SetTexture, and texParameteri-style filtering would
+	// land on the wrong (previously-bound) texture. See
+	// SetTextureFilter for the full writeup.
+	samplers map[backend.TextureFilter]js.Value
+
 	// targetIsOffscreen is set by BeginRenderPass and read by the
 	// pre-draw shader.apply() to decide whether to flip uProjection.
 	// WebGL's NDC is Y-up; the engine's ortho is Y-down. The window FB
@@ -386,18 +394,55 @@ func (e *Encoder) SetTexture(tex backend.Texture, slot int) {
 	}
 }
 
-// SetTextureFilter sets the texture filter for a slot.
+// SetTextureFilter binds a sampler object to the unit so MIN/MAG
+// filter applies for the next draw without depending on the
+// texture's stored filter parameters.
+//
+// Why sampler objects: WebGL2's `texParameteri` mutates state on the
+// currently-bound TEXTURE OBJECT. The engine calls SetTextureFilter
+// BEFORE SetTexture (matching the WebGPU/Vulkan/Metal bind-group
+// model where filter is part of the per-draw descriptor), so a
+// texParameteri-based implementation would write the filter into
+// whatever texture happened to be bound from a previous draw — not
+// the upcoming text atlas. The atlas keeps its creation-time
+// NEAREST filter and text renders blocky / pixelated, which is the
+// "text looks awful on WebGL" symptom.
+//
+// Sampler objects override the texture's stored MIN/MAG filter when
+// bound to the same texture unit, so the atlas's stored NEAREST
+// becomes irrelevant and rendering uses the sampler's LINEAR
+// instead. One sampler is created per (filter) value and cached on
+// the encoder for the rest of the run.
 func (e *Encoder) SetTextureFilter(slot int, filter backend.TextureFilter) {
-	e.gl.Call("activeTexture", e.gl.Get("TEXTURE0").Int()+slot)
-	tex2D := e.gl.Get("TEXTURE_2D").Int()
+	sampler := e.getSampler(filter)
+	e.gl.Call("bindSampler", slot, sampler)
+}
+
+// getSampler lazily creates and caches a sampler object configured
+// with the given MIN/MAG filter and CLAMP_TO_EDGE wrap (matching
+// the engine's atlas/RT expectations).
+func (e *Encoder) getSampler(filter backend.TextureFilter) js.Value {
+	if e.samplers == nil {
+		e.samplers = make(map[backend.TextureFilter]js.Value)
+	}
+	if s, ok := e.samplers[filter]; ok {
+		return s
+	}
+	s := e.gl.Call("createSampler")
 	glFilter := e.gl.Get("NEAREST").Int()
 	if filter == backend.FilterLinear {
 		glFilter = e.gl.Get("LINEAR").Int()
 	}
-	e.gl.Call("texParameteri", tex2D,
+	e.gl.Call("samplerParameteri", s,
 		e.gl.Get("TEXTURE_MIN_FILTER").Int(), glFilter)
-	e.gl.Call("texParameteri", tex2D,
+	e.gl.Call("samplerParameteri", s,
 		e.gl.Get("TEXTURE_MAG_FILTER").Int(), glFilter)
+	e.gl.Call("samplerParameteri", s,
+		e.gl.Get("TEXTURE_WRAP_S").Int(), e.gl.Get("CLAMP_TO_EDGE").Int())
+	e.gl.Call("samplerParameteri", s,
+		e.gl.Get("TEXTURE_WRAP_T").Int(), e.gl.Get("CLAMP_TO_EDGE").Int())
+	e.samplers[filter] = s
+	return s
 }
 
 // SetStencilReference updates the dynamic stencil reference value by
