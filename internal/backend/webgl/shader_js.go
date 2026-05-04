@@ -28,6 +28,7 @@ type Shader struct {
 	program   js.Value
 	compiled  bool
 	locations map[string]js.Value
+	lastError string
 
 	// Cached uniform values — pushed via apply().
 	uFloat map[string]float32
@@ -56,6 +57,41 @@ func newShader(gl js.Value, vert, frag string, attrs []backend.VertexAttribute) 
 	}
 }
 
+// dumpShaderSource prints the shader source with 1-based line numbers
+// to the JS console so the line number in the GL info log can be
+// resolved against the actual source. Routed through console.warn so
+// it surfaces in browser devtools without being suppressed by the
+// engine's stderr-redirect plumbing.
+func dumpShaderSource(stage, source string) {
+	console := js.Global().Get("console")
+	if console.IsNull() || console.IsUndefined() {
+		return
+	}
+	console.Call("groupCollapsed", "[webgl] failing "+stage+" shader source:")
+	lineNo := 1
+	start := 0
+	for i := 0; i <= len(source); i++ {
+		if i == len(source) || source[i] == '\n' {
+			console.Call("log", lineNo, source[start:i])
+			lineNo++
+			start = i + 1
+		}
+	}
+	console.Call("groupEnd")
+}
+
+// compileError stashes the most recent compile/link diagnostic so the
+// caller (NewShader) can wrap it into the returned error. Without this
+// every shader compile failure surfaces as a generic "compile/link
+// failed" message at the call site, hiding the actual GLSL error and
+// the source line numbers that would let you fix it.
+//
+// Stored on the shader (rather than returned) because compile() is
+// called lazily and from the same caller that cares — keeping it as
+// state keeps the public bool-returning signature compatible with
+// the existing call sites.
+func (s *Shader) compileError() string { return s.lastError }
+
 // compile compiles and links the vertex/fragment shaders into a GL program.
 func (s *Shader) compile() bool {
 	if s.compiled {
@@ -64,15 +100,16 @@ func (s *Shader) compile() bool {
 	s.compiled = true
 
 	if s.vertexSource == "" || s.fragmentSource == "" {
+		s.lastError = "vertex or fragment source is empty"
 		return false
 	}
 
-	vertShader := s.compileShader(s.gl.Get("VERTEX_SHADER").Int(), s.vertexSource)
+	vertShader := s.compileShader(s.gl.Get("VERTEX_SHADER").Int(), s.vertexSource, "vertex")
 	if vertShader.IsNull() || vertShader.IsUndefined() {
 		return false
 	}
 
-	fragShader := s.compileShader(s.gl.Get("FRAGMENT_SHADER").Int(), s.fragmentSource)
+	fragShader := s.compileShader(s.gl.Get("FRAGMENT_SHADER").Int(), s.fragmentSource, "fragment")
 	if fragShader.IsNull() || fragShader.IsUndefined() {
 		s.gl.Call("deleteShader", vertShader)
 		return false
@@ -101,6 +138,8 @@ func (s *Shader) compile() bool {
 	linkStatus := s.gl.Call("getProgramParameter", prog,
 		s.gl.Get("LINK_STATUS").Int())
 	if !linkStatus.Bool() {
+		log := s.gl.Call("getProgramInfoLog", prog).String()
+		s.lastError = "link: " + log
 		s.gl.Call("deleteProgram", prog)
 		return false
 	}
@@ -109,8 +148,10 @@ func (s *Shader) compile() bool {
 	return true
 }
 
-// compileShader compiles a single shader stage.
-func (s *Shader) compileShader(shaderType int, source string) js.Value {
+// compileShader compiles a single shader stage. On failure the GL
+// info log is captured into s.lastError so callers can surface the
+// actual GLSL diagnostic.
+func (s *Shader) compileShader(shaderType int, source, stage string) js.Value {
 	shader := s.gl.Call("createShader", shaderType)
 	s.gl.Call("shaderSource", shader, source)
 	s.gl.Call("compileShader", shader)
@@ -118,6 +159,14 @@ func (s *Shader) compileShader(shaderType int, source string) js.Value {
 	compileStatus := s.gl.Call("getShaderParameter", shader,
 		s.gl.Get("COMPILE_STATUS").Int())
 	if !compileStatus.Bool() {
+		log := s.gl.Call("getShaderInfoLog", shader).String()
+		// Mirror the offending source to console with line numbers so
+		// the failing line is actually visible alongside the diagnostic.
+		// The driver-supplied error log only references "0:N" line
+		// numbers without the source itself, which makes triage
+		// painful when the source has been through a translator.
+		dumpShaderSource(stage, source)
+		s.lastError = stage + " compile: " + log
 		s.gl.Call("deleteShader", shader)
 		return js.Null()
 	}
