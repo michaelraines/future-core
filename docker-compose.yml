@@ -136,6 +136,30 @@ services:
       FUTURE_CORE_HEADLESS_OUTPUT: /output/capture.png
     command: ["bash", "/workspace/meta/future-core/docker/parity-capture.sh"]
 
+  # DX12 dev/test harness on Linux. Uses Wine + vkd3d-proton to run a
+  # cross-compiled Windows binary; vkd3d-proton's d3d12.dll translates
+  # DX12 calls to Vulkan, which Mesa lavapipe runs on CPU. The host
+  # wrapper is future-meta/scripts/capture-dx12.sh.
+  dx12-parity:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dx12
+    image: future-dx12:latest
+    volumes:
+      - ../:/workspace/meta:delegated
+      - go-cache:/root/.cache/go-build
+      - go-mod-cache:/root/go/pkg/mod
+      - dx12-bin-cache:/cached-bin:delegated
+      - ${DX12_OUTPUT:-/tmp/dx12-output}:/output:delegated
+    working_dir: /workspace/meta
+    environment:
+      FUTURE_SCENE: ${FUTURE_SCENE:-scene-selector}
+      FUTURE_CORE_HEADLESS: ${FUTURE_CORE_HEADLESS:-60}
+      FUTURE_WINDOW_WIDTH: ${FUTURE_WINDOW_WIDTH:-1920}
+      FUTURE_WINDOW_HEIGHT: ${FUTURE_WINDOW_HEIGHT:-1080}
+      FUTURE_CORE_HEADLESS_OUTPUT: /output/capture.png
+    command: ["bash", "/workspace/meta/future-core/docker/dx12-capture.sh"]
+
 volumes:
   # Named volumes persist Go build + module caches across `docker compose
   # run` invocations. Nuking them via `docker compose down -v` triggers a
@@ -146,3 +170,7 @@ volumes:
   # recently-built future binary so back-to-back captures (parity
   # sweeps) don't rebuild on every scene.
   parity-bin-cache:
+  # Binary cache for the dx12-parity service. Holds the cross-compiled
+  # future.exe so back-to-back captures don't pay the GOOS=windows
+  # build cost on every scene.
+  dx12-bin-cache:
