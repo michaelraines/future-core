@@ -73,6 +73,14 @@ type glyphImageKey struct {
 	xoffset fixed.Int26_6
 	yoffset fixed.Int26_6
 	size    float64
+	// oversample is the rasterisation oversampling factor (DPR). At
+	// HiDPI the glyph image is rasterised at size×oversample atlas
+	// pixels and drawn with a 1/oversample scale, so display pixel
+	// density matches the physical framebuffer instead of the GPU
+	// linear-upscaling a logical-resolution atlas. Stored in the key
+	// so DPR changes (e.g. window dragged between displays) build a
+	// fresh atlas rather than reusing the previous resolution.
+	oversample float64
 }
 
 // NewGoTextFaceSource creates a GoTextFaceSource from font data read from
@@ -181,7 +189,10 @@ func (g *GoTextFaceSource) shape(text string, size float64) ([]shaping.Output, [
 }
 
 // getOrCreateGlyphImage returns a cached glyph image or creates one.
-func (g *GoTextFaceSource) getOrCreateGlyphImage(key glyphImageKey, segs []opentype.Segment, subpixelOffset fixed.Point26_6, bounds fixed.Rectangle26_6) *futurerender.Image {
+// oversample > 1 rasterises at higher resolution for HiDPI displays;
+// the caller is responsible for applying the matching 1/oversample
+// scale on the draw transform so the glyph appears at logical size.
+func (g *GoTextFaceSource) getOrCreateGlyphImage(key glyphImageKey, segs []opentype.Segment, subpixelOffset fixed.Point26_6, bounds fixed.Rectangle26_6, oversample float64) *futurerender.Image {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -189,7 +200,7 @@ func (g *GoTextFaceSource) getOrCreateGlyphImage(key glyphImageKey, segs []opent
 		return img
 	}
 
-	img := segmentsToImage(segs, subpixelOffset, bounds)
+	img := segmentsToImage(segs, subpixelOffset, bounds, oversample)
 	if traceText && img != nil {
 		w, h := img.Size()
 		fmt.Fprintf(os.Stderr, "[text]   new glyph gid=%d size=%.0f img=%dx%d\n",
@@ -256,9 +267,25 @@ func (f *GoTextFace) drawGlyphs(target *futurerender.Image, s string, ox, oy flo
 
 	_, gs := f.Source.shape(s, f.Size)
 
+	// Oversample the glyph atlas for HiDPI displays. At DPR=2 the
+	// engine's logical→physical viewport scaling stretches a logical-
+	// resolution atlas 2x with linear filtering, producing blurry
+	// chunky text. Rasterising at DPR× resolution and downscaling on
+	// draw lets the GPU sample a high-resolution atlas at 1:1 with
+	// the physical framebuffer, yielding crisp glyphs. Capped at 4×
+	// to avoid pathological atlases on freak DPR values.
+	oversample := futurerender.DeviceScaleFactor()
+	if oversample < 1 {
+		oversample = 1
+	}
+	if oversample > 4 {
+		oversample = 4
+	}
+	invOversample := 1.0 / oversample
+
 	if traceText {
 		tx, ty := geoM.Apply(0, 0)
-		fmt.Fprintf(os.Stderr, "[text] drawGlyphs size=%.0f glyphs=%d geo=(%.0f,%.0f) text=%q\n", f.Size, len(gs), tx, ty, truncate(s, 30))
+		fmt.Fprintf(os.Stderr, "[text] drawGlyphs size=%.0f glyphs=%d geo=(%.0f,%.0f) oversample=%.1f text=%q\n", f.Size, len(gs), tx, ty, oversample, truncate(s, 30))
 	}
 
 	origin := fixed.Point26_6{
@@ -273,10 +300,18 @@ func (f *GoTextFace) drawGlyphs(target *futurerender.Image, s string, ox, oy flo
 			Y: -g.sg.YOffset,
 		})
 
-		img, imgX, imgY := f.glyphImage(g, o)
+		img, imgX, imgY := f.glyphImage(g, o, oversample)
 		if img != nil {
 			drawOpts := &futurerender.DrawImageOptions{}
 			drawOpts.ColorScale = cs
+			// Downscale the oversampled atlas to logical pixel size
+			// BEFORE translating, so the translate(imgX, imgY) lands
+			// the image's logical-size top-left at the integer pixel
+			// position we computed. Order: scale (around 0,0), then
+			// translate.
+			if oversample > 1 {
+				drawOpts.GeoM.Scale(invOversample, invOversample)
+			}
 			drawOpts.GeoM.Translate(float64(imgX), float64(imgY))
 			drawOpts.GeoM.Concat(geoM)
 			if traceText && drawn == 0 {
@@ -320,7 +355,11 @@ func truncate(s string, n int) string {
 // position at which it should be drawn on the target. img is the cached
 // glyph bitmap; imgX and imgY are the top-left screen-space coordinates
 // after subpixel adjustment. Matches Ebitengine's subpixel positioning.
-func (f *GoTextFace) glyphImage(g shapedGlyph, origin fixed.Point26_6) (img *futurerender.Image, imgX, imgY int) {
+//
+// oversample > 1 produces an atlas at oversample× resolution; the
+// caller (drawGlyphs) must apply a 1/oversample scale on the draw
+// transform so the glyph displays at logical size.
+func (f *GoTextFace) glyphImage(g shapedGlyph, origin fixed.Point26_6, oversample float64) (img *futurerender.Image, imgX, imgY int) {
 	// For horizontal text: vary X subpixel, floor Y.
 	origin.X = adjustGranularity(origin.X, f.Metrics())
 	origin.Y &^= ((1 << 6) - 1)
@@ -333,13 +372,14 @@ func (f *GoTextFace) glyphImage(g shapedGlyph, origin fixed.Point26_6) (img *fut
 	}
 
 	key := glyphImageKey{
-		gid:     g.sg.GlyphID,
-		xoffset: subpixelOffset.X,
-		yoffset: subpixelOffset.Y,
-		size:    f.Size,
+		gid:        g.sg.GlyphID,
+		xoffset:    subpixelOffset.X,
+		yoffset:    subpixelOffset.Y,
+		size:       f.Size,
+		oversample: oversample,
 	}
 
-	img = f.Source.getOrCreateGlyphImage(key, g.scaledSegments, subpixelOffset, b)
+	img = f.Source.getOrCreateGlyphImage(key, g.scaledSegments, subpixelOffset, b, oversample)
 
 	imgX = (origin.X + b.Min.X).Floor()
 	imgY = (origin.Y + b.Min.Y).Floor()
@@ -464,10 +504,24 @@ func segmentsToBounds(segs []opentype.Segment) fixed.Rectangle26_6 {
 
 // segmentsToImage rasterizes outline segments into an image using the same
 // golang.org/x/image/vector.Rasterizer as Ebitengine.
-func segmentsToImage(segs []opentype.Segment, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6) *futurerender.Image {
+//
+// oversample > 1 produces an atlas at oversample× the logical glyph
+// size — the rasteriser dimensions and segment coordinates are all
+// multiplied by oversample, so the resulting image is a higher-
+// resolution rasterisation of the same outline. The caller is
+// responsible for applying a 1/oversample scale on the draw transform
+// so the glyph appears at logical size on screen, with the GPU
+// linear-filtering down from the oversampled atlas instead of up
+// from a logical-resolution one. oversample <= 1 falls back to the
+// original 1:1 logical rasterisation.
+func segmentsToImage(segs []opentype.Segment, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6, oversample float64) *futurerender.Image {
 	if len(segs) == 0 {
 		return nil
 	}
+	if oversample < 1 {
+		oversample = 1
+	}
+	scale := float32(oversample)
 
 	w := (glyphBounds.Max.X - glyphBounds.Min.X).Ceil()
 	h := (glyphBounds.Max.Y - glyphBounds.Min.Y).Ceil()
@@ -481,28 +535,37 @@ func segmentsToImage(segs []opentype.Segment, subpixelOffset fixed.Point26_6, gl
 	// Match Ebitengine: always add 1 to the size.
 	w++
 	h++
+	// Oversample: scale the atlas dimensions up so the rasteriser
+	// produces a high-resolution glyph. The +1 padding stays at
+	// oversample× scale too — the rasteriser uses subpixel coverage
+	// from the bias values, so a wider image keeps the antialiased
+	// edge inside the canvas.
+	if oversample > 1 {
+		w = int(float64(w) * oversample)
+		h = int(float64(h) * oversample)
+	}
 
-	biasX := fixed26_6ToFloat32(-glyphBounds.Min.X + subpixelOffset.X)
-	biasY := fixed26_6ToFloat32(-glyphBounds.Min.Y + subpixelOffset.Y)
+	biasX := fixed26_6ToFloat32(-glyphBounds.Min.X+subpixelOffset.X) * scale
+	biasY := fixed26_6ToFloat32(-glyphBounds.Min.Y+subpixelOffset.Y) * scale
 
 	rast := gvector.NewRasterizer(w, h)
 	rast.DrawOp = draw.Src
 	for _, seg := range segs {
 		switch seg.Op {
 		case opentype.SegmentOpMoveTo:
-			rast.MoveTo(seg.Args[0].X+biasX, seg.Args[0].Y+biasY)
+			rast.MoveTo(seg.Args[0].X*scale+biasX, seg.Args[0].Y*scale+biasY)
 		case opentype.SegmentOpLineTo:
-			rast.LineTo(seg.Args[0].X+biasX, seg.Args[0].Y+biasY)
+			rast.LineTo(seg.Args[0].X*scale+biasX, seg.Args[0].Y*scale+biasY)
 		case opentype.SegmentOpQuadTo:
 			rast.QuadTo(
-				seg.Args[0].X+biasX, seg.Args[0].Y+biasY,
-				seg.Args[1].X+biasX, seg.Args[1].Y+biasY,
+				seg.Args[0].X*scale+biasX, seg.Args[0].Y*scale+biasY,
+				seg.Args[1].X*scale+biasX, seg.Args[1].Y*scale+biasY,
 			)
 		case opentype.SegmentOpCubeTo:
 			rast.CubeTo(
-				seg.Args[0].X+biasX, seg.Args[0].Y+biasY,
-				seg.Args[1].X+biasX, seg.Args[1].Y+biasY,
-				seg.Args[2].X+biasX, seg.Args[2].Y+biasY,
+				seg.Args[0].X*scale+biasX, seg.Args[0].Y*scale+biasY,
+				seg.Args[1].X*scale+biasX, seg.Args[1].Y*scale+biasY,
+				seg.Args[2].X*scale+biasX, seg.Args[2].Y*scale+biasY,
 			)
 		}
 	}
