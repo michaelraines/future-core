@@ -305,11 +305,20 @@ func NewTransitionBarrier(res Resource, before, after int32) ResourceBarrier {
 // ---------------------------------------------------------------------------
 
 var (
-	dxgiLib  uintptr
-	d3d12Lib uintptr
+	dxgiLib        uintptr
+	d3d12Lib       uintptr
+	d3dCompilerLib uintptr
 
 	fnCreateDXGIFactory1 func(riid uintptr, ppFactory *Factory) HRESULT
 	fnD3D12CreateDevice  func(pAdapter uintptr, minFeatureLevel int32, riid uintptr, ppDevice *Device) HRESULT
+	fnD3DCompile         func(
+		pSrcData uintptr, srcDataSize uintptr,
+		pSourceName uintptr,
+		pDefines uintptr, pInclude uintptr,
+		pEntrypoint uintptr, pTarget uintptr,
+		flags1 uint32, flags2 uint32,
+		ppCode uintptr, ppErrorMsgs uintptr,
+	) HRESULT
 
 	// IID constants for COM interface identification.
 	iidFactory4 [16]byte
@@ -344,6 +353,23 @@ func Init() error {
 	}
 	if err := resolveSymbol(d3d12Lib, "D3D12CreateDevice", &fnD3D12CreateDevice); err != nil {
 		return err
+	}
+
+	// d3dcompiler_47.dll is shipped with Windows 8+ and the DirectX
+	// SDK. Fall back to d3dcompiler.dll for older installs that
+	// only carry the unversioned name. Failure is non-fatal: callers
+	// that go through the Kage→GLSL→HLSL translator (or a precompiled
+	// DXBC blob) won't need it; only NewShaderNative + the
+	// (still-pending) HLSL pipeline-state path require D3DCompile.
+	if d3dCompilerLib, err = dlopen.Open("d3dcompiler_47.dll"); err != nil {
+		d3dCompilerLib, err = dlopen.Open("d3dcompiler.dll")
+	}
+	if d3dCompilerLib != 0 {
+		if err := resolveSymbol(d3dCompilerLib, "D3DCompile", &fnD3DCompile); err != nil {
+			// Reset on resolution failure so D3DCompile() reports a
+			// clean "not loaded" error rather than calling a nil func.
+			fnD3DCompile = nil
+		}
 	}
 
 	// Initialize well-known IIDs.
@@ -762,3 +788,109 @@ func resolveSymbol(handle uintptr, name string, fn interface{}) error {
 
 // Keep compiler happy.
 var _ = unsafe.Pointer(nil)
+
+// ---------------------------------------------------------------------------
+// HLSL compilation (D3DCompile from d3dcompiler_47.dll)
+// ---------------------------------------------------------------------------
+
+// D3D compile flags (subset of D3DCOMPILE_*).
+const (
+	// CompileFlagDebug embeds debug info in the bytecode.
+	CompileFlagDebug uint32 = 1 << 0
+	// CompileFlagSkipValidation skips the validator (faster compile).
+	CompileFlagSkipValidation uint32 = 1 << 1
+	// CompileFlagSkipOptimization disables compiler optimizations.
+	CompileFlagSkipOptimization uint32 = 1 << 2
+	// CompileFlagOptimizationLevel3 maximum optimization (default = 1).
+	CompileFlagOptimizationLevel3 uint32 = 1 << 15
+	// CompileFlagWarningsAsErrors promotes compiler warnings to errors.
+	CompileFlagWarningsAsErrors uint32 = 1 << 18
+)
+
+// D3DCompile compiles HLSL source for the given entry point and shader
+// model target (e.g. "VSMain"/"vs_5_0", "PSMain"/"ps_5_0") to DXBC
+// bytecode. sourceName is purely cosmetic — it appears in compiler
+// error messages — and may be the empty string.
+//
+// Returns an error wrapping the compiler's diagnostic blob if the
+// compile fails, or wrapping the HRESULT for any other failure
+// (most commonly "d3dcompiler not loaded" when d3dcompiler_47.dll
+// could not be opened during Init).
+func D3DCompile(source []byte, sourceName, entryPoint, target string, flags uint32) ([]byte, error) {
+	if fnD3DCompile == nil {
+		return nil, fmt.Errorf("D3DCompile: d3dcompiler_47.dll not loaded")
+	}
+	if len(source) == 0 {
+		return nil, fmt.Errorf("D3DCompile: empty source")
+	}
+
+	srcNameZ := append([]byte(sourceName), 0)
+	entryZ := append([]byte(entryPoint), 0)
+	targetZ := append([]byte(target), 0)
+
+	var codeBlob, errBlob uintptr
+	hr := fnD3DCompile(
+		uintptr(unsafe.Pointer(&source[0])),
+		uintptr(len(source)),
+		uintptr(unsafe.Pointer(&srcNameZ[0])),
+		0, // pDefines
+		0, // pInclude
+		uintptr(unsafe.Pointer(&entryZ[0])),
+		uintptr(unsafe.Pointer(&targetZ[0])),
+		flags,
+		0, // flags2 (effects)
+		uintptr(unsafe.Pointer(&codeBlob)),
+		uintptr(unsafe.Pointer(&errBlob)),
+	)
+
+	if !hr.Succeeded() {
+		msg := readAndReleaseBlob(errBlob)
+		if msg != "" {
+			return nil, fmt.Errorf("D3DCompile %s/%s: %w: %s", entryPoint, target, hr, msg)
+		}
+		return nil, fmt.Errorf("D3DCompile %s/%s: %w", entryPoint, target, hr)
+	}
+	// Success path: errBlob may still carry warnings — drop it.
+	if errBlob != 0 {
+		Release(errBlob)
+	}
+	defer Release(codeBlob)
+	return blobBytes(codeBlob), nil
+}
+
+// blobBytes copies the contents of an ID3DBlob into a freshly
+// allocated []byte. The blob itself stays owned by the caller (via
+// Release).
+func blobBytes(blob uintptr) []byte {
+	if blob == 0 {
+		return nil
+	}
+	vtable := comVtable(blob)
+	// ID3DBlob::GetBufferPointer is at vtable index 3 (after
+	// IUnknown's QueryInterface/AddRef/Release).
+	ptr := callCOM1(vtable[3], blob)
+	// ID3DBlob::GetBufferSize is at vtable index 4.
+	size := callCOM1(vtable[4], blob)
+	if ptr == 0 || size == 0 {
+		return nil
+	}
+	out := make([]byte, size)
+	copy(out, unsafe.Slice((*byte)(unsafe.Pointer(ptr)), size))
+	return out
+}
+
+// readAndReleaseBlob reads an ID3DBlob's contents as a string then
+// releases it. Used for compiler error messages.
+func readAndReleaseBlob(blob uintptr) string {
+	if blob == 0 {
+		return ""
+	}
+	defer Release(blob)
+	b := blobBytes(blob)
+	// Strip trailing NUL if present (D3DCompile error blobs are
+	// NUL-terminated).
+	for len(b) > 0 && b[len(b)-1] == 0 {
+		b = b[:len(b)-1]
+	}
+	return string(b)
+}
