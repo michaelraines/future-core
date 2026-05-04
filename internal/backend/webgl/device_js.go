@@ -232,7 +232,7 @@ func (d *Device) NewShader(desc backend.ShaderDescriptor) (backend.Shader, error
 		translateGLSLES(desc.FragmentSource),
 		desc.Attributes)
 	if !s.compile() {
-		return nil, fmt.Errorf("webgl: shader compile/link failed")
+		return nil, fmt.Errorf("webgl: shader compile/link failed: %s", s.compileError())
 	}
 	return s, nil
 }
