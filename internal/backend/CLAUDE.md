@@ -385,3 +385,29 @@ on each call site.
   so `uProjection` must NOT flip for the screen target. Offscreen
   FBOs sampled as textures need row-1 negation in
   `Shader.apply(yFlip=true)`.
+- **Use sampler objects, not `texParameteri`**: WebGL2 stores filter
+  state on the texture object. The engine calls `SetTextureFilter`
+  BEFORE `SetTexture` (matches per-draw bind groups on
+  WebGPU/Vulkan/Metal), so a `texParameteri`-based filter writes
+  into whatever texture was bound from the previous draw — the text
+  atlas keeps creation-time `NEAREST` and glyphs render with white
+  rectangle artifacts and blocky pixels. One sampler per filter,
+  bound via `gl.bindSampler(unit, sampler)`, overrides the texture's
+  stored filter.
+- **VAO captures buffer bindings at `vertexAttribPointer` time**:
+  each `Pipeline` owns its own VAO. `vertexAttribPointer` records
+  "the buffer currently bound to ARRAY_BUFFER" + offset INTO the
+  VAO. Implications: (a) calling it at pipeline creation when no
+  buffer is bound raises INVALID_OPERATION; (b) the sprite pass
+  switches pipelines mid-flush — each new VAO has enabled attribs
+  but no pointer state, so `Encoder.SetPipeline` must replay the
+  last `SetVertexBuffer` + `SetIndexBuffer` bindings into the new
+  VAO or `drawElements` aborts with "no buffer bound to enabled
+  attribute".
+- **Dump shader source on compile failure**: WebGL info-log
+  references "0:N" line numbers without the source. The webgl
+  backend mirrors the failing source through `console.groupCollapsed`
+  with 1-based line numbers so the diagnostic resolves to an actual
+  line — without this every "compile/link failed" is a guessing
+  game, especially when the source has been through Kage→GLSL→ES
+  translation.

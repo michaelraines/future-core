@@ -28,6 +28,19 @@ the parity implications.
 **TODO:** Eventually replace `util/text.png` with our own bitmap font to avoid carrying Ebitengine's asset.
 For now it's fine — it gives us pixel-identical DebugPrint output which is valuable for parity testing.
 
+### DPR-aware glyph rasterisation
+
+`text.GoTextFace.drawGlyphs` queries `futurerender.DeviceScaleFactor()`
+at draw time and rasterises glyphs at `face.Size × DPR` atlas pixels
+(clamped 1..4), then applies a `1/oversample` scale on the draw
+transform so glyphs display at logical size. Without this the
+engine's logical-to-physical viewport scaling produces 2x-upscaled
+blurry text at retina (DPR=2). The cache key in `glyphImageKey`
+includes the oversample factor so DPR changes (window dragged
+between displays) build a fresh atlas. Cross-backend — every backend
+whose viewport runs at physical resolution while the projection
+runs at logical benefits.
+
 ## Build & Test
 
 All build, test, and lint operations are run via `make`. The default target
