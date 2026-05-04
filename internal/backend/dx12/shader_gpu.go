@@ -6,12 +6,20 @@ import "github.com/michaelraines/future-core/internal/backend"
 
 // Shader implements backend.Shader for DX12.
 // Stores HLSL source for later compilation into DXBC/DXIL bytecode.
+//
+// nativeMode signals the source came in via NewShaderNative already in
+// HLSL form (so when D3DCompile lands, no Kage→GLSL→HLSL translation
+// step runs — the bytes go straight to D3DCompile). nativeUniforms
+// carries the combined-stage uniform layout the framework's per-draw
+// packer uses to write SetUniform* values into the constant buffer.
 type Shader struct {
 	dev            *Device
 	vertexSource   string
 	fragmentSource string
 	attributes     []backend.VertexAttribute
 	uniforms       map[string]interface{}
+	nativeMode     bool
+	nativeUniforms []backend.NativeUniformField
 }
 
 // SetUniformFloat sets a float uniform.
