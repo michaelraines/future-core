@@ -1,16 +1,24 @@
 //go:build windows && !soft
 
-// Package d3d12 provides pure-Go bindings to DirectX 12 and DXGI via purego.
-// All COM interface calls go through vtable dispatch — no CGo required.
+// Package d3d12 provides pure-Go bindings to DirectX 12 and DXGI via purego
+// (for ABI dispatch) plus the standard library's syscall package (for DLL
+// loading on Windows). All COM interface calls go through vtable dispatch
+// — no CGo required.
 //
 // DX12 uses COM (Component Object Model) interfaces where each object has a
 // vtable pointer. Method calls are dispatched by reading function pointers
 // from the vtable at known offsets.
+//
+// Library loading: the syscall.LoadLibrary / syscall.GetProcAddress pair is
+// the right primitive on Windows (purego.Dlopen / Dlsym are POSIX-only and
+// don't compile here). Vtable calls and function-pointer dispatch still go
+// through purego's portable SyscallN / RegisterFunc helpers.
 package d3d12
 
 import (
 	"fmt"
 	"runtime"
+	"syscall"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -236,19 +244,19 @@ func Init() error {
 		return fmt.Errorf("d3d12: DirectX 12 is only available on Windows")
 	}
 
-	var err error
-
 	// Load DXGI.
-	dxgiLib, err = purego.Dlopen("dxgi.dll", purego.RTLD_LAZY)
+	dxgiHandle, err := syscall.LoadLibrary("dxgi.dll")
 	if err != nil {
 		return fmt.Errorf("d3d12: failed to load dxgi.dll: %w", err)
 	}
+	dxgiLib = uintptr(dxgiHandle)
 
 	// Load D3D12.
-	d3d12Lib, err = purego.Dlopen("d3d12.dll", purego.RTLD_LAZY)
+	d3d12Handle, err := syscall.LoadLibrary("d3d12.dll")
 	if err != nil {
 		return fmt.Errorf("d3d12: failed to load d3d12.dll: %w", err)
 	}
+	d3d12Lib = uintptr(d3d12Handle)
 
 	if err := resolveSymbol(dxgiLib, "CreateDXGIFactory1", &fnCreateDXGIFactory1); err != nil {
 		return err
@@ -622,8 +630,13 @@ func callCOM7(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) uintptr {
 }
 
 // resolveSymbol loads a symbol from a DLL into a function pointer.
+//
+// purego.Dlsym is POSIX-only; on Windows the equivalent is
+// syscall.GetProcAddress against the loaded DLL handle. The returned
+// function-pointer value is then registered via purego.RegisterFunc
+// (cross-platform) so the existing call-site dispatch keeps working.
 func resolveSymbol(handle uintptr, name string, fn interface{}) error {
-	sym, err := purego.Dlsym(handle, name)
+	sym, err := syscall.GetProcAddress(syscall.Handle(handle), name)
 	if err != nil {
 		return fmt.Errorf("d3d12: failed to resolve %s: %w", name, err)
 	}
