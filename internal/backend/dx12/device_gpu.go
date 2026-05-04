@@ -426,9 +426,17 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 
 // NewPipeline creates a DX12 pipeline state object.
 //
-// TODO(dx12-native): this just stores the descriptor today — no
-// ID3D12PipelineState is created. When native graphics rendering lands,
-// build the PSO from the descriptor including:
+// When desc.Shader was produced via NewShaderNative (i.e. the
+// nativeMode flag is set, carrying hand-written HLSL source rather
+// than translator output), this compiles each stage to DXBC via
+// D3DCompile and stashes the bytecode on the Pipeline so the (still-
+// pending) ID3D12PipelineState creation step can hand it to
+// D3D12_GRAPHICS_PIPELINE_STATE_DESC without recompiling. Compile
+// errors propagate up so authors of HLSL native variants see real
+// shader-compiler diagnostics instead of silent rendering failures.
+//
+// TODO(dx12-native): create the actual ID3D12PipelineState here. When
+// that lands, build the PSO from the descriptor including:
 //   - D3D12_DEPTH_STENCIL_DESC.FrontFace/BackFace from desc.Stencil when
 //     desc.StencilEnable is true
 //   - DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT matching the attached DSV
@@ -437,10 +445,18 @@ func (d *Device) NewRenderTarget(desc backend.RenderTargetDescriptor) (backend.R
 //
 // Then flip Capabilities.SupportsStencil=true in this file.
 func (d *Device) NewPipeline(desc backend.PipelineDescriptor) (backend.Pipeline, error) {
-	return &Pipeline{
-		dev:  d,
-		desc: desc,
-	}, nil
+	p := &Pipeline{dev: d, desc: desc}
+
+	if sh, ok := desc.Shader.(*Shader); ok && sh.nativeMode {
+		vb, pb, err := compileNativeHLSL(sh)
+		if err != nil {
+			return nil, err
+		}
+		p.vertexBytecode = vb
+		p.pixelBytecode = pb
+	}
+
+	return p, nil
 }
 
 // Capabilities returns DirectX 12 device capabilities.
