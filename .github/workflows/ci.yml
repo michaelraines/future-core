@@ -114,12 +114,33 @@ jobs:
       - name: Build
         run: make TAGS=soft build
 
-  # NOTE: a dedicated DX12 (WARP) — Windows job will land in a follow-up
-  # PR once `internal/d3d12/d3d12.go` is ported to use Windows-compatible
-  # dynamic-loading APIs. The current bindings use purego's Linux/macOS
-  # entry points (`Dlopen`, `Dlsym`, `RTLD_LAZY`), which don't exist on
-  # Windows — adding the CI job now would surface a 30-second build
-  # failure that gates all PRs without exercising any real coverage.
-  # The Docker / vkd3d-proton local dev loop (this PR) lets the Windows
-  # ABI port land first; once that's compiling, the WARP CI job is a
-  # straightforward drop-in.
+  # DX12 GPU-path build verification on Windows. Runs WITHOUT
+  # `-tags soft`, so the real `internal/d3d12/` bindings + the
+  # `internal/backend/dx12/` `_gpu.go` files compile end-to-end —
+  # the only Windows compilation path that exercises them. The
+  # runtime path is still incomplete; conformance tests will land
+  # incrementally and run against WARP (Microsoft's software DX12
+  # implementation, included on every Windows install — no GPU
+  # required on the runner). Mirrors Vulkan's lavapipe-in-Docker
+  # pattern: strict build verification in CI, no GPU hardware.
+  dx12:
+    name: DX12 (WARP) — Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Build (DX12 GPU path)
+        shell: bash
+        run: go build ./internal/backend/dx12/... ./internal/d3d12/...
+
+      # Test step deliberately omitted until the dx12 backend's
+      # runtime path is at parity with the other GPU backends. Adding
+      # it back is a one-line change once conformance scenes pass on
+      # WARP.
