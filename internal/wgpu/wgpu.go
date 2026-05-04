@@ -13,6 +13,8 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+
+	"github.com/michaelraines/future-core/internal/dlopen"
 )
 
 // ---------------------------------------------------------------------------
@@ -1248,7 +1250,7 @@ func loadWGPULib(defaultName string) (uintptr, error) {
 
 	var firstErr error
 	for _, name := range names {
-		h, err := purego.Dlopen(name, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+		h, err := dlopen.Open(name)
 		if err == nil {
 			return h, nil
 		}
@@ -1289,7 +1291,7 @@ func Init() error {
 		if err != nil {
 			return
 		}
-		sym, e := purego.Dlsym(lib, name)
+		sym, e := dlopen.Sym(lib, name)
 		if e != nil {
 			err = fmt.Errorf("wgpu: symbol %s: %w", name, e)
 			return
@@ -1300,13 +1302,13 @@ func Init() error {
 	reg(&fnCreateInstance, "wgpuCreateInstance")
 	// InstanceRequestAdapter and AdapterRequestDevice use SyscallN (struct-by-value params).
 	if err == nil {
-		symInstanceRequestAdapter, err = purego.Dlsym(lib, "wgpuInstanceRequestAdapter")
+		symInstanceRequestAdapter, err = dlopen.Sym(lib, "wgpuInstanceRequestAdapter")
 	}
 	if err == nil {
-		symAdapterRequestDevice, err = purego.Dlsym(lib, "wgpuAdapterRequestDevice")
+		symAdapterRequestDevice, err = dlopen.Sym(lib, "wgpuAdapterRequestDevice")
 	}
 	if err == nil {
-		symInstanceWaitAny, err = purego.Dlsym(lib, "wgpuInstanceWaitAny")
+		symInstanceWaitAny, err = dlopen.Sym(lib, "wgpuInstanceWaitAny")
 	}
 	reg(&fnDeviceGetQueue, "wgpuDeviceGetQueue")
 	reg(&fnDeviceCreateTexture, "wgpuDeviceCreateTexture")
@@ -1350,7 +1352,7 @@ func Init() error {
 	reg(&fnCommandEncoderCopyTextureToBuffer, "wgpuCommandEncoderCopyTextureToBuffer")
 	// BufferMapAsync uses SyscallN (struct-by-value param).
 	if err == nil {
-		symBufferMapAsync, err = purego.Dlsym(lib, "wgpuBufferMapAsync")
+		symBufferMapAsync, err = dlopen.Sym(lib, "wgpuBufferMapAsync")
 	}
 	reg(&fnBufferGetMappedRange, "wgpuBufferGetMappedRange")
 	reg(&fnBufferUnmap, "wgpuBufferUnmap")
