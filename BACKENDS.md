@@ -128,12 +128,19 @@ fallback** for CI. Four of those (Vulkan, Metal, WebGPU, DX12) also have
 | Backend | GPU Rendering | Soft Fallback | Conformance | Shader Pipeline |
 |---|---|---|---|---|
 | Software | N/A (CPU) | N/A | 10/10 | N/A |
-| OpenGL 3.3 | Production | None | N/A (GPU) | GLSL 330 core |
-| Vulkan | Production (20/22 demo scenes parity) | Yes | 10/10 (soft) | GLSL→SPIR-V (shaderc) |
-| Metal | Clear + draw working | Yes | 10/10 (soft) | GLSL→MSL (pure Go) |
-| WebGPU | Pipeline wired | Yes | 10/10 (soft) | GLSL→WGSL (pure Go) |
-| DirectX 12 | Early / incomplete | Yes | 10/10 (soft) | Planned (HLSL) |
-| WebGL2 | Browser implementation in place; parity follow-up underway | Yes | 10/10 (soft) | GLSL 330 → GLSL ES 3.00 |
+| OpenGL 3.3 | Production | None | N/A (GPU) | hand-written GLSL 330 (`lang_glsl`); driver compiles directly |
+| Vulkan | Production (20/22 demo scenes parity) | Yes | 10/10 (soft) | hand-written GLSL 330 (`lang_glsl`) → SPIR-V via libshaderc at backend init |
+| Metal | Production (6/6 demo scenes parity) | Yes | 10/10 (soft) | hand-written MSL (`lang_msl`); Metal API compiles at init |
+| WebGPU | Production | Yes | 10/10 (soft) | hand-written WGSL (`lang_wgsl`); browser/wgpu-native compiles directly |
+| DirectX 12 | Early / incomplete | Yes | 10/10 (soft) | Planned: hand-written HLSL (`lang_hlsl`) |
+| WebGL2 | Production (6/6 demo scenes parity) | Yes | 10/10 (soft) | hand-written GLSL ES 3.00 (`lang_glsles`); browser compiles directly |
+
+Kage remains the canonical authoring source — every shader has a
+`.kage` sibling — but production builds set the per-backend
+`lang_*` tag and the framework routes the hand-written variant.
+Kage → native translation is the fallback path used only when no
+native variant is registered for the active backend's preferred
+language (e.g. custom user shaders shipped in example scenes).
 
 ---
 
