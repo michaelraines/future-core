@@ -371,9 +371,9 @@ func DeviceCreateCommittedResource(dev Device, heapProps *HeapProperties, resDes
 // DeviceCreateFence creates a fence for GPU/CPU synchronization.
 func DeviceCreateFence(dev Device, initialValue uint64) (Fence, error) {
 	vtable := comVtable(uintptr(dev))
-	// ID3D12Device::CreateFence is at vtable index 31.
+	// ID3D12Device::CreateFence is at vtable index 36.
 	var fence Fence
-	hr := HRESULT(callCOM4(vtable[31], uintptr(dev), uintptr(initialValue), 0, uintptr(unsafe.Pointer(&fence))))
+	hr := HRESULT(callCOM4(vtable[36], uintptr(dev), uintptr(initialValue), 0, uintptr(unsafe.Pointer(&fence))))
 	if !hr.Succeeded() {
 		return 0, fmt.Errorf("CreateFence: %w", hr)
 	}
@@ -413,8 +413,10 @@ func DeviceCreateDescriptorHeap(dev Device, heapType, numDescriptors int32) (Des
 // CmdClose closes the command list.
 func CmdClose(list GraphicsCommandList) error {
 	vtable := comVtable(uintptr(list))
-	// ID3D12GraphicsCommandList::Close is at vtable index 7.
-	hr := HRESULT(callCOM1(vtable[7], uintptr(list)))
+	// ID3D12GraphicsCommandList::Close is at vtable index 9
+	// (IUnknown 3 + ID3D12Object 4 + ID3D12DeviceChild 1 +
+	// ID3D12CommandList 1 = 9 inherited slots before own methods).
+	hr := HRESULT(callCOM1(vtable[9], uintptr(list)))
 	if !hr.Succeeded() {
 		return fmt.Errorf("CommandList::Close: %w", hr)
 	}
@@ -424,8 +426,8 @@ func CmdClose(list GraphicsCommandList) error {
 // CmdReset resets the command list.
 func CmdReset(list GraphicsCommandList, alloc CommandAllocator) error {
 	vtable := comVtable(uintptr(list))
-	// ID3D12GraphicsCommandList::Reset is at vtable index 8.
-	hr := HRESULT(callCOM3(vtable[8], uintptr(list), uintptr(alloc), 0))
+	// ID3D12GraphicsCommandList::Reset is at vtable index 10.
+	hr := HRESULT(callCOM3(vtable[10], uintptr(list), uintptr(alloc), 0))
 	if !hr.Succeeded() {
 		return fmt.Errorf("CommandList::Reset: %w", hr)
 	}
@@ -435,22 +437,22 @@ func CmdReset(list GraphicsCommandList, alloc CommandAllocator) error {
 // CmdClearRenderTargetView clears a render target view.
 func CmdClearRenderTargetView(list GraphicsCommandList, handle CPUDescriptorHandle, color ClearColor) {
 	vtable := comVtable(uintptr(list))
-	// ID3D12GraphicsCommandList::ClearRenderTargetView is at vtable index 47.
-	callCOM4(vtable[47], uintptr(list), handle.Ptr, uintptr(unsafe.Pointer(&color)), 0)
+	// ID3D12GraphicsCommandList::ClearRenderTargetView is at vtable index 48.
+	callCOM4(vtable[48], uintptr(list), handle.Ptr, uintptr(unsafe.Pointer(&color)), 0)
 }
 
 // CmdSetViewports sets viewports.
 func CmdSetViewports(list GraphicsCommandList, vp Viewport) {
 	vtable := comVtable(uintptr(list))
-	// RSSetViewports is at vtable index 43.
-	callCOM3(vtable[43], uintptr(list), 1, uintptr(unsafe.Pointer(&vp)))
+	// RSSetViewports is at vtable index 21.
+	callCOM3(vtable[21], uintptr(list), 1, uintptr(unsafe.Pointer(&vp)))
 }
 
 // CmdSetScissorRects sets scissor rectangles.
 func CmdSetScissorRects(list GraphicsCommandList, rect Rect) {
 	vtable := comVtable(uintptr(list))
-	// RSSetScissorRects is at vtable index 44.
-	callCOM3(vtable[44], uintptr(list), 1, uintptr(unsafe.Pointer(&rect)))
+	// RSSetScissorRects is at vtable index 22.
+	callCOM3(vtable[22], uintptr(list), 1, uintptr(unsafe.Pointer(&rect)))
 }
 
 // CmdSetVertexBuffers binds vertex buffers.
@@ -462,8 +464,8 @@ func CmdSetVertexBuffers(list GraphicsCommandList, slot uint32, gpuAddr uintptr,
 	}
 	view := vbView{BufferLocation: gpuAddr, SizeInBytes: sizeInBytes, StrideInBytes: strideInBytes}
 	vtable := comVtable(uintptr(list))
-	// IASetVertexBuffers is at vtable index 39.
-	callCOM4(vtable[39], uintptr(list), uintptr(slot), 1, uintptr(unsafe.Pointer(&view)))
+	// IASetVertexBuffers is at vtable index 44.
+	callCOM4(vtable[44], uintptr(list), uintptr(slot), 1, uintptr(unsafe.Pointer(&view)))
 }
 
 // CmdSetIndexBuffer binds an index buffer.
@@ -475,8 +477,8 @@ func CmdSetIndexBuffer(list GraphicsCommandList, gpuAddr uintptr, sizeInBytes ui
 	}
 	view := ibView{BufferLocation: gpuAddr, SizeInBytes: sizeInBytes, Format: format}
 	vtable := comVtable(uintptr(list))
-	// IASetIndexBuffer is at vtable index 40.
-	callCOM2(vtable[40], uintptr(list), uintptr(unsafe.Pointer(&view)))
+	// IASetIndexBuffer is at vtable index 43.
+	callCOM2(vtable[43], uintptr(list), uintptr(unsafe.Pointer(&view)))
 }
 
 // CmdDrawInstanced issues a non-indexed draw call.
@@ -540,8 +542,10 @@ func FenceGetCompletedValue(fence Fence) uint64 {
 // ResourceGetGPUVirtualAddress returns the GPU virtual address of a resource.
 func ResourceGetGPUVirtualAddress(res Resource) uintptr {
 	vtable := comVtable(uintptr(res))
-	// GetGPUVirtualAddress is at vtable index 19.
-	return callCOM1(vtable[19], uintptr(res))
+	// ID3D12Resource::GetGPUVirtualAddress is at vtable index 11
+	// (IUnknown 3 + ID3D12Object 4 + ID3D12DeviceChild 1 +
+	// ID3D12Pageable 0 + Map 0 + Unmap 1 + GetDesc 1 = 8 + 3 = 11).
+	return callCOM1(vtable[11], uintptr(res))
 }
 
 // ResourceMap maps a resource for CPU access.
