@@ -134,3 +134,27 @@ which gomobile drops silently).
 Always pass `-androidapi=21` (or higher). NDK r25+ dropped API 16
 support; gomobile's default (16) fails preflight with
 `unsupported API version 16 (not in 19..33)`.
+
+## Editing the embedded Java sources
+
+`_files/FutureCoreView.java` and `_files/FutureCoreSurfaceView.java`
+are loaded via `//go:embed` in `main.go`. Edits to those files only
+take effect after `go install ./cmd/futurecoremobile/` to rebuild the
+binary on `$GOPATH/bin`. The AAR build invokes the *installed*
+binary, not the source tree. Symptom of forgetting this: your Java
+changes don't appear in the produced AAR's `classes.jar` even though
+the diff looks right locally.
+
+## gomobile bind type mappings (recap)
+
+| Go | Java |
+|----|------|
+| `int`, `int64` | `long` (cast back at call site: `(int) Futurecoreview.foo()`) |
+| `float32` | `float` |
+| `string` | `String` |
+| `bool` | `boolean` |
+| `uintptr` | **silently dropped** — use `int64` for pointer payloads |
+
+The `int → long` mapping bites every time you forget to cast — javac
+errors with `incompatible types: possible lossy conversion from long
+to int`.

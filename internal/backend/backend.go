@@ -90,6 +90,29 @@ type DeviceCapabilities struct {
 	// draw path when both the device and the current render target have
 	// stencil support; otherwise it falls back to a plain indexed draw.
 	SupportsStencil bool
+
+	// SurfaceRotation is the engine-side pre-rotation, in degrees CCW
+	// (0/90/180/270), needed to make rendered content display correctly
+	// after the device's PreTransform. Currently only set by the Vulkan
+	// backend on Android with a rotated surface; every other backend
+	// reports 0.
+	//
+	// When non-zero, the engine must:
+	//   - compose its projection matrix with a Z-rotation by
+	//     SurfaceRotation degrees CCW (so logical-screen coords map into
+	//     the natural-orientation swapchain image), and
+	//   - source its render-pass viewport from SurfaceWidth/SurfaceHeight
+	//     instead of the window's framebuffer size. The swapchain image
+	//     extent for 90°/270° is swapped from the user-facing surface
+	//     dimensions, so a viewport sized to the framebuffer overruns
+	//     the swapchain image and clips content.
+	SurfaceRotation int
+	// SurfaceWidth and SurfaceHeight are the swapchain image dimensions
+	// in the natural orientation (i.e. swapped from the user-facing
+	// surface dims when SurfaceRotation is 90 or 270). Zero if the
+	// backend has no swapchain.
+	SurfaceWidth  int
+	SurfaceHeight int
 }
 
 // Texture represents a GPU texture resource.
