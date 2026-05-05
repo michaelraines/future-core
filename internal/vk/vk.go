@@ -437,7 +437,11 @@ const (
 
 // VkSurfaceTransformFlagBitsKHR.
 const (
-	SurfaceTransformIdentityKHR = 0x00000001
+	SurfaceTransformIdentityKHR  = 0x00000001
+	SurfaceTransformRotate90KHR  = 0x00000002
+	SurfaceTransformRotate180KHR = 0x00000004
+	SurfaceTransformRotate270KHR = 0x00000008
+	SurfaceTransformInheritKHR   = 0x00000100
 )
 
 // Null handle.
