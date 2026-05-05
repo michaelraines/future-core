@@ -269,6 +269,17 @@ func TestTouchPressAndRelease(t *testing.T) {
 	ids = s.TouchIDs()
 	require.Len(t, ids, 1)
 
+	// Until the next EndTick, TouchPosition still resolves the
+	// last-known press point via the justPressedTouches fallback —
+	// this is what makes a fast tap (DOWN+UP between two ticks)
+	// observable to the game. After Update, justPressedTouches is
+	// cleared and the lookup returns false.
+	x, y, ok = s.TouchPosition(1)
+	require.True(t, ok)
+	require.InDelta(t, 10.0, x, 1e-9)
+	require.InDelta(t, 20.0, y, 1e-9)
+
+	s.Update()
 	_, _, ok = s.TouchPosition(1)
 	require.False(t, ok)
 }
@@ -564,13 +575,46 @@ func TestAppendJustReleasedTouchIDsOnlyFiresOnEnded(t *testing.T) {
 	require.Empty(t, s.AppendJustReleasedTouchIDs(nil))
 }
 
+// TestFastTapBetweenTicksIsObservable guards against the Android
+// touch-race regression: a tap whose DOWN+UP both arrive before the
+// next game tick must still register as a JustPressed (and
+// JustReleased) once, with the press position queryable. Earlier
+// the JustPressed query iterated over s.touches; if UP fired first
+// the touch was already deleted and the click silently dropped.
+func TestFastTapBetweenTicksIsObservable(t *testing.T) {
+	s := New()
+	// Both events arrive before any game.Update — typical Android
+	// behavior because JNI dispatches MotionEvents at touch rate
+	// independent of the engine's tick loop.
+	s.OnTouchEvent(platform.TouchEvent{ID: 7, X: 100, Y: 200, Pressure: 1, Action: platform.ActionPress})
+	s.OnTouchEvent(platform.TouchEvent{ID: 7, X: 100, Y: 200, Action: platform.ActionRelease})
+
+	require.ElementsMatch(t, []int{7}, s.AppendJustPressedTouchIDs(nil),
+		"fast tap must still register as JustPressed")
+	require.ElementsMatch(t, []int{7}, s.AppendJustReleasedTouchIDs(nil),
+		"fast tap must also register as JustReleased")
+	x, y, ok := s.TouchPosition(7)
+	require.True(t, ok, "TouchPosition must fall back to the justPressed set when touch already released")
+	require.Equal(t, 100.0, x)
+	require.Equal(t, 200.0, y)
+
+	s.Update()
+	require.Empty(t, s.AppendJustPressedTouchIDs(nil), "edge clears after one tick")
+	require.Empty(t, s.AppendJustReleasedTouchIDs(nil))
+}
+
 func TestTouchEdgeIgnoresMoveOnlyUpdates(t *testing.T) {
 	s := New()
 
 	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 10, Y: 20, Action: platform.ActionPress})
 	s.Update()
-	// A move-only event (no press/release) must not look like a new press.
-	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 15, Y: 25})
+	// A move-only event must not look like a new press. ActionRepeat
+	// is the explicit move opcode; the previous version of this test
+	// relied on a default-zero Action which actually equals
+	// ActionPress — the bug was masked by the prevTouches set
+	// difference. Now that JustPressed reads from an explicit edge
+	// set, the move opcode must be specified to test the property.
+	s.OnTouchEvent(platform.TouchEvent{ID: 1, X: 15, Y: 25, Action: platform.ActionRepeat})
 	require.Empty(t, s.AppendJustPressedTouchIDs(nil))
 	require.Empty(t, s.AppendJustReleasedTouchIDs(nil))
 }
