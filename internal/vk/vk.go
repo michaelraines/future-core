@@ -423,7 +423,10 @@ const (
 
 // VkCompositeAlphaFlagBitsKHR.
 const (
-	CompositeAlphaOpaqueKHR = 0x00000001
+	CompositeAlphaOpaqueKHR         = 0x00000001
+	CompositeAlphaPreMultipliedKHR  = 0x00000002
+	CompositeAlphaPostMultipliedKHR = 0x00000004
+	CompositeAlphaInheritKHR        = 0x00000008
 )
 
 // VkSurfaceTransformFlagBitsKHR.

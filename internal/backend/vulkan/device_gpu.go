@@ -90,8 +90,21 @@ type Device struct {
 	swapchainRenderPassLoad vk.RenderPass // LoadOp=Load (for sprite-pass screen re-entries)
 	currentImageIndex       uint32
 	hasSwapchain            bool
-	imageAvailableSem       vk.Semaphore
-	renderFinishedSem       vk.Semaphore
+	// imageAvailableSem is signaled by vkAcquireNextImageKHR and waited
+	// on at submit time. One per "frame in flight"; we currently only
+	// have one frame in flight (single fence model — see resetFrame),
+	// so a single semaphore is correct here.
+	imageAvailableSem vk.Semaphore
+
+	// renderFinishedSems is signaled at submit time and waited on by
+	// vkQueuePresentKHR. The Vulkan spec requires the signal-semaphore
+	// to be UNSIGNALED at submit time (VUID-vkQueueSubmit-pSignalSemaphores-00067)
+	// — a single shared semaphore reused across the swapchain's N images
+	// fails this on Android (where N is typically 3) because image i+1
+	// can be acquired and resubmitted before image i has been presented.
+	// Per Vulkan-Guide swapchain_semaphore_reuse.html, the safe pattern
+	// is one per swapchain image, indexed by the acquired image index.
+	renderFinishedSems []vk.Semaphore
 
 	// disposing is set by Device.Dispose before cascading to per-resource
 	// teardown. Every Texture.Dispose / RenderTarget.Dispose was calling
@@ -469,18 +482,23 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 			return fmt.Errorf("vulkan: %w", serr)
 		}
 
-		// Create synchronization semaphores for swapchain.
+		// Create synchronization semaphores for swapchain. One acquire
+		// semaphore (single frame in flight) and one render-finished
+		// semaphore per swapchain image (see field doc above).
 		imgSem, serr := vk.CreateSemaphore(d.device)
 		if serr != nil {
 			return fmt.Errorf("vulkan: %w", serr)
 		}
 		d.imageAvailableSem = imgSem
 
-		renSem, serr := vk.CreateSemaphore(d.device)
-		if serr != nil {
-			return fmt.Errorf("vulkan: %w", serr)
+		d.renderFinishedSems = make([]vk.Semaphore, len(d.swapchainImages))
+		for i := range d.renderFinishedSems {
+			renSem, serr := vk.CreateSemaphore(d.device)
+			if serr != nil {
+				return fmt.Errorf("vulkan: %w", serr)
+			}
+			d.renderFinishedSems[i] = renSem
 		}
-		d.renderFinishedSem = renSem
 		d.hasSwapchain = true
 	}
 
@@ -879,9 +897,12 @@ func (d *Device) Dispose() {
 		if d.imageAvailableSem != 0 {
 			vk.DestroySemaphore(d.device, d.imageAvailableSem)
 		}
-		if d.renderFinishedSem != 0 {
-			vk.DestroySemaphore(d.device, d.renderFinishedSem)
+		for _, sem := range d.renderFinishedSems {
+			if sem != 0 {
+				vk.DestroySemaphore(d.device, sem)
+			}
 		}
+		d.renderFinishedSems = nil
 	}
 	if d.surface != 0 {
 		vk.DestroySurfaceKHR(d.instance, d.surface)
@@ -1246,6 +1267,12 @@ func (d *Device) EndFrame() {
 
 	if d.hasSwapchain {
 		// Submit with semaphore synchronization for presentation.
+		// Pick the per-image render-finished semaphore (signaled at
+		// submit, waited on by present). One per swapchain image so we
+		// don't hit VUID-vkQueueSubmit-pSignalSemaphores-00067 on
+		// triple-buffered swapchains (Android default = 3 images).
+		signalSem := d.renderFinishedSems[d.currentImageIndex]
+
 		waitStage := uint32(vk.PipelineStageColorAttachmentOutput)
 		submitInfo := vk.SubmitInfo{
 			SType:                vk.StructureTypeSubmitInfo,
@@ -1255,12 +1282,13 @@ func (d *Device) EndFrame() {
 			CommandBufferCount:   1,
 			PCommandBuffers:      uintptr(unsafe.Pointer(&cmd)),
 			SignalSemaphoreCount: 1,
-			PSignalSemaphores:    uintptr(unsafe.Pointer(&d.renderFinishedSem)),
+			PSignalSemaphores:    uintptr(unsafe.Pointer(&signalSem)),
 		}
 		err := vk.QueueSubmit(d.graphicsQueue, &submitInfo, d.fence)
 		runtime.KeepAlive(cmd)
 		runtime.KeepAlive(submitInfo)
 		runtime.KeepAlive(waitStage)
+		runtime.KeepAlive(signalSem)
 		if err != nil {
 			return
 		}
@@ -1270,7 +1298,7 @@ func (d *Device) EndFrame() {
 		presentInfo := vk.PresentInfoKHR{
 			SType:              vk.StructureTypePresentInfoKHR,
 			WaitSemaphoreCount: 1,
-			PWaitSemaphores:    uintptr(unsafe.Pointer(&d.renderFinishedSem)),
+			PWaitSemaphores:    uintptr(unsafe.Pointer(&signalSem)),
 			SwapchainCount:     1,
 			PSwapchains:        uintptr(unsafe.Pointer(&d.swapchain)),
 			PImageIndices:      uintptr(unsafe.Pointer(&imageIndex)),
@@ -1864,6 +1892,23 @@ func (d *Device) createSwapchain() error {
 		imageCount = caps.MaxImageCount
 	}
 
+	// Pick a supported composite-alpha mode. Most desktop drivers support
+	// OPAQUE; Android (Adreno) often only advertises INHERIT, which fails
+	// VUID-VkSwapchainCreateInfoKHR-compositeAlpha-01280 if we hardcode
+	// OPAQUE. Try OPAQUE → INHERIT → PRE → POST.
+	compositeAlpha := uint32(vk.CompositeAlphaOpaqueKHR)
+	for _, candidate := range []uint32{
+		vk.CompositeAlphaOpaqueKHR,
+		vk.CompositeAlphaInheritKHR,
+		vk.CompositeAlphaPreMultipliedKHR,
+		vk.CompositeAlphaPostMultipliedKHR,
+	} {
+		if caps.SupportedCompositeAlpha&candidate != 0 {
+			compositeAlpha = candidate
+			break
+		}
+	}
+
 	sci := vk.SwapchainCreateInfoKHR{
 		SType:             vk.StructureTypeSwapchainCreateInfoKHR,
 		Surface:           d.surface,
@@ -1876,7 +1921,7 @@ func (d *Device) createSwapchain() error {
 		ImageUsage:        uint32(vk.ImageUsageColorAttachment),
 		ImageSharingMode:  vk.SharingModeExclusive,
 		PreTransform:      caps.CurrentTransform,
-		CompositeAlpha:    vk.CompositeAlphaOpaqueKHR,
+		CompositeAlpha:    compositeAlpha,
 		PresentMode:       presentMode,
 		Clipped:           1,
 		OldSwapchain:      d.swapchain, // reuse old swapchain if recreating
