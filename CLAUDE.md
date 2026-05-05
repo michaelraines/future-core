@@ -594,6 +594,19 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   Destroying early causes the GPU to read freed descriptors (zeros).
 - **Never leave debug code in `bindUniforms`** — filling the UBO with identity
   matrices or debug patterns overwrites actual uniform data every frame.
+- **GLSL UBOs in built-in shaders must be explicit `std140 binding=0`
+  blocks**, not loose `uniform <type> <name>;` declarations. shaderc's
+  `auto_bind_uniforms` packs each stage's loose uniforms into a
+  per-stage UBO with stage-local offsets — fragment-only uniforms
+  start at offset 0 in the fragment UBO even when the engine's
+  combined `SpriteUniformLayout` puts them at offset 64+. The
+  combined-layout packer then writes garbage at the offsets the
+  fragment shader actually reads, producing all-black sprites on
+  Adreno (Galaxy S25, Android Vulkan/SPIR-V path). Desktop GLSL+shaderc
+  hides it because that path runs `ExtractUniformLayout` per-stage.
+  Use `spirv-dis builtin/sprite.frag.spv | grep Offset` to verify
+  offsets match `SpriteUniformLayout` after any built-in-shader edit.
+  Requires `#version 450 core` for the `binding=` qualifier.
 - **Only Vulkan and WebGPU use `NoGL`** — Metal and DX12 still use the GL
   presenter (soft-delegation → ReadScreen → GL blit). Setting `needsNoGL`
   for non-Vulkan/WebGPU backends breaks their display path.
