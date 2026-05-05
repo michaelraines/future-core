@@ -146,6 +146,18 @@ func DeviceScale() float64 {
 	return futurerender.AndroidDeviceScale()
 }
 
+// RequestedOrientation returns the engine's current orientation
+// preference for the host Activity to consume. Values match
+// futurerender.Orientation: 0 = default (system), 1 = portrait,
+// 2 = landscape. Host-side Java polls this after each tick and
+// invokes Activity.setRequestedOrientation when it changes — the
+// engine itself can't reach the Activity, so this poll-then-apply
+// pattern bridges the two without a Go→Java callback (gomobile
+// bind doesn't support those).
+func RequestedOrientation() int {
+	return int(futurerender.ScreenOrientation())
+}
+
 // Input dispatch — routes Java-sourced MotionEvent / KeyEvent /
 // InputDevice data through futurerender's embedded-engine API. Each
 // function forwards to AndroidDispatch* which type-asserts the engine's
