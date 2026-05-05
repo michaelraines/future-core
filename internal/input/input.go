@@ -26,10 +26,19 @@ type State struct {
 	scrollDX, scrollDY  float64
 
 	// Touch. prevTouches is a snapshot of touches at the start of the
-	// current tick (captured in Update) so justPressed / justReleased
-	// can be computed from set difference against touches.
-	touches     map[int]Touch
-	prevTouches map[int]Touch
+	// current tick (captured in Update) so a touch that's still held
+	// at the next tick is excluded from JustPressed. justPressedTouches
+	// / justReleasedTouches accumulate edge events asynchronously
+	// between ticks so a fast tap (DOWN + UP both delivered before
+	// the next BeginTick — common on Android, where JNI dispatches
+	// MotionEvents at touch rate independent of the engine's vsync
+	// loop) is still observable. Without these sets, a tap that starts
+	// and ends inside a single inter-tick window leaves touches and
+	// prevTouches both empty, and the game never sees a click.
+	touches              map[int]Touch
+	prevTouches          map[int]Touch
+	justPressedTouches   map[int]Touch
+	justReleasedTouches  map[int]struct{}
 
 	// Gamepads. prevGamepads mirrors prevTouches for edge-triggered
 	// button queries. gamepadButtonDuration[id][b] tracks hold time.
@@ -55,6 +64,8 @@ func New() *State {
 	return &State{
 		touches:               make(map[int]Touch),
 		prevTouches:           make(map[int]Touch),
+		justPressedTouches:    make(map[int]Touch),
+		justReleasedTouches:   make(map[int]struct{}),
 		gamepads:              make(map[int]Gamepad),
 		prevGamepads:          make(map[int]Gamepad),
 		gamepadButtonDuration: make(map[int]*[16]int),
@@ -123,6 +134,12 @@ func (s *State) EndTick() {
 
 	s.prevGamepads = make(map[int]Gamepad, len(s.gamepads))
 	maps.Copy(s.prevGamepads, s.gamepads)
+
+	// Edge-event sets only live for the tick they were captured in.
+	// Clear here so the next tick starts fresh; OnTouchEvent will
+	// repopulate as new presses/releases arrive.
+	clear(s.justPressedTouches)
+	clear(s.justReleasedTouches)
 
 	s.mouseDX = 0
 	s.mouseDY = 0
@@ -196,9 +213,12 @@ func (s *State) OnMouseScrollEvent(event platform.MouseScrollEvent) {
 func (s *State) OnTouchEvent(event platform.TouchEvent) {
 	switch event.Action {
 	case platform.ActionPress:
-		s.touches[event.ID] = Touch{X: event.X, Y: event.Y, Pressure: event.Pressure}
+		t := Touch{X: event.X, Y: event.Y, Pressure: event.Pressure}
+		s.touches[event.ID] = t
+		s.justPressedTouches[event.ID] = t
 	case platform.ActionRelease:
 		delete(s.touches, event.ID)
+		s.justReleasedTouches[event.ID] = struct{}{}
 	default:
 		s.touches[event.ID] = Touch{X: event.X, Y: event.Y, Pressure: event.Pressure}
 	}
@@ -305,13 +325,18 @@ func (s *State) TouchIDs() []int {
 	return ids
 }
 
-// TouchPosition returns the position of a touch point.
+// TouchPosition returns the position of a touch point. Falls back to
+// the justPressedTouches set so a fast tap (DOWN+UP both arrived
+// before the game read the state) still reports the press position
+// when AppendJustPressedTouchIDs surfaces the ID.
 func (s *State) TouchPosition(id int) (x, y float64, ok bool) {
-	t, ok := s.touches[id]
-	if !ok {
-		return 0, 0, false
+	if t, ok := s.touches[id]; ok {
+		return t.X, t.Y, true
 	}
-	return t.X, t.Y, true
+	if t, ok := s.justPressedTouches[id]; ok {
+		return t.X, t.Y, true
+	}
+	return 0, 0, false
 }
 
 // TouchPressure returns the pressure of a touch point (0.0 to 1.0).
@@ -404,25 +429,26 @@ func (s *State) AppendJustReleasedKeys(keys []platform.Key) []platform.Key {
 	return keys
 }
 
-// AppendJustPressedTouchIDs appends IDs of touches that started this tick
-// (present now but absent last tick). Order is not specified — touch IDs
-// are typically unordered anyway.
+// AppendJustPressedTouchIDs appends IDs of touches that began since
+// the previous EndTick. Reads the asynchronous justPressedTouches set
+// (populated by OnTouchEvent) rather than the live touches set so a
+// fast tap whose DOWN+UP both arrive in one inter-tick window is
+// still observable.
 func (s *State) AppendJustPressedTouchIDs(ids []int) []int {
-	for id := range s.touches {
-		if _, had := s.prevTouches[id]; !had {
-			ids = append(ids, id)
-		}
+	for id := range s.justPressedTouches {
+		ids = append(ids, id)
 	}
 	return ids
 }
 
-// AppendJustReleasedTouchIDs appends IDs of touches that ended this tick
-// (present last tick but absent now).
+// AppendJustReleasedTouchIDs appends IDs of touches that ended since
+// the previous EndTick. Same rationale as AppendJustPressedTouchIDs:
+// uses the edge set so a fast tap (down+up in a single inter-tick
+// window) is reported as both pressed and released in the next game
+// tick rather than being silently dropped.
 func (s *State) AppendJustReleasedTouchIDs(ids []int) []int {
-	for id := range s.prevTouches {
-		if _, still := s.touches[id]; !still {
-			ids = append(ids, id)
-		}
+	for id := range s.justReleasedTouches {
+		ids = append(ids, id)
 	}
 	return ids
 }
