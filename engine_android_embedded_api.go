@@ -221,13 +221,29 @@ func rawInputWindow() *platandroid.Window {
 
 // AndroidDispatchTouch routes a MotionEvent sample into the engine's
 // input handler. action is one of android.MotionAction*; id is the
-// pointer ID; x/y are in physical pixels.
+// pointer ID; x/y are passed in physical pixels (Android delivers
+// MotionEvent.getX/getY in physical pixels) and converted here to
+// the engine's logical coordinate space so they're consistent with
+// every other backend's TouchPosition contract (web, desktop both
+// deliver logical coords). Without the conversion the framework's
+// PointerCollector hit-tests at physical positions but the
+// component tree was laid out in logical units, so taps appear to
+// land on the wrong tile (or empty space) at high DPI.
 func AndroidDispatchTouch(action, id int, x, y float32) {
 	embeddedMu.Lock()
 	w := rawInputWindow()
+	logicalX, logicalY := x, y
+	if embeddedEngine != nil && embeddedEngine.window != nil {
+		fbW, fbH := embeddedEngine.window.FramebufferSize()
+		logW, logH := embeddedEngine.window.Size()
+		if fbW > 0 && fbH > 0 && logW > 0 && logH > 0 {
+			logicalX = x * float32(logW) / float32(fbW)
+			logicalY = y * float32(logH) / float32(fbH)
+		}
+	}
 	embeddedMu.Unlock()
 	if w != nil {
-		w.HandleRawTouch(action, id, x, y)
+		w.HandleRawTouch(action, id, logicalX, logicalY)
 	}
 }
 
