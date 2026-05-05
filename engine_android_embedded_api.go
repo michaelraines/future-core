@@ -63,6 +63,13 @@ func SetAndroidGame(game Game) {
 	defer embeddedMu.Unlock()
 	if embeddedEngine == nil {
 		embeddedEngine = newPlatformEngine(game)
+		// Register with globalEnginePtr so the public CurrentFPS /
+		// CurrentTPS / CurrentBackend accessors (used by the host
+		// app's debug HUD via libs/rendering/futurecore/window.go)
+		// see the live engine instead of nil. Without this the
+		// embedded Android path runs cleanly but every public
+		// counter accessor returns 0.
+		setEngine(embeddedEngine)
 		return
 	}
 	embeddedEngine.game = game
