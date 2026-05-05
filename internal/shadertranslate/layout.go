@@ -31,7 +31,7 @@ func ExtractUniformLayout(glsl string) ([]UniformField, error) {
 // samplers (which belong in descriptor sets, not UBOs). The regex
 // is shared with the MSL / WGSL translators' parse loops.
 //
-// Also recognises explicit std140 UBO blocks of the form:
+// Also recognizes explicit std140 UBO blocks of the form:
 //
 //	layout(std140, binding = N) uniform BlockName {
 //	    <type> <name>;
