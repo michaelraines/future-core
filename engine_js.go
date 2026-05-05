@@ -28,53 +28,10 @@ const (
 	maxBatchIndices  = 65536 * 6
 )
 
-// Default sprite shader source (GLSL 330 core — translated to WGSL at runtime).
-const spriteVertexShader = `#version 330 core
-
-layout(location = 0) in vec2 aPosition;
-layout(location = 1) in vec2 aTexCoord;
-layout(location = 2) in vec4 aColor;
-
-uniform mat4 uProjection;
-
-out vec2 vTexCoord;
-out vec4 vColor;
-
-void main() {
-    vTexCoord = aTexCoord;
-    vColor = aColor;
-    gl_Position = uProjection * vec4(aPosition, 0.0, 1.0);
-}
-`
-
-const spriteFragmentShader = `#version 330 core
-
-in vec2 vTexCoord;
-in vec4 vColor;
-
-uniform sampler2D uTexture;
-uniform mat4 uColorBody;
-uniform vec4 uColorTranslation;
-
-out vec4 fragColor;
-
-void main() {
-    // Standard premultiplied-alpha sprite shader: sample texture,
-    // modulate by vertex color, apply color matrix. No rgb-vs-alpha
-    // clamp — callers are responsible for supplying correctly
-    // premultiplied vertex colors (ColorScale.ScaleAlpha now scales
-    // all four channels, matching Ebitengine; the vector package
-    // either passes through premultiplied vertex colors or lets
-    // DrawTriangles premultiply straight ones). An earlier revision
-    // did rgb=min(rgb,a) here to compensate for a broken
-    // ScaleAlpha, which silently clamped any channel where straight
-    // RGB exceeded scaled A — turning bright stroke colors into
-    // dim-gray garbage. Removed once ScaleAlpha was fixed at the
-    // source.
-    vec4 c = texture(uTexture, vTexCoord) * vColor;
-    fragColor = uColorBody * c + uColorTranslation;
-}
-`
+// Built-in sprite shader source comes from internal/builtin (shared
+// across desktop, Android, and WASM). createSpriteShader picks the
+// SPIR-V or GLSL path based on the active device's preferred shader
+// language; on WASM the WebGPU/WebGL paths consume GLSL.
 
 type engine struct {
 	game       Game
@@ -274,12 +231,8 @@ func (e *engine) initRenderResources() error {
 	e.rend.whiteTextureID = e.rend.allocTextureID()
 	e.registerTexture(e.rend.whiteTextureID, tex)
 
-	// Default sprite shader.
-	sh, err := dev.NewShader(backend.ShaderDescriptor{
-		VertexSource:   spriteVertexShader,
-		FragmentSource: spriteFragmentShader,
-		Attributes:     batch.Vertex2DFormat().Attributes,
-	})
+	// Default sprite shader. WASM backends prefer GLSL.
+	sh, err := createSpriteShader(dev)
 	if err != nil {
 		return err
 	}
