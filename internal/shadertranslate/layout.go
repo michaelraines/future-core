@@ -30,12 +30,58 @@ func ExtractUniformLayout(glsl string) ([]UniformField, error) {
 // `uniform <type> <name>;` declarations with reUniform, and drops
 // samplers (which belong in descriptor sets, not UBOs). The regex
 // is shared with the MSL / WGSL translators' parse loops.
+//
+// Also recognizes explicit std140 UBO blocks of the form:
+//
+//	layout(std140, binding = N) uniform BlockName {
+//	    <type> <name>;
+//	    ...
+//	};
+//
+// Members within the block are parsed in declaration order so that
+// the same std140 packing rules in buildStd140Layout produce offsets
+// matching what shaderc emits into SPIR-V.
 func parseUniformDecls(glsl string) []uniform {
 	lines := strings.Split(glsl, "\n")
 	out := make([]uniform, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	addUniform := func(typ, name string) {
+		if _, dup := seen[name]; dup {
+			// A combined vertex+fragment source may declare the same
+			// UBO block in both stages so the engine can pack one
+			// buffer the GPU reads from both. Keep the first
+			// occurrence — buildStd140Layout would otherwise stack
+			// duplicates past the intended offset.
+			return
+		}
+		seen[name] = struct{}{}
+		out = append(out, uniform{typ: typ, name: name})
+	}
+	inBlock := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		m := reUniform.FindStringSubmatch(trimmed)
+		if !inBlock {
+			if reUniformBlockOpen.MatchString(trimmed) {
+				inBlock = true
+				continue
+			}
+			m := reUniform.FindStringSubmatch(trimmed)
+			if m == nil {
+				continue
+			}
+			typ, name := m[1], m[2]
+			if isSamplerType(typ) {
+				continue
+			}
+			addUniform(typ, name)
+			continue
+		}
+		// Inside a UBO block: collect members until the closing brace.
+		if strings.HasPrefix(trimmed, "}") {
+			inBlock = false
+			continue
+		}
+		m := reBlockMember.FindStringSubmatch(trimmed)
 		if m == nil {
 			continue
 		}
@@ -43,7 +89,7 @@ func parseUniformDecls(glsl string) []uniform {
 		if isSamplerType(typ) {
 			continue
 		}
-		out = append(out, uniform{typ: typ, name: name})
+		addUniform(typ, name)
 	}
 	return out
 }

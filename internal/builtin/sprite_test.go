@@ -16,8 +16,8 @@ import (
 func TestSpriteAccessorsReturnEmbeddedAssets(t *testing.T) {
 	require.NotEmpty(t, SpriteVertexGLSL(), "vertex GLSL must be embedded")
 	require.NotEmpty(t, SpriteFragmentGLSL(), "fragment GLSL must be embedded")
-	require.Contains(t, SpriteVertexGLSL(), "#version 330", "vertex GLSL header")
-	require.Contains(t, SpriteFragmentGLSL(), "#version 330", "fragment GLSL header")
+	require.Contains(t, SpriteVertexGLSL(), "#version 450", "vertex GLSL header")
+	require.Contains(t, SpriteFragmentGLSL(), "#version 450", "fragment GLSL header")
 
 	require.NotEmpty(t, SpriteVertexSPIRV(), "vertex SPIR-V must be embedded")
 	require.NotEmpty(t, SpriteFragmentSPIRV(), "fragment SPIR-V must be embedded")

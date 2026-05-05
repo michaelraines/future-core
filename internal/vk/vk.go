@@ -44,6 +44,9 @@ type (
 	DescriptorSet       uintptr
 	SurfaceKHR          uintptr
 	SwapchainKHR        uintptr
+
+	// VK_EXT_debug_utils handle.
+	DebugUtilsMessengerEXT uintptr
 )
 
 // Result is VkResult.
@@ -368,6 +371,7 @@ const (
 	PipelineStageColorAttachmentOutput = 0x00000400
 	PipelineStageTransfer              = 0x00001000
 	PipelineStageBottomOfPipe          = 0x00002000
+	PipelineStageAllCommands           = 0x00010000
 )
 
 // VkAccessFlags.
@@ -376,6 +380,8 @@ const (
 	AccessTransferWrite        = 0x00001000
 	AccessShaderRead           = 0x00000020
 	AccessColorAttachmentWrite = 0x00000100
+	AccessMemoryRead           = 0x00008000
+	AccessMemoryWrite          = 0x00010000
 )
 
 // VkFenceCreateFlags.
@@ -423,7 +429,10 @@ const (
 
 // VkCompositeAlphaFlagBitsKHR.
 const (
-	CompositeAlphaOpaqueKHR = 0x00000001
+	CompositeAlphaOpaqueKHR         = 0x00000001
+	CompositeAlphaPreMultipliedKHR  = 0x00000002
+	CompositeAlphaPostMultipliedKHR = 0x00000004
+	CompositeAlphaInheritKHR        = 0x00000008
 )
 
 // VkSurfaceTransformFlagBitsKHR.
@@ -1303,6 +1312,12 @@ var (
 	fnCreateWin32SurfaceKHR                   func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
 	fnCreateXlibSurfaceKHR                    func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
 	fnCreateAndroidSurfaceKHR                 func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pSurface *SurfaceKHR) Result
+
+	// VK_EXT_debug_utils — instance-level extension. Loaded via
+	// vkGetInstanceProcAddr in InitDebugUtilsFunctions when the
+	// extension was requested at instance creation time.
+	fnCreateDebugUtilsMessengerEXT  func(instance Instance, pCreateInfo uintptr, pAllocator uintptr, pMessenger *DebugUtilsMessengerEXT) Result
+	fnDestroyDebugUtilsMessengerEXT func(instance Instance, messenger DebugUtilsMessengerEXT, pAllocator uintptr)
 )
 
 // lib holds the loaded Vulkan library handle.
@@ -2171,8 +2186,97 @@ func InitSwapchainFunctions(instance Instance) error {
 	_ = resolve(&fnCreateXlibSurfaceKHR, "vkCreateXlibSurfaceKHR")
 	_ = resolve(&fnCreateAndroidSurfaceKHR, "vkCreateAndroidSurfaceKHR")
 
+	// VK_EXT_debug_utils — optional. Loads the messenger entry points
+	// when the extension was requested at instance creation. Caller
+	// can probe DebugUtilsAvailable() to skip messenger registration
+	// when these aren't loaded.
+	_ = resolve(&fnCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT")
+	_ = resolve(&fnDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT")
+
 	return nil
 }
+
+// DebugUtilsAvailable reports whether the VK_EXT_debug_utils
+// messenger entry points loaded successfully (i.e. the extension was
+// requested at instance creation and the loader provided the proc
+// addresses).
+func DebugUtilsAvailable() bool {
+	return fnCreateDebugUtilsMessengerEXT != nil
+}
+
+// VkDebugUtilsMessengerCreateInfoEXT mirrors the Vulkan struct.
+// PfnUserCallback must be a `purego.NewCallback`-wrapped function
+// pointer with C signature
+//
+//	uint32_t (*)(uint32_t severity, uint32_t type, uintptr_t pCallbackData, uintptr_t pUserData)
+//
+// Both Vulkan and the Khronos validation layer call back from native
+// threads, so the Go callback must not allocate or run anything that
+// touches the goroutine scheduler beyond writing to stderr.
+type DebugUtilsMessengerCreateInfoEXT struct {
+	SType           uint32
+	_               uint32 // explicit pad — next field is uintptr (8-aligned on arm64/amd64)
+	PNext           uintptr
+	Flags           uint32
+	MessageSeverity uint32
+	MessageType     uint32
+	PfnUserCallback uintptr
+	PUserData       uintptr
+}
+
+// Debug-utils severity / type bitmasks (subset).
+const (
+	DebugUtilsMessageSeverityVerboseEXT           uint32 = 0x00000001
+	DebugUtilsMessageSeverityInfoEXT              uint32 = 0x00000010
+	DebugUtilsMessageSeverityWarningEXT           uint32 = 0x00000100
+	DebugUtilsMessageSeverityErrorEXT             uint32 = 0x00001000
+	DebugUtilsMessageTypeGeneralEXT               uint32 = 0x00000001
+	DebugUtilsMessageTypeValidationEXT            uint32 = 0x00000002
+	DebugUtilsMessageTypePerformanceEXT           uint32 = 0x00000004
+	StructureTypeDebugUtilsMessengerCreateInfoEXT uint32 = 1000128004
+)
+
+// CreateDebugUtilsMessengerEXT wraps vkCreateDebugUtilsMessengerEXT.
+// Caller must register a callback via purego.NewCallback and place
+// its address in info.PfnUserCallback before calling.
+func CreateDebugUtilsMessengerEXT(instance Instance, info *DebugUtilsMessengerCreateInfoEXT) (DebugUtilsMessengerEXT, error) {
+	if fnCreateDebugUtilsMessengerEXT == nil {
+		return 0, fmt.Errorf("vk: vkCreateDebugUtilsMessengerEXT not loaded — request VK_EXT_debug_utils at instance creation")
+	}
+	var msg DebugUtilsMessengerEXT
+	r := fnCreateDebugUtilsMessengerEXT(instance, uintptr(unsafe.Pointer(info)), 0, &msg)
+	if r != Success {
+		return 0, fmt.Errorf("vkCreateDebugUtilsMessengerEXT: %w", r)
+	}
+	return msg, nil
+}
+
+// DestroyDebugUtilsMessengerEXT wraps vkDestroyDebugUtilsMessengerEXT.
+// Safe to call with a zero handle.
+func DestroyDebugUtilsMessengerEXT(instance Instance, msg DebugUtilsMessengerEXT) {
+	if fnDestroyDebugUtilsMessengerEXT == nil || msg == 0 {
+		return
+	}
+	fnDestroyDebugUtilsMessengerEXT(instance, msg, 0)
+}
+
+// DebugUtilsCallbackDataPMessageOffset is the byte offset of the
+// `pMessage` field (a `const char*`) in VkDebugUtilsMessengerCallbackDataEXT.
+// The struct layout (relative offsets) per vulkan_core.h:
+//
+//	0   uint32 sType
+//	4   uint32 _pad
+//	8   uintptr pNext
+//	16  uint32 flags
+//	20  uint32 _pad
+//	24  uintptr pMessageIdName
+//	32  int32  messageIdNumber
+//	36  uint32 _pad
+//	40  uintptr pMessage         ← we read this
+//
+// Used by the engine's debug callback to extract the message text
+// without binding the entire struct.
+const DebugUtilsCallbackDataPMessageOffset = 40
 
 // ---------------------------------------------------------------------------
 // KHR public wrappers
