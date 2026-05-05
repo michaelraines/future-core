@@ -1942,35 +1942,6 @@ func (d *Device) createSwapchain() error {
 		}
 	}
 
-	// PreTransform: prefer IDENTITY when supported. The engine renders
-	// to its surface in the natural Vulkan coordinate space without
-	// applying any rotation matrix, so promising Vulkan we'll
-	// pre-rotate (PreTransform = currentTransform on a rotated device)
-	// would display content 90° off — this is what was hitting on
-	// Galaxy S25 once the Activity orientation lock rotated the
-	// device. With IDENTITY, the presentation engine handles any
-	// rotation transparently. A follow-up could pre-rotate the
-	// projection matrix and use currentTransform for slightly better
-	// performance on tilers, but identity is the simpler / correct
-	// default. When the surface already matches identity (desktop /
-	// fixed-orientation Android) this is a no-op.
-	preTransform := caps.CurrentTransform
-	if caps.SupportedTransforms&uint32(vk.SurfaceTransformIdentityKHR) != 0 {
-		preTransform = uint32(vk.SurfaceTransformIdentityKHR)
-	}
-	// When we override pretransform to IDENTITY but currentTransform
-	// reports a 90°/270° rotation, the swapchain extent must be in
-	// natural orientation (swapped from caps.CurrentExtent — which
-	// reports the rotated, post-display dimensions). Without the
-	// swap Vulkan creates a swapchain whose images have the wrong
-	// aspect for the natural orientation and AcquireNextImageKHR
-	// returns OutOfDate every frame, looping recreate forever.
-	if preTransform != caps.CurrentTransform &&
-		(caps.CurrentTransform&uint32(vk.SurfaceTransformRotate90KHR) != 0 ||
-			caps.CurrentTransform&uint32(vk.SurfaceTransformRotate270KHR) != 0) {
-		extent[0], extent[1] = extent[1], extent[0]
-	}
-
 	sci := vk.SwapchainCreateInfoKHR{
 		SType:             vk.StructureTypeSwapchainCreateInfoKHR,
 		Surface:           d.surface,
@@ -1982,7 +1953,7 @@ func (d *Device) createSwapchain() error {
 		ImageArrayLayers:  1,
 		ImageUsage:        uint32(vk.ImageUsageColorAttachment),
 		ImageSharingMode:  vk.SharingModeExclusive,
-		PreTransform:      preTransform,
+		PreTransform:      caps.CurrentTransform,
 		CompositeAlpha:    compositeAlpha,
 		PresentMode:       presentMode,
 		Clipped:           1,
