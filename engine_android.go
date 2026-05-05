@@ -15,7 +15,6 @@ import (
 	"github.com/michaelraines/future-core/internal/pipeline"
 	"github.com/michaelraines/future-core/internal/platform"
 	platandroid "github.com/michaelraines/future-core/internal/platform/android"
-	fmath "github.com/michaelraines/future-core/math"
 
 	// Register backends available on Android.
 	_ "github.com/michaelraines/future-core/internal/backend/soft"
@@ -335,12 +334,31 @@ func (e *engine) TickOnce() error {
 	}
 	e.game.Draw(screen)
 
-	// Compute orthographic projection for the logical screen.
-	proj := fmath.Mat4Ortho(0, float64(screenW), float64(screenH), 0, -1, 1)
+	// Compute orthographic projection for the logical screen, then
+	// compose with the surface's pre-rotation when the device reports
+	// a non-zero SurfaceRotation. On Android with a portrait-natural
+	// panel showing a landscape Activity, the Vulkan swapchain is
+	// created with PreTransform=ROTATE_90 and an extent in the natural
+	// (portrait) orientation; rotating the projection 90° CCW maps
+	// logical-landscape content into that swapchain image so the GPU's
+	// pre-transform displays it right-side up.
+	caps := e.device.Capabilities()
+	proj := buildAndroidProjection(screenW, screenH, caps.SurfaceRotation)
 	e.spritePass.Projection = proj.Float32()
 
+	// Viewport: the swapchain image extent (when reported by the
+	// backend) is in the natural orientation, so for 90°/270°
+	// rotations it's swapped from the user-facing framebuffer size.
+	// Sizing the render-pass viewport from the framebuffer instead
+	// would overrun the swapchain image and clip content — see
+	// future-core/CLAUDE.md "PreTransform on rotated Android surfaces".
+	viewportW, viewportH := fbW, fbH
+	if caps.SurfaceWidth > 0 && caps.SurfaceHeight > 0 {
+		viewportW, viewportH = caps.SurfaceWidth, caps.SurfaceHeight
+	}
+
 	e.device.BeginFrame()
-	ctx := pipeline.NewPassContext(fbW, fbH)
+	ctx := pipeline.NewPassContext(viewportW, viewportH)
 	ctx.ScreenClearEnabled = IsScreenClearedEveryFrame()
 	ctx.ScreenHasStencil = e.device.Capabilities().SupportsStencil
 	e.renderPipeline.Execute(e.encoder, ctx)

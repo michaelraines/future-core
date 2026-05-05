@@ -607,6 +607,49 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   Use `spirv-dis builtin/sprite.frag.spv | grep Offset` to verify
   offsets match `SpriteUniformLayout` after any built-in-shader edit.
   Requires `#version 450 core` for the `binding=` qualifier.
+- **Vulkan swapchain resize must also resize `renderFinishedSems`** —
+  `recreateSwapchain` rebuilds the image array but the per-image
+  `renderFinishedSems` was previously sized once at Init. When Adreno
+  grows the image count (4→5 on Galaxy S25 portrait→landscape rotation),
+  the next `AcquireNextImageKHR` returns an index past the array end and
+  `EndFrame` panics with `index out of range`. Fix lives in
+  `recreateSwapchain` via `resizeRenderFinishedSems(n)`.
+- **PreTransform on rotated Android surfaces** — `PreTransform =
+  caps.CurrentTransform` is paired with three engine-side compensations
+  (all wired together; partial application reproduces the historic
+  squash + 90°-off bugs):
+    1. `createSwapchain` swaps `imageExtent` width/height when
+       `currentTransform` is ROTATE_90 or ROTATE_270. The swapchain
+       image is then natural-orientation-shaped (e.g. 1080×2340 portrait
+       on a Galaxy S25 with a landscape Activity).
+    2. `Capabilities()` reports `SurfaceRotation` (0/90/180/270) and the
+       post-swap `SurfaceWidth/SurfaceHeight` so non-Vulkan code paths
+       have a uniform interface for the same data.
+    3. `engine_android.go::TickOnce` reads those caps. When
+       SurfaceRotation is non-zero it (a) sources the render-pass
+       viewport from `SurfaceWidth/SurfaceHeight` (matching the swapped
+       swapchain extent) instead of the user-facing framebuffer size,
+       and (b) composes the ortho projection with
+       `Mat4RotateZ(-rotationDeg)` — see `surface_projection.go`.
+       The negative sign matches the Khronos `vulkan_pre_rotation`
+       sample's "rotate around -Z by N°" convention through our
+       Y-up clip space + Vulkan's Y-flip on upload. Verified on
+       Galaxy S25 Vulkan/Adreno: scene-selector tiles render landscape
+       upright. Empirical anchor: `+rotationDeg` displays content
+       rotated 180° (doubles the offset); `-rotationDeg` cancels it.
+  Failure modes if any one piece is missing: `PreTransform=IDENTITY`
+  + extent swap (PR #111) squashed into top 40% because the viewport
+  still came from the unswapped framebuffer; pre-this-fix configuration
+  (`PreTransform=currentTransform`, no rotation matrix) displayed
+  content 90° off.
+- **Touch input edge sets** — `AppendJustPressedTouchIDs` reads from
+  `justPressedTouches` (populated by `OnTouchEvent`, cleared in
+  `EndTick`), not `s.touches`. Required because Android JNI delivers
+  MotionEvents at touch rate independent of the engine's tick loop —
+  a fast tap (DOWN+UP both before next BeginTick) leaves `s.touches`
+  empty and would be silently dropped without the edge set.
+  `TouchPosition` falls back to `justPressedTouches` so the press
+  position remains queryable for the one tick the game has to observe.
 - **Only Vulkan and WebGPU use `NoGL`** — Metal and DX12 still use the GL
   presenter (soft-delegation → ReadScreen → GL blit). Setting `needsNoGL`
   for non-Vulkan/WebGPU backends breaks their display path.

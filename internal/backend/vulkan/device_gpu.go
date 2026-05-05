@@ -97,6 +97,15 @@ type Device struct {
 	// so a single semaphore is correct here.
 	imageAvailableSem vk.Semaphore
 
+	// surfaceRotationDeg captures the engine-side pre-rotation that
+	// makes content display correctly on a rotated Android surface.
+	// Updated whenever createSwapchain runs; reported via
+	// Capabilities() so the engine can compose its projection and
+	// pick a viewport that matches the swapchain image extent.
+	// 0 on every desktop platform and on Android surfaces whose
+	// VkSurfaceCapabilitiesKHR.currentTransform is IDENTITY.
+	surfaceRotationDeg int
+
 	// renderFinishedSems is signaled at submit time and waited on by
 	// vkQueuePresentKHR. The Vulkan spec requires the signal-semaphore
 	// to be UNSIGNALED at submit time (VUID-vkQueueSubmit-pSignalSemaphores-00067)
@@ -1856,6 +1865,29 @@ func (d *Device) Capabilities() backend.DeviceCapabilities {
 		MaxMSAASamples:    maxSamples,
 		SupportsFloat16:   true,
 		SupportsStencil:   true,
+		SurfaceRotation:   d.surfaceRotationDeg,
+		SurfaceWidth:      int(d.swapchainExtent[0]),
+		SurfaceHeight:     int(d.swapchainExtent[1]),
+	}
+}
+
+// surfaceTransformDegrees maps a VkSurfaceTransformFlagBitsKHR value to
+// the engine-side projection rotation, in degrees CCW, needed to make
+// rendered content display correctly when that transform is selected as
+// the swapchain's PreTransform. IDENTITY (and any flag we don't
+// recognize — HFLIP/VFLIP combinations and INHERIT) maps to 0; the
+// engine then leaves its projection unrotated and viewports the full
+// framebuffer.
+func surfaceTransformDegrees(transform uint32) int {
+	switch transform {
+	case vk.SurfaceTransformRotate90KHR:
+		return 90
+	case vk.SurfaceTransformRotate180KHR:
+		return 180
+	case vk.SurfaceTransformRotate270KHR:
+		return 270
+	default:
+		return 0
 	}
 }
 
@@ -1918,6 +1950,23 @@ func (d *Device) createSwapchain() error {
 	if caps.CurrentExtentWidth == 0xFFFFFFFF {
 		extent[0] = clampU32(uint32(d.width), caps.MinImageExtentWidth, caps.MaxImageExtentWidth)
 		extent[1] = clampU32(uint32(d.height), caps.MinImageExtentHeight, caps.MaxImageExtentHeight)
+	}
+
+	// Pre-rotation: when the surface reports a 90°/180°/270° transform
+	// (typical on Android phones with a portrait-natural panel and a
+	// landscape-locked Activity), tell Vulkan we'll pre-rotate by
+	// matching PreTransform = currentTransform. This avoids a compositor
+	// rotation pass on tilers like Adreno. The swapchain image extent
+	// must then be in the natural orientation — for 90°/270° that's
+	// the user-facing currentExtent with width/height swapped — and the
+	// engine has to compose its projection with a Z-rotation to map
+	// logical-screen coords into that swapped image. Both the
+	// projection rotation and the matching viewport are derived from
+	// the SurfaceRotation/SurfaceWidth/SurfaceHeight fields exposed via
+	// Capabilities().
+	d.surfaceRotationDeg = surfaceTransformDegrees(caps.CurrentTransform)
+	if d.surfaceRotationDeg == 90 || d.surfaceRotationDeg == 270 {
+		extent[0], extent[1] = extent[1], extent[0]
 	}
 
 	imageCount := caps.MinImageCount + 1
