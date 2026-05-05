@@ -584,7 +584,7 @@ func TestAppendJustReleasedTouchIDsOnlyFiresOnEnded(t *testing.T) {
 func TestFastTapBetweenTicksIsObservable(t *testing.T) {
 	s := New()
 	// Both events arrive before any game.Update — typical Android
-	// behaviour because JNI dispatches MotionEvents at touch rate
+	// behavior because JNI dispatches MotionEvents at touch rate
 	// independent of the engine's tick loop.
 	s.OnTouchEvent(platform.TouchEvent{ID: 7, X: 100, Y: 200, Pressure: 1, Action: platform.ActionPress})
 	s.OnTouchEvent(platform.TouchEvent{ID: 7, X: 100, Y: 200, Action: platform.ActionRelease})
