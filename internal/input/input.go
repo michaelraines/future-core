@@ -35,10 +35,10 @@ type State struct {
 	// loop) is still observable. Without these sets, a tap that starts
 	// and ends inside a single inter-tick window leaves touches and
 	// prevTouches both empty, and the game never sees a click.
-	touches              map[int]Touch
-	prevTouches          map[int]Touch
-	justPressedTouches   map[int]Touch
-	justReleasedTouches  map[int]struct{}
+	touches             map[int]Touch
+	prevTouches         map[int]Touch
+	justPressedTouches  map[int]Touch
+	justReleasedTouches map[int]struct{}
 
 	// Gamepads. prevGamepads mirrors prevTouches for edge-triggered
 	// button queries. gamepadButtonDuration[id][b] tracks hold time.
