@@ -69,6 +69,10 @@ func DeviceScale() float64 {
 	return float64(pixelsPerPt)
 }
 
+// RequestedOrientation — android-only; returns 0 (default) on host
+// builds where there is no engine running.
+func RequestedOrientation() int { return 0 }
+
 // Input dispatch stubs.
 
 // UpdateTouchesOnAndroid — android-only; no-op elsewhere.

@@ -2170,7 +2170,44 @@ func (d *Device) recreateSwapchain(w, h int) error {
 	d.width = w
 	d.height = h
 	d.destroySwapchain()
-	return d.createSwapchain()
+	if err := d.createSwapchain(); err != nil {
+		return err
+	}
+	// Resize per-image render-finished semaphores to match the new
+	// swapchain image count. Without this an Android orientation
+	// change that grows the image count panics in EndFrame with
+	// "index out of range" because the array still has the old
+	// length but AcquireNextImageKHR returns the new (larger) index.
+	if err := d.resizeRenderFinishedSems(len(d.swapchainImages)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// resizeRenderFinishedSems grows or shrinks renderFinishedSems to the
+// requested length. Existing semaphores are preserved (reused if the
+// new size is bigger; destroyed if the new size is smaller).
+func (d *Device) resizeRenderFinishedSems(n int) error {
+	if len(d.renderFinishedSems) == n {
+		return nil
+	}
+	if n < len(d.renderFinishedSems) {
+		for _, sem := range d.renderFinishedSems[n:] {
+			if sem != 0 {
+				vk.DestroySemaphore(d.device, sem)
+			}
+		}
+		d.renderFinishedSems = d.renderFinishedSems[:n]
+		return nil
+	}
+	for i := len(d.renderFinishedSems); i < n; i++ {
+		sem, err := vk.CreateSemaphore(d.device)
+		if err != nil {
+			return fmt.Errorf("vulkan: render-finished semaphore: %w", err)
+		}
+		d.renderFinishedSems = append(d.renderFinishedSems, sem)
+	}
+	return nil
 }
 
 // appendUnique appends s to slice if not already present.

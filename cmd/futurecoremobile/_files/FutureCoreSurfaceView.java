@@ -3,7 +3,10 @@
 
 package {{.JavaPkg}}.{{.PrefixLower}};
 
+import android.app.Activity;
 import android.content.Context;
+import android.content.ContextWrapper;
+import android.content.pm.ActivityInfo;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Choreographer;
@@ -77,6 +80,10 @@ class FutureCoreSurfaceView extends SurfaceView
     private long nativeWindowHandle = 0;       // ANativeWindow*
     private volatile boolean surfaceReady = false;
     private volatile boolean paused = false;
+    // Last orientation we asked the host Activity for. Updated only
+    // when the engine's RequestedOrientation changes, to avoid posting
+    // a setRequestedOrientation Runnable every tick.
+    private int lastAppliedOrientation = -1;
 
     public FutureCoreSurfaceView(Context context) {
         super(context);
@@ -204,6 +211,53 @@ class FutureCoreSurfaceView extends SurfaceView
         }
     }
 
+    // maybeApplyRequestedOrientation polls the engine's current
+    // orientation preference (set via the scene JSON's "orientation"
+    // field) and, when it changes, asks the host Activity to lock
+    // accordingly. Runs from the render-thread tick handler so the
+    // engine driver doesn't need a Go→Java callback path (gomobile
+    // bind doesn't support those). Mapping:
+    //   1 (portrait)  -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    //   2 (landscape) -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+    //   anything else -> SCREEN_ORIENTATION_UNSPECIFIED (system default)
+    private void maybeApplyRequestedOrientation() {
+        // gomobile maps Go's `int` to Java `long`; cast back so we
+        // can compare against the int field cheaply.
+        final int requested = (int) Futurecoreview.requestedOrientation();
+        if (requested == lastAppliedOrientation) {
+            return;
+        }
+        lastAppliedOrientation = requested;
+        final int orientation;
+        switch (requested) {
+            case 1: orientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT; break;
+            case 2: orientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE; break;
+            default: orientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED; break;
+        }
+        // setRequestedOrientation must run on the UI thread.
+        post(new Runnable() {
+            @Override
+            public void run() {
+                Activity activity = findHostActivity(getContext());
+                if (activity == null) {
+                    Log.w(TAG, "no host Activity for setRequestedOrientation");
+                    return;
+                }
+                activity.setRequestedOrientation(orientation);
+            }
+        });
+    }
+
+    private static Activity findHostActivity(Context ctx) {
+        while (ctx instanceof ContextWrapper) {
+            if (ctx instanceof Activity) {
+                return (Activity) ctx;
+            }
+            ctx = ((ContextWrapper) ctx).getBaseContext();
+        }
+        return null;
+    }
+
     // --- Choreographer.FrameCallback ---
 
     @Override
@@ -264,6 +318,10 @@ class FutureCoreSurfaceView extends SurfaceView
                         Log.e(TAG, "tick", e);
                         return true;
                     }
+                    // Apply any orientation change the engine requested
+                    // since the previous tick. Cheap (one int compare on
+                    // the steady-state path) so it's safe per-tick.
+                    maybeApplyRequestedOrientation();
                     // Re-arm vsync from the UI thread.
                     if (surfaceReady && !paused) {
                         post(new Runnable() {
