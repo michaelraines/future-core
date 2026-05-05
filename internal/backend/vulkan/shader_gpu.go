@@ -17,12 +17,35 @@ import (
 // Shader implements backend.Shader for Vulkan.
 // Stores GLSL source for SPIR-V compilation when a pipeline is created.
 // Uniform values are recorded and applied when the shader is bound.
+//
+// Two source modes:
+//
+//   - GLSL: vertexSource/fragmentSource set, vertexSPIRV/fragmentSPIRV
+//     nil. compile() runs shaderc to translate GLSL → SPIR-V, derives
+//     uniform layout via ExtractUniformLayout. This is the path that
+//     Device.NewShader uses and what every backend that hits NewShader
+//     with GLSL source goes through.
+//   - SPIR-V: vertexSPIRV/fragmentSPIRV set, sources empty,
+//     nativeMode=true. compile() skips shaderc entirely and feeds the
+//     bytes straight to vkCreateShaderModule. Uniform layout comes
+//     from the descriptor's Uniforms slice (stored in
+//     vertexUniformLayout/fragmentUniformLayout at construction).
+//     This path enables shipping pre-compiled shaders on platforms
+//     where libshaderc is not available (e.g. Android — where the
+//     system has no libshaderc.so and bundling it is a heavy dep).
 type Shader struct {
 	dev            *Device
 	vertexSource   string
 	fragmentSource string
+	vertexSPIRV    []byte
+	fragmentSPIRV  []byte
 	attributes     []backend.VertexAttribute
 	uniforms       map[string]interface{}
+
+	// nativeMode is set when the shader was constructed via
+	// NewShaderNative with pre-compiled SPIR-V; compile() skips
+	// shaderc and uses vertexSPIRV/fragmentSPIRV directly.
+	nativeMode bool
 
 	// Compiled SPIR-V modules (lazily created).
 	vertexModule   vk.ShaderModule
@@ -38,14 +61,27 @@ type Shader struct {
 	fragmentUniformLayout []shadertranslate.UniformField
 }
 
-// compile compiles GLSL source to SPIR-V and creates VkShaderModules.
+// compile compiles the shader source to SPIR-V (when GLSL) and creates
+// the VkShaderModule pair. In nativeMode the SPIR-V bytes were supplied
+// directly so shaderc is skipped entirely — that path is what makes
+// Vulkan run on Android (where libshaderc is not available).
 func (s *Shader) compile() error {
 	if s.compiled {
 		return s.compileError
 	}
 	s.compiled = true
 
-	if s.vertexSource != "" {
+	// Vertex stage.
+	if s.nativeMode {
+		if len(s.vertexSPIRV) > 0 {
+			mod, err := createShaderModuleFromSPIRV(s.dev.device, s.vertexSPIRV)
+			if err != nil {
+				s.compileError = fmt.Errorf("vulkan: create vertex shader module from SPIR-V: %w", err)
+				return s.compileError
+			}
+			s.vertexModule = mod
+		}
+	} else if s.vertexSource != "" {
 		dumpShaderSource(s.vertexSource, "vert.glsl")
 		layout, err := shadertranslate.ExtractUniformLayout(s.vertexSource)
 		if err != nil {
@@ -59,12 +95,7 @@ func (s *Shader) compile() error {
 			s.compileError = fmt.Errorf("vulkan: vertex GLSL→SPIR-V: %w", err)
 			return s.compileError
 		}
-		info := vk.ShaderModuleCreateInfo{
-			SType:    vk.StructureTypeShaderModuleCreateInfo,
-			CodeSize: uint64(len(spirv)),
-			PCode:    uintptr(unsafe.Pointer(&spirv[0])),
-		}
-		mod, err := vk.CreateShaderModule(s.dev.device, &info)
+		mod, err := createShaderModuleFromSPIRV(s.dev.device, spirv)
 		if err != nil {
 			s.compileError = fmt.Errorf("vulkan: create vertex shader module: %w", err)
 			return s.compileError
@@ -72,7 +103,17 @@ func (s *Shader) compile() error {
 		s.vertexModule = mod
 	}
 
-	if s.fragmentSource != "" {
+	// Fragment stage.
+	if s.nativeMode {
+		if len(s.fragmentSPIRV) > 0 {
+			mod, err := createShaderModuleFromSPIRV(s.dev.device, s.fragmentSPIRV)
+			if err != nil {
+				s.compileError = fmt.Errorf("vulkan: create fragment shader module from SPIR-V: %w", err)
+				return s.compileError
+			}
+			s.fragmentModule = mod
+		}
+	} else if s.fragmentSource != "" {
 		fragSrc := rewriteVDstPosToFragCoord(s.fragmentSource)
 		dumpShaderSource(fragSrc, "frag.glsl")
 		layout, err := shadertranslate.ExtractUniformLayout(fragSrc)
@@ -88,12 +129,7 @@ func (s *Shader) compile() error {
 			return s.compileError
 		}
 		dumpSPIRV(fragSrc, spirv, "frag")
-		info := vk.ShaderModuleCreateInfo{
-			SType:    vk.StructureTypeShaderModuleCreateInfo,
-			CodeSize: uint64(len(spirv)),
-			PCode:    uintptr(unsafe.Pointer(&spirv[0])),
-		}
-		mod, err := vk.CreateShaderModule(s.dev.device, &info)
+		mod, err := createShaderModuleFromSPIRV(s.dev.device, spirv)
 		if err != nil {
 			s.compileError = fmt.Errorf("vulkan: create fragment shader module: %w", err)
 			return s.compileError
@@ -102,6 +138,24 @@ func (s *Shader) compile() error {
 	}
 
 	return nil
+}
+
+// createShaderModuleFromSPIRV wraps vkCreateShaderModule with the
+// SPIR-V bytecode passed in directly. Both the GLSL-via-shaderc path
+// and the native-SPIR-V path converge here.
+func createShaderModuleFromSPIRV(device vk.Device, spirv []byte) (vk.ShaderModule, error) {
+	if len(spirv) == 0 {
+		return 0, fmt.Errorf("empty SPIR-V")
+	}
+	if len(spirv)%4 != 0 {
+		return 0, fmt.Errorf("SPIR-V length %d not a multiple of 4", len(spirv))
+	}
+	info := vk.ShaderModuleCreateInfo{
+		SType:    vk.StructureTypeShaderModuleCreateInfo,
+		CodeSize: uint64(len(spirv)),
+		PCode:    uintptr(unsafe.Pointer(&spirv[0])),
+	}
+	return vk.CreateShaderModule(device, &info)
 }
 
 // packUniformBuffer builds a byte buffer from the uniform map using the given layout.
