@@ -76,6 +76,7 @@ type Device struct {
 	instanceInfo       InstanceCreateInfo
 	physicalDeviceInfo PhysicalDeviceInfo
 	debugEnabled       bool
+	debugMessenger     vk.DebugUtilsMessengerEXT
 
 	// Swapchain state (populated when presenting directly to a surface).
 	surfaceFactory          func(uintptr) (uintptr, error)
@@ -251,6 +252,18 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 		} else if d.debugEnabled {
 			fmt.Println("[vulkan] validation layer not available")
 		}
+
+		// Request VK_EXT_debug_utils so we can install a messenger
+		// that forwards validation messages to stderr (Android routes
+		// app stderr to logcat as `I r.future.engine`). Without this
+		// the validation layer loads but emits no messages.
+		availExts, _ := vk.EnumerateInstanceExtensionProperties()
+		for _, e := range availExts {
+			if e == "VK_EXT_debug_utils" {
+				d.instanceInfo.Extensions = appendUnique(d.instanceInfo.Extensions, "VK_EXT_debug_utils")
+				break
+			}
+		}
 	}
 
 	// Create Vulkan instance.
@@ -304,9 +317,25 @@ func (d *Device) Init(cfg backend.DeviceConfig) error {
 	d.instance = inst
 
 	// Load KHR extension functions if we have a surface factory.
-	if d.surfaceFactory != nil {
+	// InitSwapchainFunctions also resolves vkCreateDebugUtilsMessengerEXT
+	// when VK_EXT_debug_utils was requested at instance creation, so
+	// we always call it when debugEnabled even without a surface.
+	if d.surfaceFactory != nil || d.debugEnabled {
 		if err := vk.InitSwapchainFunctions(inst); err != nil {
-			return fmt.Errorf("vulkan: %w", err)
+			if d.surfaceFactory != nil {
+				return fmt.Errorf("vulkan: %w", err)
+			}
+			// Surface-less path: extension loads are best-effort.
+		}
+	}
+
+	// Register debug-utils messenger so validation messages reach
+	// stderr (Android routes app stderr to logcat). Without a
+	// callback the validation layer loads but emits no diagnostics.
+	if d.debugEnabled && vk.DebugUtilsAvailable() {
+		d.debugMessenger = installDebugMessenger(inst)
+		if d.debugMessenger != 0 {
+			fmt.Println("[vulkan] debug-utils messenger registered")
 		}
 	}
 
@@ -976,6 +1005,10 @@ func (d *Device) Dispose() {
 		vk.DestroyCommandPool(d.device, d.commandPool)
 	}
 	vk.DestroyDevice(d.device)
+	if d.debugMessenger != 0 {
+		vk.DestroyDebugUtilsMessengerEXT(d.instance, d.debugMessenger)
+		d.debugMessenger = 0
+	}
 	vk.DestroyInstance(d.instance)
 	d.device = 0
 }

@@ -547,7 +547,6 @@ func (sp *SpritePass) beginTargetPass(enc backend.CommandEncoder, ctx *PassConte
 	// transparent black. This is a GPU-native clear — no CPU data transfer.
 	if targetID != 0 && sp.ConsumePendingClear != nil && sp.ConsumePendingClear(targetID) {
 		loadAction = backend.LoadActionClear
-		// clearColor is already {0,0,0,0} (transparent black).
 	}
 
 	enc.BeginRenderPass(backend.RenderPassDescriptor{

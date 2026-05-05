@@ -46,6 +46,17 @@ var (
 	reVersion   = regexp.MustCompile(`^\s*#version\s+`)
 	reAttribute = regexp.MustCompile(`^\s*layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*in\s+(\w+)\s+(\w+)\s*;`)
 	reUniform   = regexp.MustCompile(`^\s*uniform\s+(\w+)\s+(\w+)\s*;`)
+	// reUniformBlockOpen matches the opening of an explicit std140 UBO
+	// block: `layout(std140, binding = N) uniform BlockName {`. The GLSL
+	// 450 sprite shader uses this form so vertex+fragment SPIR-V emit
+	// matching std140 offsets — without it shaderc auto-bundles each
+	// stage's loose uniforms into per-stage UBOs whose offsets differ.
+	reUniformBlockOpen = regexp.MustCompile(`^\s*layout\s*\([^)]*\)\s*uniform\s+\w+\s*\{?\s*$`)
+	// reBlockMember matches a single member declaration inside a UBO
+	// block: `<type> <name>;`. Trailing `};` on the same line is rare
+	// and not supported — sprite.{vert,frag}.glsl declare members
+	// one-per-line.
+	reBlockMember = regexp.MustCompile(`^\s*(\w+)\s+(\w+)\s*;`)
 	// reVaryingOut and reVaryingIn accept an optional `layout(location=N)`
 	// prefix — Vulkan-targeted GLSL needs explicit varying locations or
 	// glslang auto-assigns them (which is fine for isolated shaders but

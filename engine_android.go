@@ -415,6 +415,16 @@ func (e *engine) initDevice(win platform.Window) error {
 		Width:  fbW,
 		Height: fbH,
 		VSync:  true,
+		// Vulkan validation layers — best-effort opt-in. Set
+		// FUTURE_CORE_VK_VALIDATION=1 in build.sh to bundle
+		// libVkLayer_khronos_validation.so into the AAR's jni/
+		// directory; the engine probes for the layer in
+		// EnumerateInstanceLayerProperties at init and silently
+		// degrades when not present. Always-on at engine init
+		// because Android-side env vars don't propagate from the
+		// build host into the running app process — toggling
+		// validation is a build-tag concern, not a runtime one.
+		Debug: true,
 	}
 
 	// Set up Vulkan surface factory if the window supports it.
