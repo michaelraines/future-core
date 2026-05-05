@@ -2226,13 +2226,13 @@ type DebugUtilsMessengerCreateInfoEXT struct {
 
 // Debug-utils severity / type bitmasks (subset).
 const (
-	DebugUtilsMessageSeverityVerboseEXT     uint32 = 0x00000001
-	DebugUtilsMessageSeverityInfoEXT        uint32 = 0x00000010
-	DebugUtilsMessageSeverityWarningEXT     uint32 = 0x00000100
-	DebugUtilsMessageSeverityErrorEXT       uint32 = 0x00001000
-	DebugUtilsMessageTypeGeneralEXT         uint32 = 0x00000001
-	DebugUtilsMessageTypeValidationEXT      uint32 = 0x00000002
-	DebugUtilsMessageTypePerformanceEXT     uint32 = 0x00000004
+	DebugUtilsMessageSeverityVerboseEXT           uint32 = 0x00000001
+	DebugUtilsMessageSeverityInfoEXT              uint32 = 0x00000010
+	DebugUtilsMessageSeverityWarningEXT           uint32 = 0x00000100
+	DebugUtilsMessageSeverityErrorEXT             uint32 = 0x00001000
+	DebugUtilsMessageTypeGeneralEXT               uint32 = 0x00000001
+	DebugUtilsMessageTypeValidationEXT            uint32 = 0x00000002
+	DebugUtilsMessageTypePerformanceEXT           uint32 = 0x00000004
 	StructureTypeDebugUtilsMessengerCreateInfoEXT uint32 = 1000128004
 )
 

@@ -90,7 +90,7 @@ func cstrAt(p uintptr) string {
 func installDebugMessenger(inst vk.Instance) vk.DebugUtilsMessengerEXT {
 	cb := purego.NewCallback(debugMessengerCallback)
 	info := vk.DebugUtilsMessengerCreateInfoEXT{
-		SType:           vk.StructureTypeDebugUtilsMessengerCreateInfoEXT,
+		SType: vk.StructureTypeDebugUtilsMessengerCreateInfoEXT,
 		// Catch everything while iterating — ERROR + WARNING is the
 		// usual production filter, but the Adreno bug we're chasing
 		// might surface as PERFORMANCE / INFO that's normally hidden.
