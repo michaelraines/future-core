@@ -1,4 +1,4 @@
-//go:build !js && !android
+//go:build (darwin || linux || freebsd || windows) && !soft
 
 // precompile-glsl-spirv walks a directory tree for `*.vert.glsl` and
 // `*.frag.glsl` files, compiles each to SPIR-V via internal/shaderc,

@@ -1,4 +1,4 @@
-//go:build !js && !android
+//go:build (darwin || linux || freebsd || windows) && !soft
 
 // precompile-builtin-spirv compiles the built-in shader GLSL sources
 // in internal/builtin to SPIR-V via libshaderc and writes the bytes

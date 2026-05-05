@@ -8,6 +8,37 @@ import (
 	"github.com/michaelraines/future-core/internal/shadertranslate"
 )
 
+// TestSpriteAccessorsReturnEmbeddedAssets confirms the public
+// accessors on this package return the embedded GLSL + SPIR-V assets
+// (i.e. //go:embed wired correctly and the accessors don't return
+// placeholder zero values). Cheap sanity check against asset
+// regressions.
+func TestSpriteAccessorsReturnEmbeddedAssets(t *testing.T) {
+	require.NotEmpty(t, SpriteVertexGLSL(), "vertex GLSL must be embedded")
+	require.NotEmpty(t, SpriteFragmentGLSL(), "fragment GLSL must be embedded")
+	require.Contains(t, SpriteVertexGLSL(), "#version 330", "vertex GLSL header")
+	require.Contains(t, SpriteFragmentGLSL(), "#version 330", "fragment GLSL header")
+
+	require.NotEmpty(t, SpriteVertexSPIRV(), "vertex SPIR-V must be embedded")
+	require.NotEmpty(t, SpriteFragmentSPIRV(), "fragment SPIR-V must be embedded")
+	// SPIR-V magic number 0x07230203, little-endian => 03 02 23 07.
+	require.GreaterOrEqual(t, len(SpriteVertexSPIRV()), 4, "vertex SPIR-V header")
+	require.Equal(t, []byte{0x03, 0x02, 0x23, 0x07}, SpriteVertexSPIRV()[:4],
+		"vertex SPIR-V magic")
+	require.GreaterOrEqual(t, len(SpriteFragmentSPIRV()), 4, "fragment SPIR-V header")
+	require.Equal(t, []byte{0x03, 0x02, 0x23, 0x07}, SpriteFragmentSPIRV()[:4],
+		"fragment SPIR-V magic")
+
+	// SPIR-V byte length must be a multiple of 4 (vkCreateShaderModule
+	// requires this; createShaderModuleFromSPIRV in the Vulkan backend
+	// returns an error otherwise).
+	require.Zero(t, len(SpriteVertexSPIRV())%4, "vertex SPIR-V length divisible by 4")
+	require.Zero(t, len(SpriteFragmentSPIRV())%4, "fragment SPIR-V length divisible by 4")
+
+	layout := SpriteUniformLayout()
+	require.NotEmpty(t, layout, "uniform layout must declare at least one field")
+}
+
 // TestSpriteUniformLayoutMatchesGLSL guards the hand-coded SPIR-V
 // uniform layout against drift from the GLSL declarations. The Vulkan
 // backend's GLSL-via-shaderc path derives layout via
