@@ -234,6 +234,17 @@ func openLib() (uintptr, error) {
 			"libshaderc.so.1",
 			"libshaderc.so",
 		}
+	case "android":
+		// Android resolves bare-name lookups against the APK's
+		// jniLibs/<abi>/ directory automatically. Both sonames are
+		// listed for the same reason as Linux — the upstream and
+		// Debian-style packages disagree on the `_shared` suffix.
+		// If neither resolves, the AAR didn't ship libshaderc — see
+		// docs/android-emulator-debugging.md for bundling steps.
+		names = []string{
+			"libshaderc_shared.so",
+			"libshaderc.so",
+		}
 	case "windows":
 		names = []string{"shaderc_shared.dll"}
 	}

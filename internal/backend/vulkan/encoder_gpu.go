@@ -23,8 +23,18 @@ type Encoder struct {
 	currentRenderPass   vk.RenderPass
 	currentRenderTarget *RenderTarget // nil for the default/screen target
 	currentPipeline     *Pipeline
-	boundTexture        *Texture
-	boundShader         *Shader
+	// pipelineBound tracks whether the most recent SetPipeline
+	// successfully called vk.CmdBindPipeline. Driver-side draw calls
+	// without a pipeline bound are undefined behaviour — Adreno (real
+	// device) segfaults inside qglinternal::vkCmdDrawIndexed; lavapipe
+	// fires VUID-vkCmdDrawIndexed-None-02700. When createVkPipeline
+	// fails (most commonly because libshaderc isn't loadable on this
+	// platform) we log and skip the bind; the encoder must remember
+	// that and refuse subsequent Draw/DrawIndexed calls until the next
+	// successful SetPipeline.
+	pipelineBound bool
+	boundTexture  *Texture
+	boundShader   *Shader
 	// boundFilter drives samplerFor() in bindUniforms. Defaults to
 	// FilterNearest (which is also backend.TextureFilter's zero value),
 	// matching the prior always-nearest behaviour. SetTextureFilter
@@ -296,6 +306,7 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 		return
 	}
 	e.currentPipeline = p
+	e.pipelineBound = false
 
 	// Track the shader for uniform binding.
 	if s, ok := p.desc.Shader.(*Shader); ok {
@@ -338,6 +349,7 @@ func (e *Encoder) SetPipeline(pipeline backend.Pipeline) {
 	}
 	if pip != 0 {
 		vk.CmdBindPipeline(e.cmd, pip)
+		e.pipelineBound = true
 		if sh := e.boundShader; sh != nil {
 			tracePipelineBind(sh.vertexSource, sh.fragmentSource, uint64(pip))
 		}
@@ -434,12 +446,18 @@ func (e *Encoder) SetScissor(rect *backend.ScissorRect) {
 
 // Draw issues a non-indexed draw call.
 func (e *Encoder) Draw(vertexCount, instanceCount, firstVertex int) {
+	if !e.pipelineBound {
+		return
+	}
 	e.bindUniforms()
 	vk.CmdDraw(e.cmd, uint32(vertexCount), uint32(instanceCount), uint32(firstVertex), 0)
 }
 
 // DrawIndexed issues an indexed draw call.
 func (e *Encoder) DrawIndexed(indexCount, instanceCount, firstIndex int) {
+	if !e.pipelineBound {
+		return
+	}
 	e.bindUniforms()
 	vk.CmdDrawIndexed(e.cmd, uint32(indexCount), uint32(instanceCount), uint32(firstIndex), 0, 0)
 }
