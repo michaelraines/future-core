@@ -607,6 +607,15 @@ failures. Use `make fix` to auto-fix formatting and lint issues.
   Use `spirv-dis builtin/sprite.frag.spv | grep Offset` to verify
   offsets match `SpriteUniformLayout` after any built-in-shader edit.
   Requires `#version 450 core` for the `binding=` qualifier.
+- **`cmd/precompile-kage-shaders` wraps GLSL in `layout(std140,
+  binding=0) uniform UBO {...}` before shaderc** — required so the
+  produced SPIR-V's offsets match `NewShaderNative`'s combined-
+  layout expectation. shaderc's `auto_bind_uniforms` otherwise
+  produces per-stage UBOs starting at offset 0 in each stage, which
+  silently misaligns with the engine's per-draw uniform packer
+  (same root cause as the Adreno scene-selector bug fixed for
+  built-in shaders by hand in PR #107). Verified via
+  `spirv-dis path/to/x.frag.spv | grep "OpMemberDecorate.*Offset"`.
 - **Vulkan swapchain resize must also resize `renderFinishedSems`** —
   `recreateSwapchain` rebuilds the image array but the per-image
   `renderFinishedSems` was previously sized once at Init. When Adreno
