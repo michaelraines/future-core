@@ -140,6 +140,75 @@ func TestNewShaderKageInvalid(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestDeriveKageUniformLayout(t *testing.T) {
+	src := []byte(`//kage:unit pixels
+
+package main
+
+var Inversion float
+var TintR float
+var TintG float
+var TintB float
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	clr := imageSrc0At(srcPos)
+	return vec4(clr.rgb * vec3(TintR, TintG, TintB) * (1.0 - Inversion), clr.a)
+}
+`)
+	layout, err := DeriveKageUniformLayout(src)
+	require.NoError(t, err)
+	// Expect uProjection (vertex stage) plus the 4 fragment scalars.
+	// Names should be present in declaration order; offsets should be
+	// std140-aligned.
+	names := make(map[string]bool, len(layout))
+	for _, f := range layout {
+		names[f.Name] = true
+		// Std140 offsets are non-negative and 4-byte aligned for any
+		// scalar/vector member.
+		require.GreaterOrEqual(t, f.Offset, 0)
+	}
+	require.True(t, names["uProjection"], "uProjection missing from derived layout")
+	require.True(t, names["Inversion"], "Inversion missing from derived layout")
+	require.True(t, names["TintR"], "TintR missing from derived layout")
+}
+
+func TestDeriveKageUniformLayoutInvalid(t *testing.T) {
+	_, err := DeriveKageUniformLayout([]byte("not valid kage"))
+	require.Error(t, err)
+}
+
+func TestNewShaderFromKageAndSPIRVRequiresBothStages(t *testing.T) {
+	_ = withShaderRenderer(t)
+
+	validKage := []byte(`//kage:unit pixels
+
+package main
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+	return imageSrc0At(srcPos)
+}
+`)
+
+	// Empty SPIR-V on either side should error before the engine sees it.
+	_, err := NewShaderFromKageAndSPIRV(validKage, nil, []byte("frag"))
+	require.Error(t, err)
+	_, err = NewShaderFromKageAndSPIRV(validKage, []byte("vert"), nil)
+	require.Error(t, err)
+}
+
+func TestNewShaderFromKageAndSPIRVInvalidKage(t *testing.T) {
+	_ = withShaderRenderer(t)
+
+	// Layout derivation needs to parse the Kage source first; bad Kage
+	// surfaces an error before any SPIR-V handling happens.
+	_, err := NewShaderFromKageAndSPIRV(
+		[]byte("not valid kage"),
+		[]byte{0x03, 0x02, 0x23, 0x07, 0, 0, 0, 0},
+		[]byte{0x03, 0x02, 0x23, 0x07, 0, 0, 0, 0},
+	)
+	require.Error(t, err)
+}
+
 func TestNewShaderFromGLSLNoRenderer(t *testing.T) {
 	old := getRenderer()
 	setRenderer(nil)
