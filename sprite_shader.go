@@ -56,6 +56,18 @@ func createSpriteShader(dev backend.Device) (backend.Shader, error) {
 				Uniforms:   builtin.SpriteUniformLayout(),
 				Attributes: batch.Vertex2DFormat().Attributes,
 			})
+		case backend.ShaderLanguageMSL:
+			// Same UBO-block translator gap as WGSL above — Metal's
+			// newLibraryWithSource rejects the translator's bare
+			// `uProjection` with "use of undeclared identifier".
+			// Hand-written MSL pair sidesteps it.
+			return nsd.NewShaderNative(backend.NativeShaderDescriptor{
+				Language:   backend.ShaderLanguageMSL,
+				Vertex:     builtin.SpriteVertexMSL(),
+				Fragment:   builtin.SpriteFragmentMSL(),
+				Uniforms:   builtin.SpriteUniformLayout(),
+				Attributes: batch.Vertex2DFormat().Attributes,
+			})
 		}
 	}
 	return dev.NewShader(backend.ShaderDescriptor{
