@@ -7,6 +7,7 @@ import (
 	"github.com/michaelraines/future-core/internal/backend"
 	"github.com/michaelraines/future-core/internal/batch"
 	"github.com/michaelraines/future-core/internal/shaderir"
+	"github.com/michaelraines/future-core/internal/shadertranslate"
 )
 
 // Shader represents a compiled shader program. Shaders can be created from
@@ -175,6 +176,69 @@ func NewShaderNative(lang backend.ShaderLanguage, vertSrc, fragSrc []byte, unifo
 	// less-resilient lifecycle in exchange for skipping translation.
 
 	return s, nil
+}
+
+// DeriveKageUniformLayout returns the std140-aligned uniform layout
+// derived from a Kage shader source. Pure-Go pipeline:
+//
+//	Kage → GLSL via shaderir
+//	GLSL → uniform field offsets via shadertranslate.ExtractUniformLayout
+//
+// Runs anywhere — including platforms without shaderc (Android Vulkan).
+// Useful when pairing an externally-compiled SPIR-V binary with a
+// runtime-derived layout, e.g. via NewShaderFromKageAndSPIRV.
+//
+// The returned []NativeUniformField has Offset/Size matching what
+// shaderc emits when compiling the GLSL form against std140 — so the
+// engine's per-draw uniform packer fills the same byte ranges the
+// SPIR-V's gl_DefaultUniformBlock (or explicit-UBO) members read from.
+func DeriveKageUniformLayout(kage []byte) ([]NativeUniformField, error) {
+	result, err := shaderir.Compile(kage)
+	if err != nil {
+		return nil, fmt.Errorf("kage layout: shaderir compile: %w", err)
+	}
+	combined := result.VertexShader + "\n" + result.FragmentShader
+	layout, err := shadertranslate.ExtractUniformLayout(combined)
+	if err != nil {
+		return nil, fmt.Errorf("kage layout: extract: %w", err)
+	}
+	out := make([]NativeUniformField, 0, len(layout))
+	for _, f := range layout {
+		out = append(out, NativeUniformField{
+			Name:   f.Name,
+			Offset: f.Offset,
+			Size:   f.Size,
+		})
+	}
+	return out, nil
+}
+
+// NewShaderFromKageAndSPIRV builds a *Shader from Kage source paired
+// with externally-compiled SPIR-V binaries. Skips the runtime
+// shaderc.CompileGLSL call entirely — the SPIR-V is supplied; the
+// uniform layout is derived from the Kage source via
+// DeriveKageUniformLayout.
+//
+// Required on Android Vulkan, where libshaderc is not bundled in the
+// AAR. Beneficial on every other Vulkan host too: skipping shaderc
+// at startup eliminates a one-time link cost and removes a runtime
+// dependency on whatever shaderc version the host happens to have
+// installed.
+//
+// Build-time companion: cmd/precompile-kage-spirv walks a directory
+// of .kage shader sources and emits .vert.spv + .frag.spv siblings.
+// libs/shaders.LoadFromFile in the future framework prefers those
+// blobs when present; otherwise it falls through to NewShader (which
+// runs shaderc).
+func NewShaderFromKageAndSPIRV(kage, vertexSPIRV, fragmentSPIRV []byte) (*Shader, error) {
+	if len(vertexSPIRV) == 0 || len(fragmentSPIRV) == 0 {
+		return nil, fmt.Errorf("shader: precompiled SPIR-V required for both stages")
+	}
+	uniforms, err := DeriveKageUniformLayout(kage)
+	if err != nil {
+		return nil, err
+	}
+	return NewShaderNative(backend.ShaderLanguageSPIRV, vertexSPIRV, fragmentSPIRV, uniforms)
 }
 
 func newShaderFromGLSLInternal(vertSrc, fragSrc []byte, uniforms []shaderir.Uniform) (*Shader, error) {
