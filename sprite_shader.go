@@ -24,15 +24,39 @@ import (
 // backend.Shader configured for the engine's standard Vertex2D
 // attribute layout.
 func createSpriteShader(dev backend.Device) (backend.Shader, error) {
-	if nsd, ok := dev.(backend.NativeShaderDevice); ok &&
-		nsd.PreferredShaderLanguage() == backend.ShaderLanguageSPIRV {
-		return nsd.NewShaderNative(backend.NativeShaderDescriptor{
-			Language:   backend.ShaderLanguageSPIRV,
-			Vertex:     builtin.SpriteVertexSPIRV(),
-			Fragment:   builtin.SpriteFragmentSPIRV(),
-			Uniforms:   builtin.SpriteUniformLayout(),
-			Attributes: batch.Vertex2DFormat().Attributes,
-		})
+	if nsd, ok := dev.(backend.NativeShaderDevice); ok {
+		//nolint:exhaustive // Other languages (Kage, GLSL/GLSLES, MSL,
+		// HLSL) fall through to the GLSL translator path below — the
+		// engine doesn't yet ship hand-written sprite variants for
+		// them. Add a case + variant in internal/builtin/ to opt one
+		// in.
+		switch nsd.PreferredShaderLanguage() {
+		case backend.ShaderLanguageSPIRV:
+			return nsd.NewShaderNative(backend.NativeShaderDescriptor{
+				Language:   backend.ShaderLanguageSPIRV,
+				Vertex:     builtin.SpriteVertexSPIRV(),
+				Fragment:   builtin.SpriteFragmentSPIRV(),
+				Uniforms:   builtin.SpriteUniformLayout(),
+				Attributes: batch.Vertex2DFormat().Attributes,
+			})
+		case backend.ShaderLanguageWGSL:
+			// Bypass the GLSL→WGSL translator on WebGPU desktop. The
+			// translator's reUniform regex only matches loose
+			// `uniform <type> <name>;` and silently ignores the
+			// `layout(std140) uniform UBO { ... }` block that
+			// sprite.vert.glsl uses, so the body's `uProjection`
+			// reference falls through unchanged and wgpu rejects the
+			// shader with "no definition in scope for identifier:
+			// uProjection". The hand-written WGSL pair declares the
+			// right uniforms struct and works directly.
+			return nsd.NewShaderNative(backend.NativeShaderDescriptor{
+				Language:   backend.ShaderLanguageWGSL,
+				Vertex:     builtin.SpriteVertexWGSL(),
+				Fragment:   builtin.SpriteFragmentWGSL(),
+				Uniforms:   builtin.SpriteUniformLayout(),
+				Attributes: batch.Vertex2DFormat().Attributes,
+			})
+		}
 	}
 	return dev.NewShader(backend.ShaderDescriptor{
 		VertexSource:   builtin.SpriteVertexGLSL(),
