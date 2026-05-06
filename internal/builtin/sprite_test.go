@@ -19,6 +19,30 @@ func TestSpriteAccessorsReturnEmbeddedAssets(t *testing.T) {
 	require.Contains(t, SpriteVertexGLSL(), "#version 450", "vertex GLSL header")
 	require.Contains(t, SpriteFragmentGLSL(), "#version 450", "fragment GLSL header")
 
+	require.NotEmpty(t, SpriteVertexWGSL(), "vertex WGSL must be embedded")
+	require.NotEmpty(t, SpriteFragmentWGSL(), "fragment WGSL must be embedded")
+	// Both stages must declare the matching Uniforms struct so the
+	// engine's combined uniform packer fills the buffer once and both
+	// shader modules read the same bytes — the symptom of mismatch is
+	// uColorBody/uColorTranslation reading garbage and the texture
+	// rendering as black.
+	require.Contains(t, string(SpriteVertexWGSL()), "uniforms.uProjection")
+	require.Contains(t, string(SpriteFragmentWGSL()), "uniforms.uColorBody")
+	require.Contains(t, string(SpriteFragmentWGSL()), "uniforms.uColorTranslation")
+
+	require.NotEmpty(t, SpriteVertexMSL(), "vertex MSL must be embedded")
+	require.NotEmpty(t, SpriteFragmentMSL(), "fragment MSL must be embedded")
+	// MSL parallels: same Uniforms struct, same uniforms.<field>
+	// reference path. The only target-specific bit is the
+	// `[[buffer(N)]]` slot — vertex(1)/fragment(0) — verified by
+	// the asymmetric rendering output if mis-bound (vertex stage
+	// produces collapsed-to-origin geometry).
+	require.Contains(t, string(SpriteVertexMSL()), "uniforms.uProjection")
+	require.Contains(t, string(SpriteFragmentMSL()), "uniforms.uColorBody")
+	require.Contains(t, string(SpriteFragmentMSL()), "uniforms.uColorTranslation")
+	require.Contains(t, string(SpriteVertexMSL()), "[[buffer(1)]]")
+	require.Contains(t, string(SpriteFragmentMSL()), "[[buffer(0)]]")
+
 	require.NotEmpty(t, SpriteVertexSPIRV(), "vertex SPIR-V must be embedded")
 	require.NotEmpty(t, SpriteFragmentSPIRV(), "fragment SPIR-V must be embedded")
 	// SPIR-V magic number 0x07230203, little-endian => 03 02 23 07.

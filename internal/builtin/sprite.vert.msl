@@ -1,0 +1,50 @@
+// sprite vertex shader — hand-written MSL variant of sprite.vert.glsl.
+//
+// Direct MSL bypasses shadertranslate.GLSLToMSLVertex, which doesn't
+// recognise `layout(std140) uniform <Block> { ... }` syntax and
+// silently emits bare `uProjection` references that fail Metal's
+// `newLibraryWithSource` with "use of undeclared identifier
+// 'uProjection'". With this variant + the MSL branch in
+// sprite_shader.go, Metal desktop loads the engine's built-in sprite
+// pipeline cleanly.
+//
+// Uniform layout matches builtin.SpriteUniformLayout (uProjection at
+// 0, uColorBody at 64, uColorTranslation at 128). Both stages declare
+// the same Uniforms struct so the engine's combined-uniform packer
+// fills the buffer once and both stages read the same bytes.
+//
+// Buffer-slot convention follows the Metal backend's bindUniforms in
+// internal/backend/metal/encoder_gpu.go: vertex uniforms at buffer(1),
+// fragment uniforms at buffer(0).
+
+#include <metal_stdlib>
+using namespace metal;
+
+struct VertexIn {
+    float2 aPosition [[attribute(0)]];
+    float2 aTexCoord [[attribute(1)]];
+    float4 aColor    [[attribute(2)]];
+};
+
+struct VertexOut {
+    float4 position [[position]];
+    float2 vTexCoord;
+    float4 vColor;
+};
+
+struct Uniforms {
+    float4x4 uProjection;
+    float4x4 uColorBody;
+    float4   uColorTranslation;
+};
+
+vertex VertexOut vertexMain(
+    VertexIn in [[stage_in]],
+    constant Uniforms& uniforms [[buffer(1)]]
+) {
+    VertexOut out;
+    out.vTexCoord = in.aTexCoord;
+    out.vColor = in.aColor;
+    out.position = uniforms.uProjection * float4(in.aPosition, 0.0, 1.0);
+    return out;
+}

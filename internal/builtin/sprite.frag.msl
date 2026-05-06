@@ -1,0 +1,29 @@
+// sprite fragment shader — hand-written MSL variant of sprite.frag.glsl.
+// See sprite.vert.msl for the rationale. Texture+sampler bind via
+// [[texture(0)]]/[[sampler(0)]] matching the Metal backend's
+// SetTexture/SetTextureFilter encoder calls.
+
+#include <metal_stdlib>
+using namespace metal;
+
+struct FragmentIn {
+    float4 position [[position]];
+    float2 vTexCoord;
+    float4 vColor;
+};
+
+struct Uniforms {
+    float4x4 uProjection;
+    float4x4 uColorBody;
+    float4   uColorTranslation;
+};
+
+fragment float4 fragmentMain(
+    FragmentIn in [[stage_in]],
+    texture2d<float> uTexture [[texture(0)]],
+    sampler uTexture_sampler  [[sampler(0)]],
+    constant Uniforms& uniforms [[buffer(0)]]
+) {
+    float4 c = uTexture.sample(uTexture_sampler, in.vTexCoord) * in.vColor;
+    return uniforms.uColorBody * c + uniforms.uColorTranslation;
+}
